@@ -1,0 +1,18 @@
+# Conda environment for auto_apply. Create it with: conda env create -f environment.yml
+# Versions are pinned so every user gets the same setup; upgrades need owner approval.
+name: auto_apply
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12.14
+  - pip=26.2.1
+  - go=1.25.14  # builds gitleaks for the pre-commit secret scan
+  - pre-commit=4.6.2
+  - pydantic=2.13.5
+  - pyyaml=6.0.3
+  - keyring=25.7.0
+  - pytest=9.1.1
+  - ruff=0.16.10
+  - pip:
+      - sqlcipher3==0.6.2
