@@ -1,0 +1,8 @@
+# Runs before each commit you make. Set up once with: pre-commit install
+# gitleaks blocks secrets; pinned to the exact v8.30.1 commit so its code can't be swapped.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e  # frozen: v8.30.1
+    hooks:
+      - id: gitleaks
+        language_version: system  # build with the conda env's Go, never a fresh download
