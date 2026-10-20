@@ -4,6 +4,8 @@ import keyring
 import pytest
 from keyring.backend import KeyringBackend
 
+from app import keychain
+
 
 class MemoryKeychain(KeyringBackend):
     priority = 1
@@ -20,7 +22,8 @@ class MemoryKeychain(KeyringBackend):
 
 
 @pytest.fixture(autouse=True)
-def fake_keychain() -> MemoryKeychain:
+def fake_keychain(monkeypatch) -> MemoryKeychain:
+    monkeypatch.setattr(keychain, "SAFE_BACKENDS", (*keychain.SAFE_BACKENDS, MemoryKeychain.__module__))
     fake = MemoryKeychain()
     keyring.set_keyring(fake)
     return fake

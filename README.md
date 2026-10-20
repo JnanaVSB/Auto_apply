@@ -11,7 +11,14 @@ nothing personal is ever stored in this repository.
 - An OS keychain: macOS Keychain, Windows Credential Manager, or on Linux GNOME Keyring / KWallet
 
 ## Setup
-1. Create and activate the environment:
+1. Create and activate the environment.
+   On Linux (exact, locked versions of every package):
+   ```bash
+   conda create -n auto_apply --file conda-linux-64.lock
+   conda activate auto_apply
+   pip install --require-hashes --no-deps -r requirements-pip.txt
+   ```
+   On macOS or Windows:
    ```bash
    conda env create -f environment.yml
    conda activate auto_apply
@@ -34,7 +41,9 @@ nothing personal is ever stored in this repository.
 
 ## Day to day
 - The database unlocks automatically from your OS keychain; you never type the master password.
-- New laptop or lost keychain entry: `python -m app.db recover`
+- Back up your `data/` folder regularly. It is encrypted, so a cloud or USB backup is fine.
+- Lost keychain entry: `python -m app.db recover`
+- New laptop: copy your backed-up `data/` folder into the project first, then run `python -m app.db recover`
 - Change the master password: `python -m app.db change-password`
 - Lost or damaged recovery.key, or forgot the master password while the app still opens:
   `python -m app.db new-recovery-key`
@@ -46,6 +55,10 @@ nothing personal is ever stored in this repository.
 ## Development
 - Run all tests: `python -m pytest`
 - Format and lint: `ruff format .` and `ruff check .`
+- After an approved upgrade (change `environment.yml`, rebuild the environment), refresh the Linux lock file:
+  ```bash
+  conda list --explicit --sha256 -n auto_apply > conda-linux-64.lock
+  ```
 
 ## License
 MIT. See [LICENSE](LICENSE).

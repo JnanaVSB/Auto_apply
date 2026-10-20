@@ -2,7 +2,7 @@ import keyring
 import pytest
 from keyring.errors import KeyringLocked
 
-from app.keychain import SERVICE, KeychainError, get_secret, set_secret
+from app.keychain import SAFE_BACKENDS, SERVICE, KeychainError, get_secret, set_secret
 
 FAKE_SECRET = "fake-secret-value-123"  # noqa: S105 (fake value, tests only)
 
@@ -17,7 +17,9 @@ def test_missing_secret_reads_as_none():
     assert get_secret("db_key") is None
 
 
-@pytest.mark.parametrize("module", ["keyring.backends.fail", "keyring.backends.null", "keyrings.alt.file"])
+@pytest.mark.parametrize(
+    "module", ["keyring.backends.fail", "keyring.backends.null", "keyrings.alt.file", "some.unknown.backend"]
+)
 @pytest.mark.parametrize("chained", [False, True])
 def test_unsafe_keychain_is_refused(fake_keychain, module, chained):
     unsafe = type("UnsafeKeychain", (type(fake_keychain),), {"__module__": module})()
@@ -25,6 +27,19 @@ def test_unsafe_keychain_is_refused(fake_keychain, module, chained):
         fake_keychain.backends = [unsafe]
         unsafe = fake_keychain
     keyring.set_keyring(unsafe)
+    with pytest.raises(KeychainError, match="No secure OS keychain"):
+        set_secret("db_key", FAKE_SECRET)
+
+
+@pytest.mark.parametrize("module", SAFE_BACKENDS)
+def test_real_os_keychains_are_allowed(fake_keychain, module):
+    keyring.set_keyring(type("OsKeychain", (type(fake_keychain),), {"__module__": module})())
+    set_secret("db_key", FAKE_SECRET)
+    assert get_secret("db_key") == FAKE_SECRET
+
+
+def test_empty_combined_keychain_is_refused(fake_keychain):
+    fake_keychain.backends = []
     with pytest.raises(KeychainError, match="No secure OS keychain"):
         set_secret("db_key", FAKE_SECRET)
 

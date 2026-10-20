@@ -24,19 +24,17 @@ KEY_NAME = "db_key"
 MIN_PASSWORD_LENGTH = 12
 RECOVERY_KDF_ITER = 1_024_000  # 4x SQLCipher's default, so every master-password guess is slow
 SCHEMA_VERSION = 1
+SQLITE_NOTADB = 26  # SQLCipher's "file is not a database": what a wrong key or password produces
 KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
-MISSING_ADVICE = {
-    DB_FILE: "Check data_dir in data/config.yaml; for a brand-new install run: python -m app.db setup",
-    RECOVERY_FILE: "If your database still opens, make a new one with: python -m app.db new-recovery-key",
-}
-DAMAGED_RECOVERY = (
-    "recovery.key is damaged; the keychain was not changed. "
-    "If your database still opens, make a new one with: python -m app.db new-recovery-key"
-)
+SIMPLE_SEQUENCES = ("0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl", "zxcvbnm")
 
 
 class DatabaseError(Exception):
     """The database can't be set up or unlocked. Messages never include keys or passwords."""
+
+
+class _WrongKey(Exception):
+    """The key or password does not open the file (unlike a locked or unreadable file)."""
 
 
 def _raw_key(key_hex: str) -> str:
@@ -47,39 +45,88 @@ def _raw_key(key_hex: str) -> str:
 
 
 def _passphrase(password: str) -> str:
+    if "\0" in password:
+        raise DatabaseError("The password contains an invalid (null) character.")
     return "'" + password.replace("'", "''") + "'"
 
 
 def _check_password(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise DatabaseError(f"The master password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    text = password.lower()
+    runs = (run * (len(text) // len(run) + 2) for seq in SIMPLE_SEQUENCES for run in (seq, seq[::-1]))
+    if len(set(text)) == 1 or any(text in run for run in runs):
+        raise DatabaseError(
+            "The master password is too easy to guess (one repeated character or a simple sequence). "
+            "Try a 4-5 word passphrase."
+        )
+
+
+def _missing(data_dir: Path) -> DatabaseError:
+    # Without app.db there is nothing to rescue, so every command points to the settings or a fresh setup.
+    if not (data_dir / DB_FILE).is_file():
+        return DatabaseError(
+            "app.db not found in the data folder. "
+            "Check data_dir in data/config.yaml; for a brand-new install run: python -m app.db setup"
+        )
+    return DatabaseError(
+        "recovery.key not found in the data folder. "
+        "If your database still opens, make a new one with: python -m app.db new-recovery-key"
+    )
 
 
 def _connect(path: Path, key: str, kdf_iter: int | None = None, *, create: bool = False) -> sqlcipher3.Connection:
     if not create and not path.is_file():  # connecting would otherwise create an empty file
-        raise DatabaseError(f"{path.name} not found in the data folder. {MISSING_ADVICE[path.name]}")
-    conn = sqlcipher3.connect(path)
-    conn.execute("PRAGMA cipher_log_level = NONE")  # a wrong key would otherwise print SQLCipher's internal log
-    conn.execute(f"PRAGMA key = {key}")
-    if kdf_iter:
-        conn.execute(f"PRAGMA kdf_iter = {kdf_iter}")
+        raise _missing(path.parent)
+    conn = None
     try:
+        conn = sqlcipher3.connect(path)
+        conn.execute("PRAGMA cipher_log_level = NONE")  # a wrong key would otherwise print SQLCipher's internal log
+        conn.execute(f"PRAGMA key = {key}")
+        if kdf_iter:
+            conn.execute(f"PRAGMA kdf_iter = {kdf_iter}")
         conn.execute("SELECT count(*) FROM sqlite_master")  # SQLCipher only checks the key on first read
-    except sqlcipher3.DatabaseError:
+        return conn
+    except BaseException as error:
+        if conn is not None:
+            conn.close()
+        if not isinstance(error, sqlcipher3.DatabaseError):
+            raise
+        if error.sqlite_errorcode == SQLITE_NOTADB:
+            raise _WrongKey from None
+        raise DatabaseError(f"{path.name} could not be read ({error}).") from None
+
+
+def _open_recovery(data_dir: Path, master_password: str) -> tuple[sqlcipher3.Connection, str]:
+    """Unlock recovery.key and return it, still open, with the database key it holds."""
+    try:
+        conn = _connect(data_dir / RECOVERY_FILE, _passphrase(master_password), RECOVERY_KDF_ITER)
+    except _WrongKey:
+        raise DatabaseError("Wrong master password.") from None
+    try:
+        row = conn.execute("SELECT db_key FROM recovery").fetchone()
+    except sqlcipher3.DatabaseError:  # e.g. the table is missing, or the file is empty
+        row = None
+    key_hex = str(row[0]) if row else ""
+    if not KEY_PATTERN.fullmatch(key_hex):
         conn.close()
-        raise
+        raise DatabaseError(
+            "recovery.key is damaged; the keychain was not changed. "
+            "If your database still opens, make a new one with: python -m app.db new-recovery-key"
+        )
+    return conn, key_hex
+
+
+def _open_db(data_dir: Path, key_hex: str) -> sqlcipher3.Connection:
+    conn = _connect(data_dir / DB_FILE, _raw_key(key_hex))
+    if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:  # an emptied file opens with any key
+        conn.close()
+        raise DatabaseError("app.db is empty or damaged. Restore the data folder from a backup.")
     return conn
 
 
-def _open_recovery(data_dir: Path, master_password: str) -> sqlcipher3.Connection:
-    try:
-        return _connect(data_dir / RECOVERY_FILE, _passphrase(master_password), RECOVERY_KDF_ITER)
-    except sqlcipher3.DatabaseError:
-        raise DatabaseError("Wrong master password.") from None
-
-
-def _refuse_if_set_up(data_dir: Path, replace_key: bool = False) -> None:
-    if (data_dir / DB_FILE).exists() or (data_dir / RECOVERY_FILE).exists():
+def _refuse_if_set_up(data_dir: Path, replace_key: bool) -> None:
+    if (data_dir / DB_FILE).exists():
         raise DatabaseError(
             "A database already exists in the data folder; setup never overwrites it. "
             "To restore the keychain key run: python -m app.db recover. "
@@ -107,26 +154,30 @@ def setup(data_dir: Path, master_password: str, *, replace_key: bool = False) ->
     db_path, recovery_path = data_dir / DB_FILE, data_dir / RECOVERY_FILE
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     data_dir.chmod(0o700)  # also when the folder already existed (e.g. created for config.yaml)
+    if recovery_path.exists():  # left by an interrupted setup; set aside rather than deleted
+        recovery_path.replace(data_dir / f"old-{RECOVERY_FILE}")
     key_hex = secrets.token_hex(32)
     try:
         _write_recovery(recovery_path, master_password, key_hex)
-        set_secret(KEY_NAME, key_hex)
         with closing(_connect(db_path, _raw_key(key_hex), create=True)) as conn:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        db_path.chmod(0o600)
+        set_secret(KEY_NAME, key_hex)  # last, so a failed setup leaves nothing in the keychain
     except BaseException:
         db_path.unlink(missing_ok=True)  # no data yet, so removing a half-finished setup is safe
         recovery_path.unlink(missing_ok=True)
         raise
-    db_path.chmod(0o600)
 
 
 def connect(data_dir: Path) -> sqlcipher3.Connection:
+    if not (data_dir / DB_FILE).is_file():  # checked before the keychain, so a fresh install isn't sent to recover
+        raise _missing(data_dir)
     key_hex = get_secret(KEY_NAME)
     if key_hex is None:
         raise DatabaseError("Database key not found in the keychain. Run: python -m app.db recover")
     try:
-        return _connect(data_dir / DB_FILE, _raw_key(key_hex))
-    except sqlcipher3.DatabaseError:
+        return _open_db(data_dir, key_hex)
+    except _WrongKey:
         raise DatabaseError(
             "app.db could not be opened with the keychain key: the key is wrong or the file is damaged. "
             "If the key is wrong, run: python -m app.db recover. "
@@ -135,17 +186,11 @@ def connect(data_dir: Path) -> sqlcipher3.Connection:
 
 
 def recover(data_dir: Path, master_password: str) -> None:
-    with closing(_open_recovery(data_dir, master_password)) as conn:
-        try:
-            row = conn.execute("SELECT db_key FROM recovery").fetchone()
-        except sqlcipher3.DatabaseError:  # e.g. the table is missing
-            row = None
-    key_hex = str(row[0]) if row else ""
-    if not KEY_PATTERN.fullmatch(key_hex):
-        raise DatabaseError(DAMAGED_RECOVERY)
+    conn, key_hex = _open_recovery(data_dir, master_password)
+    conn.close()
     try:
-        _connect(data_dir / DB_FILE, _raw_key(key_hex)).close()
-    except sqlcipher3.DatabaseError:
+        _open_db(data_dir, key_hex).close()
+    except _WrongKey:
         raise DatabaseError(
             "The key in recovery.key does not open app.db: they come from different setups, or app.db is damaged. "
             "The keychain was not changed."
@@ -155,7 +200,8 @@ def recover(data_dir: Path, master_password: str) -> None:
 
 def change_master_password(data_dir: Path, old_password: str, new_password: str) -> None:
     _check_password(new_password)
-    with closing(_open_recovery(data_dir, old_password)) as conn:
+    conn, _ = _open_recovery(data_dir, old_password)
+    with closing(conn):
         conn.execute(f"PRAGMA rekey = {_passphrase(new_password)}")
 
 
@@ -174,7 +220,9 @@ def new_recovery_key(data_dir: Path, master_password: str) -> None:
 
 
 def _ask_new_password() -> str:
-    password = getpass.getpass(f"New master password ({MIN_PASSWORD_LENGTH}+ characters): ")
+    password = getpass.getpass(
+        f"New master password ({MIN_PASSWORD_LENGTH}+ characters; a 4-5 word passphrase is easiest to remember): "
+    )
     if password != getpass.getpass("Re-enter the password: "):
         raise DatabaseError("The two passwords do not match.")
     return password
@@ -204,15 +252,23 @@ def main(argv: list[str] | None = None) -> int:
             connect(data_dir).close()  # check the keychain key before asking for a password
             new_recovery_key(data_dir, _ask_new_password())
             print("New recovery.key written. Store the new master password safely; any old one no longer works.")
-        else:
+        elif command == "change-password":
             old_password = getpass.getpass("Current master password: ")
-            _open_recovery(data_dir, old_password).close()  # check it before asking for the new one
+            _open_recovery(data_dir, old_password)[0].close()  # check it before asking for the new one
             change_master_password(data_dir, old_password, _ask_new_password())
             print("Master password changed.")
     except (ConfigError, KeychainError, DatabaseError) as error:
         print(f"Error: {error}", file=sys.stderr)
-        return 1
-    return 0
+    except sqlcipher3.DatabaseError as error:  # anything unexpected from the database library, without a traceback
+        print(f"Error: the database could not be read or written ({error}).", file=sys.stderr)
+    except OSError as error:  # only the file name, since full paths include the user's name
+        where = f": {Path(error.filename).name}" if error.filename else ""
+        print(f"Error: {error.strerror or error}{where}", file=sys.stderr)
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.", file=sys.stderr)
+    else:
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

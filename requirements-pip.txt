@@ -1,0 +1,15 @@
+# sqlcipher3 pinned to exact files: pip refuses any download whose SHA-256 fingerprint is not listed here.
+# Fingerprints from PyPI for every Python 3.12 wheel (Linux, macOS, Windows); no source builds.
+--only-binary sqlcipher3
+sqlcipher3==0.6.2 \
+    --hash=sha256:a51b18bd782652a2282f9cb1b03b840ba5a6c0c675de6cefb76262c9789c8f06 \
+    --hash=sha256:fea0f1264f09d219dd6ce699ffca8cc9022a914661c6efa4390e85a2bf78acf9 \
+    --hash=sha256:bc2edd981e65783bc0d4e337704a9eb436871ab91c68af02ed76354876087642 \
+    --hash=sha256:50f64086da0a5f14281f2b0b459c4d9923b50055813a48ad29baf8c41c7fa56c \
+    --hash=sha256:2288215f462a16996689e1c22d611c94dd865faddb703cb105981dc3c0307b23 \
+    --hash=sha256:6b26d28ca844dc2a69b8f74b390e940db47760f0be4c96d93337c57ae8250a48 \
+    --hash=sha256:11e85c1fa4dfe6bf031af8ada500e94b5a77762355b500580360aa162896cecd \
+    --hash=sha256:80ae14562d98419b32149e8d66eea567eb3792e149b103ee5c8e1e5c67c5d799 \
+    --hash=sha256:fb15c43f8a4f8b6b0ebe62ad2ab97a7946e3b75cb98a02069ff56b7d5a96c415 \
+    --hash=sha256:8bd60ffb7bfa65bd0e51da3d5c308553d7149f0091d4ea9f754c33d5ebbf0a66 \
+    --hash=sha256:99148bf4bf8e73c2c35f810f80de776d7de09b6cf277322c07759026400e90d0
