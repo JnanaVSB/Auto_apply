@@ -9,6 +9,7 @@ import argparse
 import getpass
 import re
 import secrets
+import shutil
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -23,10 +24,62 @@ RECOVERY_FILE = "recovery.key"
 KEY_NAME = "db_key"
 MIN_PASSWORD_LENGTH = 12
 RECOVERY_KDF_ITER = 1_024_000  # 4x SQLCipher's default, so every master-password guess is slow
-SCHEMA_VERSION = 1
 SQLITE_NOTADB = 26  # SQLCipher's "file is not a database": what a wrong key or password produces
 KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
 SIMPLE_SEQUENCES = ("0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl", "zxcvbnm")
+
+# UPGRADES[n - 1] turns a version n - 1 database into version n. Append new steps; never edit old ones.
+UPGRADES = (
+    "",  # version 1: the empty Phase 1 database
+    """
+    CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY,
+        apply_url TEXT NOT NULL UNIQUE,  -- tracking parameters removed
+        match_key TEXT NOT NULL,  -- company + title + location, for the same job under another link
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        locations TEXT NOT NULL,  -- JSON list
+        us_location TEXT NOT NULL CHECK (us_location IN ('yes', 'unclear')),
+        remote TEXT NOT NULL CHECK (remote IN ('remote', 'hybrid', 'on-site', 'unknown')),
+        level TEXT NOT NULL CHECK (level IN ('intern', 'new grad', 'entry', 'mid', 'senior', 'staff+', 'unknown')),
+        role_category TEXT,
+        sponsorship TEXT NOT NULL CHECK (sponsorship IN ('offers', 'no', 'citizens only', 'unknown')),
+        terms TEXT NOT NULL,  -- JSON list, e.g. ["Summer 2027"]
+        description TEXT,  -- plain text; NULL until fetched
+        salary TEXT,
+        date_posted TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+        open_manually_only INTEGER NOT NULL DEFAULT 0  -- the app must never open this link itself
+    );
+    CREATE INDEX jobs_match_key ON jobs (match_key);
+    CREATE TABLE job_sources (
+        source TEXT NOT NULL,  -- a Simplify list or a board, e.g. greenhouse:acme
+        source_job_id TEXT NOT NULL,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        listed INTEGER NOT NULL,  -- 1 while the source still lists the job as open
+        PRIMARY KEY (source, source_job_id)
+    );
+    CREATE INDEX job_sources_job ON job_sources (job_id);
+    CREATE TABLE sources (
+        name TEXT PRIMARY KEY,
+        etag TEXT,  -- GitHub's version tag, so an unchanged list is not downloaded again
+        last_ok TEXT
+    );
+    CREATE TABLE collect_runs (
+        id INTEGER PRIMARY KEY,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT,  -- done, cancelled or stopped
+        new_jobs INTEGER NOT NULL DEFAULT 0,
+        updated_jobs INTEGER NOT NULL DEFAULT 0,
+        closed_jobs INTEGER NOT NULL DEFAULT 0,
+        failures TEXT NOT NULL DEFAULT '[]'  -- JSON list of "source: reason"
+    );
+    """,
+)
+SCHEMA_VERSION = len(UPGRADES)
 
 
 class DatabaseError(Exception):
@@ -117,11 +170,41 @@ def _open_recovery(data_dir: Path, master_password: str) -> tuple[sqlcipher3.Con
     return conn, key_hex
 
 
+def _upgrade(conn: sqlcipher3.Connection, version: int) -> None:
+    """Bring the database from `version` to SCHEMA_VERSION; each step is saved all-or-nothing."""
+    for number in range(version + 1, SCHEMA_VERSION + 1):
+        conn.executescript(f"BEGIN; {UPGRADES[number - 1]}; PRAGMA user_version = {number}; COMMIT;")
+
+
+def _backup(data_dir: Path, version: int) -> None:
+    """Copy app.db, still encrypted, to app.db.bak-v<version>; swapped in only once complete."""
+    backup = data_dir / f"{DB_FILE}.bak-v{version}"
+    partial = data_dir / f"{backup.name}.partial"
+    try:
+        shutil.copyfile(data_dir / DB_FILE, partial)
+        partial.chmod(0o600)
+        partial.replace(backup)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+
+
 def _open_db(data_dir: Path, key_hex: str) -> sqlcipher3.Connection:
     conn = _connect(data_dir / DB_FILE, _raw_key(key_hex))
-    if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:  # an emptied file opens with any key
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise DatabaseError(
+                "app.db was made by a newer version of auto_apply. Update this copy (git pull) and try again."
+            )
+        if version < 1:  # an emptied file opens with any key
+            raise DatabaseError("app.db is empty or damaged. Restore the data folder from a backup.")
+        if version < SCHEMA_VERSION:
+            _backup(data_dir, version)
+            _upgrade(conn, version)
+    except BaseException:
         conn.close()
-        raise DatabaseError("app.db is empty or damaged. Restore the data folder from a backup.")
+        raise
     return conn
 
 
@@ -160,7 +243,7 @@ def setup(data_dir: Path, master_password: str, *, replace_key: bool = False) ->
     try:
         _write_recovery(recovery_path, master_password, key_hex)
         with closing(_connect(db_path, _raw_key(key_hex), create=True)) as conn:
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            _upgrade(conn, 0)
         db_path.chmod(0o600)
         set_secret(KEY_NAME, key_hex)  # last, so a failed setup leaves nothing in the keychain
     except BaseException:

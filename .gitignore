@@ -2,6 +2,7 @@
 data/
 exports/
 *.db
+*.bak-v*
 *.sqlite
 *.sqlite3
 *.key

@@ -456,3 +456,76 @@ def test_unexpected_database_error_gives_a_short_message(data_dir, monkeypatch, 
     code, err = run(["recover"], data_dir, [PASSWORD])
     assert code == 1
     assert err.strip() == "Error: the database could not be read or written (disk I/O error)."
+
+
+JOB_TABLES = {"jobs", "job_sources", "sources", "collect_runs"}
+
+
+def _tables(conn):
+    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def _open_as_is(path):
+    """Open a database file without the version check or upgrade that connect does."""
+    return closing(db._connect(path, db._raw_key(get_secret(db.KEY_NAME))))
+
+
+@pytest.fixture
+def v1_data_dir(tmp_path, monkeypatch):
+    """A data folder set up by Phase 1, before the job tables existed."""
+    path = tmp_path / "data"
+    with monkeypatch.context() as phase_1:
+        phase_1.setattr(db, "UPGRADES", db.UPGRADES[:1])
+        phase_1.setattr(db, "SCHEMA_VERSION", 1)
+        db.setup(path, PASSWORD)
+    return path
+
+
+def test_new_setup_has_the_job_tables_and_no_backup(data_dir):
+    with closing(db.connect(data_dir)) as conn:
+        assert JOB_TABLES <= _tables(conn)
+    assert {path.name for path in data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE}
+
+
+def test_phase_1_database_is_backed_up_then_upgraded(v1_data_dir):
+    backup = v1_data_dir / f"{db.DB_FILE}.bak-v1"
+    backup.write_bytes(b"left by an earlier failed upgrade")
+    with closing(db.connect(v1_data_dir)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        assert JOB_TABLES <= _tables(conn)
+    with _open_as_is(backup) as conn:  # still encrypted with the same key
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert {path.name for path in v1_data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE, backup.name}
+
+
+def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):
+    with monkeypatch.context() as broken:
+        broken.setattr(db, "UPGRADES", ("", "CREATE TABLE half_done (x); not valid sql"))
+        with pytest.raises(sqlcipher3.OperationalError):
+            db.connect(v1_data_dir)
+    with _open_as_is(v1_data_dir / db.DB_FILE) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert "half_done" not in _tables(conn)
+    db.connect(v1_data_dir).close()
+
+
+def test_failed_backup_stops_before_upgrading(v1_data_dir, monkeypatch):
+    def disk_full(source, target):
+        target.write_bytes(b"half a copy")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(db.shutil, "copyfile", disk_full)
+    with pytest.raises(OSError):
+        db.connect(v1_data_dir)
+    assert {path.name for path in v1_data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE}
+    with _open_as_is(v1_data_dir / db.DB_FILE) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+
+def test_database_from_a_newer_app_is_refused_untouched(data_dir):
+    with _open_as_is(data_dir / db.DB_FILE) as conn:
+        conn.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION + 1}")
+    before = (data_dir / db.DB_FILE).read_bytes()
+    with pytest.raises(db.DatabaseError, match="newer version of auto_apply"):
+        db.connect(data_dir)
+    assert (data_dir / db.DB_FILE).read_bytes() == before
