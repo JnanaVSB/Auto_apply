@@ -71,7 +71,11 @@ def _open_recovery(data_dir: Path, master_password: str) -> sqlcipher3.Connectio
 
 def _refuse_if_set_up(data_dir: Path) -> None:
     if (data_dir / DB_FILE).exists() or (data_dir / RECOVERY_FILE).exists():
-        raise DatabaseError("A database already exists in the data folder, please us change password.")
+        raise DatabaseError(
+            "A database already exists in the data folder; setup never overwrites it. "
+            "To restore the keychain key run: python -m app.db recover. "
+            "To change the master password run: python -m app.db change-password."
+        )
 
 
 def setup(data_dir: Path, master_password: str) -> None:
