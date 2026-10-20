@@ -42,3 +42,9 @@ def test_errors_never_contain_values(tmp_path, text):
         load_config(write(tmp_path, text))
     assert FAKE_VALUE not in str(error.value)
     assert error.value.__suppress_context__  # the original error, which may hold values, is not shown
+
+
+@pytest.mark.parametrize("value", ['""', ".", '"~"', '"~/"', "..", '"/"'])
+def test_data_dir_cannot_be_the_project_or_home_folder_or_above(tmp_path, value):
+    with pytest.raises(ConfigError, match="a folder of its own"):
+        load_config(write(tmp_path, f"data_dir: {value}\n"))

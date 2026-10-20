@@ -36,6 +36,8 @@ nothing personal is ever stored in this repository.
 - The database unlocks automatically from your OS keychain; you never type the master password.
 - New laptop or lost keychain entry: `python -m app.db recover`
 - Change the master password: `python -m app.db change-password`
+- Lost or damaged recovery.key, or forgot the master password while the app still opens:
+  `python -m app.db new-recovery-key`
 
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.

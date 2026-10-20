@@ -36,4 +36,9 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'settings'}: {e['msg']}" for e in error.errors())
         raise ConfigError(f"Invalid settings in data/config.yaml: {problems}") from None
     data_dir = (PROJECT_DIR / config.data_dir.expanduser()).resolve()
+    if PROJECT_DIR.is_relative_to(data_dir) or Path.home().resolve().is_relative_to(data_dir):
+        raise ConfigError(
+            "Invalid settings in data/config.yaml: data_dir must be a folder of its own (for example: data), "
+            "not the project folder, your home folder, or a folder above them."
+        )
     return config.model_copy(update={"data_dir": data_dir})

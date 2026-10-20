@@ -29,12 +29,13 @@ def test_unsafe_keychain_is_refused(fake_keychain, module, chained):
         set_secret("db_key", FAKE_SECRET)
 
 
-def test_keychain_failure_never_shows_secret(fake_keychain, monkeypatch):
+@pytest.mark.parametrize("method", ["set_password", "get_password"])
+def test_keychain_failure_never_shows_secret(fake_keychain, monkeypatch, method):
     def locked(*args):
-        raise KeyringLocked(f"locked while saving {FAKE_SECRET}")
+        raise KeyringLocked(f"locked while handling {FAKE_SECRET}")
 
-    monkeypatch.setattr(fake_keychain, "set_password", locked)
+    monkeypatch.setattr(fake_keychain, method, locked)
     with pytest.raises(KeychainError) as error:
-        set_secret("db_key", FAKE_SECRET)
+        set_secret("db_key", FAKE_SECRET) if method == "set_password" else get_secret("db_key")
     assert FAKE_SECRET not in str(error.value)
     assert error.value.__suppress_context__  # the original error, which may hold the secret, is not shown
