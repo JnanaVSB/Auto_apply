@@ -48,3 +48,49 @@ def test_errors_never_contain_values(tmp_path, text):
 def test_data_dir_cannot_be_the_project_or_home_folder_or_above(tmp_path, value):
     with pytest.raises(ConfigError, match="a folder of its own"):
         load_config(write(tmp_path, f"data_dir: {value}\n"))
+
+
+SECTIONS = """data_dir: data
+roles:
+  simplify_categories: ["AI/ML/Data"]
+  keywords: ["machine learning", "RL"]
+sources:
+  simplify_lists:
+    - url: https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/listings.json
+      level: intern
+  extra_boards: [" Greenhouse:Acme ", "ashby:globex"]
+"""
+
+
+def test_roles_and_sources_are_read(tmp_path):
+    config = load_config(write(tmp_path, SECTIONS))
+    assert config.roles.keywords == ["machine learning", "RL"]
+    assert config.sources.simplify_lists[0].level == "intern"
+    assert config.sources.extra_boards == ["greenhouse:acme", "ashby:globex"]
+
+
+def test_roles_and_sources_are_optional(tmp_path):
+    config = load_config(write(tmp_path, "data_dir: data\n"))
+    assert (config.roles.keywords, config.sources.simplify_lists, config.sources.extra_boards) == ([], [], [])
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "where"),
+    [
+        ("https://raw.githubusercontent.com", "http://raw.githubusercontent.com", "simplify_lists.0.url"),
+        ("https://raw.githubusercontent.com", f"https://{FAKE_VALUE}.example", "simplify_lists.0.url"),
+        ("level: intern", "level: senior", "simplify_lists.0.level"),
+        ('"ashby:globex"', f'"workday:{FAKE_VALUE}"', "extra_boards"),
+        ('"ashby:globex"', '"lever:../admin"', "extra_boards"),
+    ],
+)
+def test_bad_source_settings_are_named_without_their_value(tmp_path, old, new, where):
+    with pytest.raises(ConfigError, match=f"sources.{where}") as error:
+        load_config(write(tmp_path, SECTIONS.replace(old, new)))
+    assert FAKE_VALUE not in str(error.value)
+
+
+def test_the_example_settings_are_valid():
+    config = load_config(PROJECT_DIR / "config.example.yaml")
+    assert config.roles.keywords
+    assert [listing.level for listing in config.sources.simplify_lists] == ["intern", "new grad"]

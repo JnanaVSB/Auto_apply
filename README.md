@@ -3,8 +3,9 @@
 A personal job-application helper. Each person runs their own copy with their own data;
 nothing personal is ever stored in this repository.
 
-> **Status:** early development. Phase 1 (foundation) is done: private settings, secrets in the
-> OS keychain and an encrypted database. Job features come in later phases.
+> **Status:** early development. Phase 1 (foundation): private settings, secrets in the OS keychain
+> and an encrypted database. Phase 2: job collection from Simplify's public GitHub lists and the
+> Greenhouse, Lever and Ashby job boards. Dashboard and applying come in later phases.
 
 ## Requirements
 - [Miniconda](https://docs.anaconda.com/miniconda/) (or any conda)
@@ -23,7 +24,8 @@ nothing personal is ever stored in this repository.
    conda env create -f environment.yml
    conda activate auto_apply
    ```
-2. Create your private settings file (the `data/` folder is never committed):
+2. Create your private settings file (the `data/` folder is never committed), then set your own
+   `roles` (Simplify categories and keywords) in `data/config.yaml`:
    ```bash
    mkdir -p data && cp config.example.yaml data/config.yaml
    ```
@@ -48,9 +50,29 @@ nothing personal is ever stored in this repository.
 - Lost or damaged recovery.key, or forgot the master password while the app still opens:
   `python -m app.db new-recovery-key`
 
+## Collect jobs
+```bash
+python -m app.collect
+```
+Reads Simplify's two public job lists on GitHub and every Greenhouse, Lever and Ashby board they link
+to (plus your `extra_boards`), one request per second per site. It keeps only US jobs matching your
+`roles`, stores each job once, and marks jobs closed when their board or list drops them. A full run
+takes about 15–25 minutes; running it again is safe. Sources that fail are listed at the end and close
+nothing. If your settings file is from before Phase 2, copy the `roles` and `sources` sections from
+`config.example.yaml`.
+
+To save one job you found yourself (on a company site, or by browsing simplify.jobs and clicking Apply):
+```bash
+python -m app.collect add "<job link>"
+```
+Greenhouse, Lever and Ashby links are read from the company's board; for other sites you type the
+company and job title. simplify.jobs links themselves are refused: the app never opens that website.
+
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.
 - Secrets live only in your OS keychain; the database is encrypted with SQLCipher.
+- Collecting jobs sends nothing about you: only public read requests, identified as
+  "auto_apply personal job search". Job descriptions are stored as plain text.
 
 ## Development
 - Run all tests: `python -m pytest`

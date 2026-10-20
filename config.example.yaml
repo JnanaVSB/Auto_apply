@@ -2,3 +2,21 @@
 
 # Folder for the database and recovery file. A relative path counts from the project folder.
 data_dir: data
+
+# Which jobs to keep. A job matches when Simplify puts it in one of these categories, or one of the
+# keywords appears as a whole word (capital letters ignored) in its title or description.
+roles:
+  simplify_categories: ["AI/ML/Data", "Data Science, AI & Machine Learning"]
+  keywords: ["machine learning", "ML", "AI", "artificial intelligence", "reinforcement learning", "RL",
+             "deep learning", "LLM", "research scientist", "applied scientist", "computer vision", "NLP"]
+
+# Where jobs come from. Simplify's public GitHub lists change name each season (Summer2027 -> Summer2028).
+# Every Greenhouse, Lever or Ashby board linked from them is read too; add more boards in extra_boards,
+# e.g. ["greenhouse:openai", "ashby:anthropic", "lever:netflix"] (the name is the one in the board's web address).
+sources:
+  simplify_lists:
+    - url: https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json
+      level: intern
+    - url: https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json
+      level: new grad
+  extra_boards: []

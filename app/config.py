@@ -1,9 +1,13 @@
 """Load and validate the user's private settings from data/config.yaml."""
 
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+
+from app.sources import BOARD_NAME
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
@@ -13,10 +17,51 @@ class ConfigError(Exception):
     """Settings are missing or invalid. Messages name the setting but never include its value."""
 
 
+class SimplifyList(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str
+    level: Literal["intern", "new grad"]
+
+    @field_validator("url")
+    @classmethod
+    def _github_file(cls, url: str) -> str:
+        parts = urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != "raw.githubusercontent.com" or parts.path.count("/") < 3:
+            raise ValueError("must be an https://raw.githubusercontent.com/<owner>/<repo>/... address")
+        return url
+
+
+class RoleSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    simplify_categories: list[str] = []
+    keywords: list[str] = []
+
+
+class SourceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    simplify_lists: list[SimplifyList] = []
+    extra_boards: list[str] = []
+
+    @field_validator("extra_boards")
+    @classmethod
+    def _board_names(cls, boards: list[str]) -> list[str]:
+        cleaned = [board.strip().lower() for board in boards]
+        for board in cleaned:
+            kind, _, name = board.partition(":")
+            if kind not in ("greenhouse", "lever", "ashby") or not BOARD_NAME.fullmatch(name):
+                raise ValueError("each must look like greenhouse:<name>, lever:<name> or ashby:<name>")
+        return cleaned
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     data_dir: Path
+    roles: RoleSettings = RoleSettings()  # optional, so older settings files still work for app.db
+    sources: SourceSettings = SourceSettings()
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:
