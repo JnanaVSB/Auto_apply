@@ -69,12 +69,17 @@ def _open_recovery(data_dir: Path, master_password: str) -> sqlcipher3.Connectio
         raise DatabaseError("Wrong master password.") from None
 
 
+def _refuse_if_set_up(data_dir: Path) -> None:
+    if (data_dir / DB_FILE).exists() or (data_dir / RECOVERY_FILE).exists():
+        raise DatabaseError("A database already exists in the data folder, please us change password.")
+
+
 def setup(data_dir: Path, master_password: str) -> None:
     _check_password(master_password)
+    _refuse_if_set_up(data_dir)
     db_path, recovery_path = data_dir / DB_FILE, data_dir / RECOVERY_FILE
-    if db_path.exists() or recovery_path.exists():
-        raise DatabaseError("A database already exists in the data folder; setup never overwrites it.")
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    data_dir.chmod(0o700)  # also when the folder already existed (e.g. created for config.yaml)
     key_hex = secrets.token_hex(32)
     try:
         with closing(_connect(recovery_path, _passphrase(master_password), RECOVERY_KDF_ITER, create=True)) as conn:
@@ -120,7 +125,7 @@ def change_master_password(data_dir: Path, old_password: str, new_password: str)
 
 def _ask_new_password() -> str:
     password = getpass.getpass(f"New master password ({MIN_PASSWORD_LENGTH}+ characters): ")
-    if password != getpass.getpass("Repeat it: "):
+    if password != getpass.getpass("Re-enter the password: "):
         raise DatabaseError("The two passwords do not match.")
     return password
 
@@ -132,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data_dir = load_config().data_dir
         if command == "setup":
+            _refuse_if_set_up(data_dir)  # before asking for a password that could not be used
             setup(data_dir, _ask_new_password())
             print(
                 "Database created. Store your master password somewhere safe (e.g. a password manager): "
@@ -141,7 +147,9 @@ def main(argv: list[str] | None = None) -> int:
             recover(data_dir, getpass.getpass("Master password: "))
             print("Database key restored to the keychain.")
         else:
-            change_master_password(data_dir, getpass.getpass("Current master password: "), _ask_new_password())
+            old_password = getpass.getpass("Current master password: ")
+            _open_recovery(data_dir, old_password).close()  # check it before asking for the new one
+            change_master_password(data_dir, old_password, _ask_new_password())
             print("Master password changed.")
     except (ConfigError, KeychainError, DatabaseError) as error:
         print(f"Error: {error}", file=sys.stderr)

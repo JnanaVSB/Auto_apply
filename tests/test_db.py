@@ -99,7 +99,11 @@ def test_change_master_password_relocks_only_the_recovery_file(data_dir):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows does not use Unix file permissions")
-def test_data_folder_and_files_are_private_to_the_user(data_dir):
+def test_data_folder_and_files_are_private_to_the_user(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.chmod(0o775)  # already exists and is open, as when created by hand for config.yaml
+    db.setup(data_dir, PASSWORD)
     assert stat.S_IMODE(data_dir.stat().st_mode) == 0o700
     for path in data_dir.iterdir():
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -113,3 +117,22 @@ def test_setup_command(tmp_path, monkeypatch, capsys, answers, code):
     assert db.main(["setup"]) == code
     assert (tmp_path / "data" / db.DB_FILE).exists() == (code == 0)
     assert PASSWORD not in capsys.readouterr().err
+
+
+def test_setup_command_refuses_before_asking_for_a_password(data_dir, monkeypatch, capsys):
+    def no_prompt(prompt):
+        raise AssertionError("asked for a password")
+
+    monkeypatch.setattr(db.getpass, "getpass", no_prompt)
+    monkeypatch.setattr(db, "load_config", lambda: Config(data_dir=data_dir))
+    assert db.main(["setup"]) == 1
+    assert "never overwrites" in capsys.readouterr().err
+
+
+def test_change_password_command_checks_current_password_first(data_dir, monkeypatch, capsys):
+    prompts = []
+    monkeypatch.setattr(db.getpass, "getpass", lambda prompt: prompts.append(prompt) or NEW_PASSWORD)
+    monkeypatch.setattr(db, "load_config", lambda: Config(data_dir=data_dir))
+    assert db.main(["change-password"]) == 1
+    assert prompts == ["Current master password: "]
+    assert "Wrong master password" in capsys.readouterr().err
