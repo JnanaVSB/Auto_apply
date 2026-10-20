@@ -245,3 +245,30 @@ def test_cancel_messages(main, data_dir, monkeypatch):
     )
     monkeypatch.setattr(collect, "add", cancel)
     assert main(["add", ACME_JOB], settings(data_dir))[1] == "\nCancelled.\n"
+
+
+def test_database_and_file_problems_give_one_line_messages(main, data_dir, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlcipher3.OperationalError("database is locked")
+
+    def no_permission(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", "/home/someone/private/data/app.db")
+
+    monkeypatch.setattr(collect, "collect", locked)
+    assert main([], settings(data_dir)) == (
+        1,
+        "Error: the database could not be read or written (database is locked).\n",
+    )
+    monkeypatch.setattr(collect, "collect", no_permission)
+    assert main([], settings(data_dir)) == (1, "Error: Permission denied: app.db\n")  # never the full path
+
+
+def test_add_reports_an_unreachable_board(main, data_dir, monkeypatch):
+    def offline(*args, **kwargs):
+        raise fetch.FetchError("connection failed (ConnectError); gave up after 3 retries")
+
+    monkeypatch.setattr(collect, "add", offline)
+    assert main(["add", ACME_JOB], settings(data_dir)) == (
+        1,
+        "Error: the job's board could not be read (connection failed (ConnectError); gave up after 3 retries).\n",
+    )
