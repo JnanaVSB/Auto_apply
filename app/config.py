@@ -1,0 +1,39 @@
+"""Load and validate the user's private settings from data/config.yaml."""
+
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
+
+
+class ConfigError(Exception):
+    """Settings are missing or invalid. Messages name the setting but never include its value."""
+
+
+class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    data_dir: Path
+
+
+def load_config(path: Path = CONFIG_PATH) -> Config:
+    if not path.is_file():
+        raise ConfigError(
+            "Settings file not found at data/config.yaml. Copy config.example.yaml to data/config.yaml and fill it in."
+        )
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as error:
+        mark = getattr(error, "problem_mark", None)
+        where = f" (line {mark.line + 1})" if mark else ""
+        raise ConfigError(f"data/config.yaml is not valid YAML{where}.") from None
+    try:
+        config = Config.model_validate(raw)
+    except ValidationError as error:
+        problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'settings'}: {e['msg']}" for e in error.errors())
+        raise ConfigError(f"Invalid settings in data/config.yaml: {problems}") from None
+    data_dir = (PROJECT_DIR / config.data_dir.expanduser()).resolve()
+    return config.model_copy(update={"data_dir": data_dir})

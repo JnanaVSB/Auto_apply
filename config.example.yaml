@@ -1,0 +1,4 @@
+# auto_apply settings template. Copy this file to data/config.yaml (git-ignored) and fill it in.
+
+# Folder for the database and recovery file. A relative path counts from the project folder.
+data_dir: data
