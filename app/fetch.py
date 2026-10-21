@@ -20,6 +20,10 @@ class FetchError(Exception):
     """A download failed. The message names the real reason; it never includes personal data."""
 
 
+class NotFound(FetchError):
+    """The site says the address does not exist (404), e.g. a company closed its job board."""
+
+
 class Fetcher:
     """Downloads JSON politely. Keeps one connection pool and the time of the last request to each website."""
 
@@ -46,6 +50,8 @@ class Fetcher:
                         return None
                     if status == 200:
                         return _parse_json(_read_limited(response)), response.headers.get("ETag")
+                    if status == 404:
+                        raise NotFound("not found (404)")
                     if status != 429 and status < 500:
                         raise FetchError(_refusal(status))
                     reason, site_wait = f"busy or failing (status {status})", _retry_after(response)
@@ -76,8 +82,6 @@ def _allowed_host(url: str) -> str:
 
 
 def _refusal(status: int) -> str:
-    if status == 404:
-        return "not found (404)"
     if 300 <= status < 400:
         return f"moved to another address (status {status})"
     return f"refused (status {status})"

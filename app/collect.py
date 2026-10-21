@@ -15,16 +15,23 @@ import sqlcipher3
 
 from app import db, jobs
 from app.config import Config, ConfigError, SimplifyList, load_config
-from app.fetch import Fetcher, FetchError
+from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import Job, SourceError, ashby, greenhouse, lever, posting_of, simplify
 
 BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
 PROGRESS_EVERY = 50
+RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 Output = Callable[[str], None]
-SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?)
-    ON CONFLICT (name) DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok"""
+SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON CONFLICT (name)
+    DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, retired_on = NULL"""
+# A board Simplify links to is remembered; a retired one is read again once Simplify links a job posted after
+# the day it was retired.
+LINK_BOARD = """INSERT INTO sources (name) VALUES (?) ON CONFLICT (name)
+    DO UPDATE SET misses = 0, retired_on = NULL WHERE retired_on IS NOT NULL AND ? > retired_on"""
+COUNT_MISS = """INSERT INTO sources (name, misses) VALUES (?, 1) ON CONFLICT (name)
+    DO UPDATE SET misses = misses + 1 RETURNING misses"""
 
 
 class CollectError(Exception):
@@ -67,7 +74,7 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
     try:
         for listing in config.sources.simplify_lists:
             _read_simplify(conn, fetcher, listing, roles, total, failures, out)
-        _read_boards(conn, fetcher, config.sources.extra_boards, roles, total, failures, out)
+        retired = _read_boards(conn, fetcher, config.sources.extra_boards, roles, total, failures, out)
         outcome = "done"
     except KeyboardInterrupt:
         outcome = "cancelled"
@@ -83,6 +90,13 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
     out(f"{len(failures)} sources failed:" if failures else "No sources failed.")
     for failure in failures:
         out(f"  - {failure}")
+    if retired:
+        out(
+            f"Stopped reading {len(retired)} boards that were not found {RETIRE_AFTER} runs in a row "
+            "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
+        )
+        for board in retired:
+            out(f"  - {board}")
 
 
 def _read_simplify(
@@ -110,9 +124,7 @@ def _read_simplify(
         return
     with conn:  # only after a successful save, so a failed save means a fresh download next time
         conn.execute(SAVE_SOURCE, (name, etag, _now()))
-        conn.executemany(
-            "INSERT OR IGNORE INTO sources (name) VALUES (?)", [(b,) for b in simplify.linked_boards(found)]
-        )
+        conn.executemany(LINK_BOARD, simplify.linked_boards(found).items())
     counts.skipped += skipped
     _add_up(total, counts)
     out(f"{label}: {_describe(counts)}")
@@ -126,19 +138,28 @@ def _read_boards(
     total: jobs.Counts,
     failures: list[str],
     out: Output,
-) -> None:
-    known = {name for (name,) in conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%'")}
-    boards = sorted(known | set(extra_boards))  # every board ever found keeps being read
+) -> list[str]:
+    """Read every board that is not retired, plus extra_boards; return the boards retired in this run."""
+    known = conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL")
+    boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
     out(f"Reading {len(boards):,} company boards one at a time (about {len(boards) * 2 // 60 + 1} minutes)...")
-    board_counts, read = jobs.Counts(), 0
+    board_counts, read, retired = jobs.Counts(), 0, []
     for number, board in enumerate(boards, 1):
         kind, _, name = board.partition(":")
+        label = f"{kind.title()} board '{name}'"
         try:
             data, _ = fetcher.get_json(BOARDS[kind].api_url(name))
             found, skipped = BOARDS[kind].parse(data, name)
             counts = jobs.save(conn, board, found, roles, _now())
+        except NotFound as error:  # other failures leave the count alone: they prove nothing either way
+            failures.append(f"{label}: {error}")
+            with conn:
+                misses = conn.execute(COUNT_MISS, (board,)).fetchone()[0]
+                if misses >= RETIRE_AFTER and board not in extra_boards:
+                    conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
+                    retired.append(label)
         except (FetchError, SourceError) as error:
-            failures.append(f"{kind.title()} board '{name}': {error}")
+            failures.append(f"{label}: {error}")
         else:
             with conn:
                 conn.execute(SAVE_SOURCE, (board, None, _now()))
@@ -149,6 +170,7 @@ def _read_boards(
             out(f"  {number:,} of {len(boards):,} boards done")
     _add_up(total, board_counts)
     out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(board_counts)}")
+    return retired
 
 
 def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[[str], str] = input) -> str:
@@ -183,8 +205,8 @@ def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[
     if counts.skipped:
         raise CollectError("That link cannot be used; copy the job's address straight from the browser.")
     if posting:
-        with conn:  # remembered, so every later collection keeps this job up to date
-            conn.execute("INSERT OR IGNORE INTO sources (name) VALUES (?)", (source,))
+        with conn:  # remembered (and no longer retired), so later collections keep this job up to date
+            conn.execute(SAVE_SOURCE, (source, None, _now()))
     return f"{'Added' if counts.new else 'Already saved'}: {job.company}, {job.title}"
 
 

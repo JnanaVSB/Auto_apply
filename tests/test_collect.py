@@ -1,6 +1,7 @@
 """The collect and add commands, end to end, with a fake web and a throwaway encrypted database."""
 
 import json
+import time
 from contextlib import closing
 
 import httpx
@@ -272,3 +273,60 @@ def test_add_reports_an_unreachable_board(main, data_dir, monkeypatch):
         1,
         "Error: the job's board could not be read (connection failed (ConnectError); gave up after 3 retries).\n",
     )
+
+
+def board_state(conn, name="greenhouse:acme"):
+    return one(conn, "SELECT misses, retired_on FROM sources WHERE name = ?", name)
+
+
+def requested(web):
+    return [str(request.url) for request in web.requests]
+
+
+def test_a_board_not_found_three_runs_in_a_row_is_retired_and_named_once(conn, data_dir):
+    pages = PAGES | {ACME: 404}
+    summaries = [run(conn, data_dir, pages)[0] for _ in range(3)]
+    stopped = [line for lines in summaries for line in lines if line.startswith("Stopped reading")]
+    assert stopped == [
+        "Stopped reading 1 boards that were not found 3 runs in a row "
+        "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
+    ]
+    assert summaries[2][-1] == "  - Greenhouse board 'acme'"
+    assert board_state(conn)[0] == 3
+    lines, web = run(conn, data_dir, pages)
+    assert ACME not in requested(web)
+    assert lines[-1] == "No sources failed."
+    assert one(conn, "SELECT status FROM jobs") == ("open",)  # retiring closes nothing
+
+
+def test_only_not_found_runs_in_a_row_count(conn, data_dir):
+    for page in (404, 404, 500, {"jobs": [board_job()]}, 404, 404):  # a server error counts for nothing
+        run(conn, data_dir, PAGES | {ACME: page})
+    assert board_state(conn) == (2, None)
+
+
+def test_a_retired_board_returns_when_simplify_links_a_newer_job(conn, data_dir):
+    for _ in range(3):
+        run(conn, data_dir, PAGES | {ACME: 404})
+    older = entry(id="s-3", url="https://job-boards.greenhouse.io/acme/jobs/5", date_posted=1790000000)
+    _, web = run(conn, data_dir, {LIST: ([entry(), older], '"v2"'), ACME: 404})
+    assert ACME not in requested(web)  # still retired: nothing new posted there
+    newer = entry(id="s-4", url="https://job-boards.greenhouse.io/acme/jobs/6", date_posted=int(time.time()) + 86400)
+    _, web = run(conn, data_dir, {LIST: ([entry(), newer], '"v3"'), ACME: {"jobs": [board_job()]}})
+    assert ACME in requested(web)
+    assert board_state(conn) == (0, None)
+
+
+def test_extra_boards_are_never_retired(conn, data_dir):
+    for _ in range(4):
+        lines, web = run(conn, data_dir, {GLOBEX: 404}, extra_boards=["lever:globex"])
+    assert GLOBEX in requested(web)
+    assert not any(line.startswith("Stopped reading") for line in lines)
+
+
+def test_adding_a_job_brings_its_retired_board_back(conn, data_dir):
+    for _ in range(3):
+        run(conn, data_dir, PAGES | {ACME: 404})
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({ACME: {"jobs": [board_job()]}})))) as fetcher:
+        collect.add(conn, fetcher, ACME_JOB)
+    assert board_state(conn) == (0, None)

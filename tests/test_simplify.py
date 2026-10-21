@@ -78,13 +78,14 @@ def test_unusable_list_fails_the_source(data):
         simplify.parse(data, SOURCE, "intern")
 
 
-def test_boards_come_from_active_jobs_only():
+def test_boards_come_from_active_jobs_only_with_their_newest_date():
     data = [
         entry(id="1", url="https://job-boards.greenhouse.io/acme/jobs/1"),
+        entry(id="0", url="https://job-boards.greenhouse.io/acme/jobs/0", date_posted=1790000000),  # older
         entry(id="2", url="https://jobs.lever.co/Globex/0a1b"),
         entry(id="3", url="https://jobs.ashbyhq.com/initech/9f8e", active=False),
         entry(id="4", url="https://acme.wd1.myworkdayjobs.com/jobs/4"),
         entry(id="5", url="https://simplify.jobs/p/5"),
     ]
     jobs, _ = simplify.parse(data, SOURCE, "intern")
-    assert simplify.linked_boards(jobs) == {"greenhouse:acme", "lever:globex"}
+    assert simplify.linked_boards(jobs) == {"greenhouse:acme": "2026-10-20", "lever:globex": "2026-10-20"}

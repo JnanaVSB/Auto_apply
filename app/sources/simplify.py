@@ -25,10 +25,15 @@ def parse(data: Any, source: str, level: str) -> tuple[list[Job], int]:
     return jobs, skipped
 
 
-def linked_boards(jobs: list[Job]) -> set[str]:
-    """Boards (e.g. greenhouse:acme) that the list's active jobs link to."""
-    postings = (posting_of(job.url) for job in jobs if job.listed)
-    return {f"{posting[0]}:{posting[1]}" for posting in postings if posting}
+def linked_boards(jobs: list[Job]) -> dict[str, str]:
+    """Boards (e.g. greenhouse:acme) that the list's active jobs link to, with each one's newest posting date."""
+    boards: dict[str, str] = {}
+    for job in jobs:
+        posting = posting_of(job.url) if job.listed else None
+        if posting:
+            board = f"{posting[0]}:{posting[1]}"
+            boards[board] = max(boards.get(board, ""), job.date_posted or "")
+    return boards
 
 
 def _job(entry: dict, source: str, level: str) -> Job | None:

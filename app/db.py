@@ -78,6 +78,37 @@ UPGRADES = (
         failures TEXT NOT NULL DEFAULT '[]'  -- JSON list of "source: reason"
     );
     """,
+    """
+    ALTER TABLE sources ADD COLUMN misses INTEGER NOT NULL DEFAULT 0;  -- runs in a row a board was not found
+    ALTER TABLE sources ADD COLUMN retired_on TEXT;  -- the day a dead board stopped being read
+    -- us_location may now also be 'no' (clearly not in the US). SQLite cannot change a CHECK rule in place,
+    -- so the table is copied into one with the new rule, column for column.
+    CREATE TABLE jobs_v3 (
+        id INTEGER PRIMARY KEY,
+        apply_url TEXT NOT NULL UNIQUE,
+        match_key TEXT NOT NULL,
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        locations TEXT NOT NULL,
+        us_location TEXT NOT NULL CHECK (us_location IN ('yes', 'unclear', 'no')),
+        remote TEXT NOT NULL CHECK (remote IN ('remote', 'hybrid', 'on-site', 'unknown')),
+        level TEXT NOT NULL CHECK (level IN ('intern', 'new grad', 'entry', 'mid', 'senior', 'staff+', 'unknown')),
+        role_category TEXT,
+        sponsorship TEXT NOT NULL CHECK (sponsorship IN ('offers', 'no', 'citizens only', 'unknown')),
+        terms TEXT NOT NULL,
+        description TEXT,
+        salary TEXT,
+        date_posted TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+        open_manually_only INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO jobs_v3 SELECT * FROM jobs;
+    DROP TABLE jobs;
+    ALTER TABLE jobs_v3 RENAME TO jobs;
+    CREATE INDEX jobs_match_key ON jobs (match_key);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

@@ -78,7 +78,7 @@ def test_redirect_is_reported_not_followed():
 
 def test_not_found_is_not_retried():
     fetcher, requests = fake_web(httpx.Response(404))
-    with pytest.raises(fetch.FetchError, match=r"not found \(404\)"):
+    with pytest.raises(fetch.NotFound, match=r"not found \(404\)"):
         fetcher.get_json(LEVER)
     assert len(requests) == 1
 

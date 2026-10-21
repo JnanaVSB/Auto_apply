@@ -66,15 +66,19 @@ def test_role_matching(changes, matches):
         (["Remote in USA"], [], "yes"),
         (["Boston, Massachusetts"], [], "yes"),
         (["London, UK", "Seattle, WA"], [], "yes"),
-        (["Toronto, ON, Canada"], [], None),
-        (["London, UK"], [], None),
+        (["Toronto, ON, Canada"], [], "no"),
+        (["London, UK"], [], "no"),
         (["Remote"], [], "unclear"),
         ([], [], "unclear"),
         (["Remote"], ["US"], "yes"),
-        (["Toronto"], ["CA"], None),  # Lever's code for Canada, not California
-        (["Berlin, DE"], ["DE"], None),  # the board's country field wins over "DE" looking like Delaware
+        (["Toronto"], ["CA"], "no"),  # Lever's code for Canada, not California
+        (["Berlin, DE"], ["DE"], "no"),  # the board's country field wins over "DE" looking like Delaware
         (["New York"], ["Remote", "United States"], "yes"),
-        (["São Paulo, Brasil"], [], None),
+        (["São Paulo, Brasil"], [], "no"),
+        (["Seattle"], [], "yes"),
+        (["Toronto, CA", "Bengaluru, IN"], [], "no"),  # every location clearly foreign
+        (["Toronto, CA", "Vancouver"], [], "unclear"),  # one could be in Washington
+        (["Qwertyville Base 7"], [], "unclear"),  # not recognised: kept, never silently dropped
     ],
 )
 def test_us_location(locations, countries, expected):
@@ -192,6 +196,23 @@ def test_the_other_source_fills_gaps_but_changes_nothing_known(conn):
     jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)  # the board does not say whether it is remote
     jobs.save(conn, SIMPLIFY, [simplify_job(locations=["Remote in USA"])], ROLES, LATER)
     assert rows(conn, "remote, locations") == [("remote", '["San Francisco, CA"]')]
+
+
+def test_an_old_us_label_is_corrected_to_no_by_the_owning_source(conn, monkeypatch):
+    toronto = job(locations=["Toronto, CA"])
+    with monkeypatch.context() as old_rule:
+        old_rule.setattr(jobs, "us_location", lambda job: "yes")  # how the old rule judged it
+        jobs.save(conn, "greenhouse:acme", [toronto], ROLES, NOW)
+    counts = jobs.save(conn, "greenhouse:acme", [toronto], ROLES, LATER)
+    assert (counts.updated, rows(conn, "us_location, status")) == (1, [("no", "open")])  # kept, never deleted
+
+
+def test_unclear_never_replaces_a_known_us_label(conn):
+    board, simplify = job(locations=["Remote"]), simplify_job(locations=["Austin, TX"])
+    for _ in range(2):
+        board_counts = jobs.save(conn, "greenhouse:acme", [board], ROLES, NOW)
+        simplify_counts = jobs.save(conn, SIMPLIFY, [simplify], ROLES, NOW)
+    assert (board_counts.updated, simplify_counts.updated, rows(conn, "us_location")) == (0, 0, [("yes",)])
 
 
 def test_simplify_only_job_takes_simplify_changes(conn):

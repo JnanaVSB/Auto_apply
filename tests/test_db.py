@@ -498,6 +498,38 @@ def test_phase_1_database_is_backed_up_then_upgraded(v1_data_dir):
     assert {path.name for path in v1_data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE, backup.name}
 
 
+def test_version_2_database_gets_the_board_columns_after_a_backup(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as phase_2:
+        phase_2.setattr(db, "UPGRADES", db.UPGRADES[:2])
+        phase_2.setattr(db, "SCHEMA_VERSION", 2)
+        db.setup(path, PASSWORD)
+    with closing(db.connect(path)) as conn:
+        assert {"misses", "retired_on"} <= {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v2") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def test_version_3_keeps_saved_jobs_and_allows_not_us(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as phase_2:
+        phase_2.setattr(db, "UPGRADES", db.UPGRADES[:2])
+        phase_2.setattr(db, "SCHEMA_VERSION", 2)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO jobs (apply_url, match_key, company, title, locations, us_location, remote, level, "
+                "sponsorship, terms, first_seen, last_seen, status) VALUES ('https://acme.example/1', 'k', 'Acme', "
+                "'ML Intern', '[]', 'yes', 'unknown', 'intern', 'unknown', '[]', 'now', 'now', 'open')"
+            )
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT company, title, us_location FROM jobs").fetchall() == [("Acme", "ML Intern", "yes")]
+        conn.execute("UPDATE jobs SET us_location = 'no'")
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("UPDATE jobs SET us_location = 'maybe'")
+        assert "jobs_match_key" in {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
+
+
 def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):
     with monkeypatch.context() as broken:
         broken.setattr(db, "UPGRADES", ("", "CREATE TABLE half_done (x); not valid sql"))

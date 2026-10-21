@@ -74,6 +74,11 @@ company and job title. simplify.jobs links themselves are refused: the app never
 - Collecting jobs sends nothing about you: only public read requests, identified as
   "auto_apply personal job search". Job descriptions are stored as plain text.
 
+## Credits
+US and foreign place names (used to decide whether a job is in the US) come from
+[GeoNames](https://www.geonames.org), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.
+
 ## Development
 - Run all tests: `python -m pytest`
 - Format and lint: `ruff format .` and `ruff check .`

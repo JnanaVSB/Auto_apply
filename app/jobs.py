@@ -8,26 +8,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import sqlcipher3
 
+from app import places
 from app.sources import Job, posting_of
 
-STATES = {
-    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
-    "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia",
-    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
-    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan",
-    "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
-    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
-    "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island",
-    "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
-    "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
-}  # fmt: skip
-US_TEXT = re.compile(
-    r"\bunited states\b|\b(?:" + "|".join(STATES.values()) + r")\b"
-    r"|(?-i:(?<![A-Za-z])(?:USA|U\.S\.A?|US|SF|NYC|LA|South SF|Bay Area)(?![A-Za-z]))"
-    r"|(?-i:,\s*(?:" + "|".join(STATES) + r")(?![A-Za-z]))",
-    re.IGNORECASE,
-)
-REMOTE_ONLY = re.compile(r"(?:remote|anywhere|worldwide|global|[\s,;:/()–-])+", re.IGNORECASE)
 LEVELS = (  # first match wins, so "Associate Director" is staff+ and "Engineer II" is mid
     ("intern", r"intern|internship|co-?op"),
     ("new grad", r"new grad|new graduate|university graduate|early career"),
@@ -104,16 +87,15 @@ class Counts:
     skipped: int = 0  # unusable links
 
 
-def us_location(job: Job) -> str | None:
-    """'yes', 'unclear' (kept for the user to decide) or None (not a US job)."""
-    countries = [country for country in job.countries if not REMOTE_ONLY.fullmatch(country)]
+def us_location(job: Job) -> str:
+    """'yes', 'unclear' (kept for the user to decide) or 'no': every location is clearly outside the US."""
+    countries = [country for country in job.countries if not places.REMOTE_ONLY.fullmatch(country)]
     if countries:  # the board's own country field decides
-        return "yes" if any(US_TEXT.search(country) for country in countries) else None
-    if any(US_TEXT.search(place) for place in job.locations):
+        return "yes" if any(places.US_WORDS.search(country) for country in countries) else "no"
+    verdicts = {places.classify(place) for place in job.locations}
+    if "us" in verdicts:
         return "yes"
-    if not job.locations or any(REMOTE_ONLY.fullmatch(place) for place in job.locations):
-        return "unclear"
-    return None
+    return "no" if verdicts == {"foreign"} else "unclear"
 
 
 def level(job: Job) -> str:
@@ -193,7 +175,7 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
         "company": job.company,
         "title": job.title,
         "locations": json.dumps(job.locations, ensure_ascii=False),
-        "us_location": us or "unclear",
+        "us_location": "unclear" if chosen and us == "no" else us,  # a job the user picked stays visible
         "remote": remote(job),
         "level": level(job),
         "role_category": job.category,
@@ -205,7 +187,7 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     }
     new = job_id is None
     if new:
-        if not job.listed or (not chosen and (us is None or not roles.match(job))):
+        if not job.listed or (not chosen and (us == "no" or not roles.match(job))):  # foreign: never added
             return
         host = urlsplit(url).hostname or ""
         manual = host == "simplify.jobs" or host.endswith(".simplify.jobs")  # the app must never open it itself
