@@ -63,6 +63,8 @@ def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[
             continue
         if job is not None:
             jobs.append(job)
+    if skipped and not jobs:  # entries arrived but none could be read: never treat that as "no openings"
+        raise SourceError(f"none of its {skipped:,} entries could be read (its data layout may have changed)")
     return jobs, skipped
 
 

@@ -164,3 +164,16 @@ def test_ashby_us_job_with_a_foreign_second_office_is_us():
     london = {"location": "London", "address": {"postalAddress": {"addressCountry": "United Kingdom"}}}
     job = ashby_job(location="New York", address=None, secondaryLocations=[london])
     assert rules.us_location(ashby.parse({"jobs": [job]}, "initech")[0][0]) == "yes"
+
+
+@pytest.mark.parametrize(
+    ("module", "data"),
+    [
+        (greenhouse, {"jobs": [{"id": 1}, {"id": 2}]}),
+        (lever, [{"id": "a"}, {"id": "b"}]),
+        (ashby, {"jobs": [{"id": "a"}, {"id": "b"}]}),
+    ],
+)
+def test_a_board_with_only_unreadable_entries_fails_instead_of_looking_empty(module, data):
+    with pytest.raises(SourceError, match="none of its 2 entries could be read"):
+        module.parse(data, "acme")

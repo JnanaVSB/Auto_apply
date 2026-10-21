@@ -5,8 +5,10 @@ import dataclasses
 import json
 import sqlite3
 import sys
+from collections import Counter
 from collections.abc import Callable
 from contextlib import closing, suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -15,7 +17,7 @@ import sqlcipher3
 
 from app import db, jobs
 from app.config import Config, ConfigError, SimplifyList, load_config
-from app.fetch import Fetcher, FetchError, NotFound
+from app.fetch import ALLOWED_HOSTS, BLOCKED_HINT, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
 from app.sources import Job, SourceError, ashby, greenhouse, is_simplify_site, lever, posting_of, simplify
 
@@ -23,6 +25,7 @@ BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
 PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
+SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
 Output = Callable[[str], None]
 SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON CONFLICT (name)
     DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, retired_on = NULL"""
@@ -30,6 +33,7 @@ SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON C
 # the day it was retired.
 LINK_BOARD = """INSERT INTO sources (name) VALUES (?) ON CONFLICT (name)
     DO UPDATE SET misses = 0, retired_on = NULL WHERE retired_on IS NOT NULL AND ? > retired_on"""
+LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
 COUNT_MISS = """INSERT INTO sources (name, misses) VALUES (?, 1) ON CONFLICT (name)
     DO UPDATE SET misses = misses + 1 RETURNING misses"""
 
@@ -43,8 +47,8 @@ def _now() -> str:
 
 
 def _add_up(total: jobs.Counts, counts: jobs.Counts) -> None:
-    for field in dataclasses.fields(total):
-        setattr(total, field.name, getattr(total, field.name) + getattr(counts, field.name))
+    for count in dataclasses.fields(total):
+        setattr(total, count.name, getattr(total, count.name) + getattr(counts, count.name))
 
 
 def _plural(count: int, word: str) -> str:
@@ -75,116 +79,173 @@ def _lock(data_dir: Path) -> sqlite3.Connection:
     return lock
 
 
+@dataclass
+class _Run:
+    """What one collection shares while it reads every source."""
+
+    conn: sqlcipher3.Connection
+    fetcher: Fetcher
+    roles: jobs.Roles
+    out: Output
+    total: jobs.Counts = field(default_factory=jobs.Counts)
+    failed: list[str] = field(default_factory=list)  # could not be downloaded
+    investigate: list[str] = field(default_factory=list)  # downloaded, but the data looks wrong; nothing changed
+    retired: list[str] = field(default_factory=list)
+    unreachable: set[str] = field(default_factory=set)  # sites skipped for the rest of this run
+    skipped: Counter = field(default_factory=Counter)  # sources skipped, per unreachable site
+
+    def check_internet(self) -> None:
+        self.unreachable = {host for host in sorted(ALLOWED_HOSTS) if not self.fetcher.reachable(host)}
+        if self.unreachable == ALLOWED_HOSTS:
+            raise CollectError(
+                "No internet connection: none of the job sites could be reached. Check your connection and try again."
+            )
+
+    def read_simplify(self, listing: SimplifyList) -> None:
+        name, host = simplify.source_name(listing.url), urlsplit(listing.url).hostname
+        label = name.replace("simplify:", "Simplify ")
+        if host in self.unreachable:
+            self.skipped[host] += 1
+            return
+        row = self.conn.execute("SELECT etag FROM sources WHERE name = ?", (name,)).fetchone()
+        try:
+            result = self.fetcher.get_json(listing.url, row[0] if row else None)
+            if result is None:
+                self.out(f"{label}: unchanged since the last run")
+                return
+            data, etag = result
+            found, skipped = simplify.parse(data, name, listing.level)
+            counts = jobs.save(self.conn, name, found, self.roles, _now())
+        except FetchError as error:
+            self.failed.append(f"{label}: {error}")
+            return
+        except SourceError as error:
+            self.investigate.append(f"{label}: {error}")
+            return
+        with self.conn:  # only after a successful save, so a failed save means a fresh download next time
+            self.conn.execute(SAVE_SOURCE, (name, etag, _now()))
+            self.conn.executemany(LINK_BOARD, simplify.linked_boards(found).items())
+        counts.skipped += skipped
+        _add_up(self.total, counts)
+        self.out(f"{label}: {_describe(counts)}")
+
+    def read_boards(self, extra_boards: list[str]) -> None:
+        """Read every board that is not retired, plus extra_boards, skipping sites that stopped answering."""
+        known = self.conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL")
+        boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
+        minutes = _plural(len(boards) * 2 // 60 + 1, "minute")
+        self.out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
+        counts, read, silent = jobs.Counts(), 0, Counter()  # silent: no answer at all, in a row, per site
+        for number, board in enumerate(boards, 1):
+            kind, _, name = board.partition(":")
+            url = BOARDS[kind].api_url(name)
+            host = urlsplit(url).hostname
+            if host in self.unreachable:
+                self.skipped[host] += 1
+            else:
+                outcome = self._read_board(board, url, board in extra_boards, counts)
+                read += outcome == "read"
+                silent[host] = silent[host] + 1 if outcome == "unreachable" else 0
+                if silent[host] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
+                    self.unreachable.add(host)
+            if number % PROGRESS_EVERY == 0:
+                self.out(f"  {number:,} of {len(boards):,} boards done")
+        _add_up(self.total, counts)
+        self.out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(counts)}")
+
+    def _read_board(self, board: str, url: str, extra: bool, counts: jobs.Counts) -> str:
+        """Read and save one board; return "read", "missing", "unreachable", "failed" or "investigate"."""
+        kind, _, name = board.partition(":")
+        label = f"{kind.title()} board '{name}'"
+        try:
+            data, _ = self.fetcher.get_json(url)
+            found, skipped = BOARDS[kind].parse(data, name)
+            if not found and not skipped:  # an empty board after a good read with jobs: check before closing any
+                listed = self.conn.execute(LISTED_BY, (board,)).fetchone()[0]
+                if listed:
+                    raise SourceError(f"sent no jobs, but its last good read listed {_plural(listed, 'job')}")
+            board_counts = jobs.save(self.conn, board, found, self.roles, _now())
+        except NotFound as error:
+            self.failed.append(f"{label}: {error}")
+            self._count_miss(board, label, extra, counts)
+            return "missing"
+        except FetchError as error:
+            self.failed.append(f"{label}: {error}")
+            return "unreachable" if isinstance(error, Unreachable) else "failed"
+        except SourceError as error:
+            self.investigate.append(f"{label}: {error}")
+            return "investigate"
+        with self.conn:
+            self.conn.execute(SAVE_SOURCE, (board, None, _now()))
+        board_counts.skipped += skipped
+        _add_up(counts, board_counts)
+        return "read"
+
+    def _count_miss(self, board: str, label: str, extra: bool, counts: jobs.Counts) -> None:
+        with self.conn:
+            misses = self.conn.execute(COUNT_MISS, (board,)).fetchone()[0]
+            if misses >= RETIRE_AFTER and not extra:
+                self.conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
+                # in the same step: its jobs are no longer listed by it, so Simplify decides for them now
+                _add_up(counts, jobs.save(self.conn, board, [], self.roles, _now()))
+                self.retired.append(label)
+
+    def problems(self) -> list[str]:
+        """Every source that failed, including one line per site that was skipped."""
+        skipped = [
+            f"{host}: could not be reached; {_plural(count, 'source')} skipped this run, closing nothing "
+            f"({BLOCKED_HINT})"
+            for host, count in sorted(self.skipped.items())
+        ]
+        return self.failed + skipped
+
+    def summary(self) -> None:
+        total, problems = self.total, self.problems()
+        self.out(f"Total: {total.new:,} new, {total.updated:,} updated, {total.unlisted:,} no longer listed.")
+        self.out(f"{_plural(len(problems), 'source')} failed:" if problems else "No sources failed.")
+        for line in problems:
+            self.out(f"  - {line}")
+        if self.investigate:
+            self.out(
+                f"Needs investigation ({_plural(len(self.investigate), 'source')}; the data looks different from "
+                "usual, so nothing was changed for them):"
+            )
+            for line in self.investigate:
+                self.out(f"  - {line}")
+        if self.retired:
+            self.out(
+                f"Stopped reading {_plural(len(self.retired), 'board')} not found {RETIRE_AFTER} runs in a row; "
+                "their jobs are marked no longer listed by that board (read again if Simplify links a newer job "
+                "there, or if you add them to extra_boards):"
+            )
+            for line in self.retired:
+                self.out(f"  - {line}")
+
+
 def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
     """Read every source one at a time, saving each all-or-nothing, then print a summary."""
-    roles = jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords)
+    run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords), out)
+    run.check_internet()
     with conn:
         run_id = conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (_now(),)).lastrowid
-    total, failures, outcome = jobs.Counts(), [], "stopped"
+    outcome = "stopped"
     try:
         for listing in config.sources.simplify_lists:
-            _read_simplify(conn, fetcher, listing, roles, total, failures, out)
-        retired = _read_boards(conn, fetcher, config.sources.extra_boards, roles, total, failures, out)
+            run.read_simplify(listing)
+        run.read_boards(config.sources.extra_boards)
         outcome = "done"
     except KeyboardInterrupt:
         outcome = "cancelled"
         raise
     finally:
+        failures = run.problems() + [f"needs investigation: {line}" for line in run.investigate]
         with suppress(sqlcipher3.Error), conn:  # a broken database must not hide the original error
             conn.execute(
                 "UPDATE collect_runs SET finished_at = ?, outcome = ?, new_jobs = ?, updated_jobs = ?, "
                 "closed_jobs = ?, failures = ? WHERE id = ?",
-                (_now(), outcome, total.new, total.updated, total.unlisted, json.dumps(failures), run_id),
+                (_now(), outcome, run.total.new, run.total.updated, run.total.unlisted, json.dumps(failures), run_id),
             )
-    out(f"Total: {total.new:,} new, {total.updated:,} updated, {total.unlisted:,} no longer listed.")
-    out(f"{_plural(len(failures), 'source')} failed:" if failures else "No sources failed.")
-    for failure in failures:
-        out(f"  - {failure}")
-    if retired:
-        out(
-            f"Stopped reading {_plural(len(retired), 'board')} not found {RETIRE_AFTER} runs in a row; their jobs are "
-            "marked no longer listed by that board (read again if Simplify links a newer job there, or if you add "
-            "them to extra_boards):"
-        )
-        for board in retired:
-            out(f"  - {board}")
-
-
-def _read_simplify(
-    conn: sqlcipher3.Connection,
-    fetcher: Fetcher,
-    listing: SimplifyList,
-    roles: jobs.Roles,
-    total: jobs.Counts,
-    failures: list[str],
-    out: Output,
-) -> None:
-    name = simplify.source_name(listing.url)
-    label = name.replace("simplify:", "Simplify ")
-    row = conn.execute("SELECT etag FROM sources WHERE name = ?", (name,)).fetchone()
-    try:
-        result = fetcher.get_json(listing.url, row[0] if row else None)
-        if result is None:
-            out(f"{label}: unchanged since the last run")
-            return
-        data, etag = result
-        found, skipped = simplify.parse(data, name, listing.level)
-        counts = jobs.save(conn, name, found, roles, _now())
-    except (FetchError, SourceError) as error:
-        failures.append(f"{label}: {error}")
-        return
-    with conn:  # only after a successful save, so a failed save means a fresh download next time
-        conn.execute(SAVE_SOURCE, (name, etag, _now()))
-        conn.executemany(LINK_BOARD, simplify.linked_boards(found).items())
-    counts.skipped += skipped
-    _add_up(total, counts)
-    out(f"{label}: {_describe(counts)}")
-
-
-def _read_boards(
-    conn: sqlcipher3.Connection,
-    fetcher: Fetcher,
-    extra_boards: list[str],
-    roles: jobs.Roles,
-    total: jobs.Counts,
-    failures: list[str],
-    out: Output,
-) -> list[str]:
-    """Read every board that is not retired, plus extra_boards; return the boards retired in this run."""
-    known = conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL")
-    boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
-    minutes = _plural(len(boards) * 2 // 60 + 1, "minute")
-    out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
-    board_counts, read, retired = jobs.Counts(), 0, []
-    for number, board in enumerate(boards, 1):
-        kind, _, name = board.partition(":")
-        label = f"{kind.title()} board '{name}'"
-        try:
-            data, _ = fetcher.get_json(BOARDS[kind].api_url(name))
-            found, skipped = BOARDS[kind].parse(data, name)
-            counts = jobs.save(conn, board, found, roles, _now())
-        except NotFound as error:  # other failures leave the count alone: they prove nothing either way
-            failures.append(f"{label}: {error}")
-            with conn:
-                misses = conn.execute(COUNT_MISS, (board,)).fetchone()[0]
-                if misses >= RETIRE_AFTER and board not in extra_boards:
-                    conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
-                    # in the same step: its jobs are no longer listed by it, so Simplify decides for them now
-                    _add_up(board_counts, jobs.save(conn, board, [], roles, _now()))
-                    retired.append(label)
-        except (FetchError, SourceError) as error:
-            failures.append(f"{label}: {error}")
-        else:
-            with conn:
-                conn.execute(SAVE_SOURCE, (board, None, _now()))
-            counts.skipped += skipped
-            _add_up(board_counts, counts)
-            read += 1
-        if number % PROGRESS_EVERY == 0:
-            out(f"  {number:,} of {len(boards):,} boards done")
-    _add_up(total, board_counts)
-    out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(board_counts)}")
-    return retired
+    run.summary()
 
 
 def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[[str], str] = input) -> str:

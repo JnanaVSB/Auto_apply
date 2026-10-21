@@ -56,17 +56,35 @@ python -m app.collect
 ```
 Reads Simplify's two public job lists on GitHub and every Greenhouse, Lever and Ashby board they link
 to (plus your `extra_boards`), one request per second per site. It keeps only US jobs matching your
-`roles`, stores each job once, and marks jobs closed when their board or list drops them. A full run
-takes about 15–25 minutes; running it again is safe. Sources that fail are listed at the end and close
-nothing. If your settings file is from before Phase 2, copy the `roles` and `sources` sections from
-`config.example.yaml`.
+`roles` and stores each job once. Jobs are never deleted or hidden: a job its board or list drops becomes
+"no longer listed", and a saved job later judged to be outside the US keeps its label and gets a "please check
+location" mark. A full run takes about 15–25 minutes; running it again is safe.
+
+At the end it prints a summary:
+- **failed**: sources that could not be downloaded. They change nothing. If a site does not answer at all, the
+  message says the site may be down or your network may be blocking it; with no internet at all the run stops
+  at once.
+- **Needs investigation**: a source whose data looks wrong (for example none of its entries can be read, or a
+  board suddenly lists no jobs at all). Nothing is changed for it, so no application is missed; please check.
+- **Stopped reading**: a board that answered "not found" three runs in a row. It is read again automatically if
+  Simplify links a newer job there, or if you add it to `extra_boards`.
+
+If your settings file is from before Phase 2, copy the `roles` and `sources` sections from `config.example.yaml`.
 
 To save one job you found yourself (on a company site, or by browsing simplify.jobs and clicking Apply):
 ```bash
 python -m app.collect add "<job link>"
 ```
 Greenhouse, Lever and Ashby links are read from the company's board; for other sites you type the
-company and job title. simplify.jobs links themselves are refused: the app never opens that website.
+company and job title. A job you add is marked "added by you", and later runs never change its US label.
+simplify.jobs links themselves are refused: the app never opens that website.
+
+## Adding companies and board types
+- **Another company** on Greenhouse, Lever or Ashby: add one line to `extra_boards` in `data/config.yaml`, using the
+  name from the board's web address, e.g. `greenhouse:openai` for `job-boards.greenhouse.io/openai`. Boards linked
+  from Simplify's lists are found automatically. (A dashboard button for this comes in a later phase.)
+- **Another kind of job board** (for example Workable): one small translator file in `app/sources/` plus its tests.
+  See [docs/adding-a-board-type.md](docs/adding-a-board-type.md) for the template and the test checklist.
 
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.

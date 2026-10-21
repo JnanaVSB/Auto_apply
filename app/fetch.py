@@ -14,6 +14,8 @@ MIN_GAP_SECONDS = 1.0  # between two requests to the same website
 RETRY_WAITS = (2, 4, 8)
 MAX_RETRY_AFTER = 60
 MAX_BYTES = 50 * 1024 * 1024
+REACH_TIMEOUT_SECONDS = 10
+BLOCKED_HINT = "the site may be down, or your network may be blocking it"
 
 
 class FetchError(Exception):
@@ -22,6 +24,10 @@ class FetchError(Exception):
 
 class NotFound(FetchError):
     """The site says the address does not exist (404), e.g. a company closed its job board."""
+
+
+class Unreachable(FetchError):
+    """No answer at all: the connection failed or timed out on every try."""
 
 
 class Fetcher:
@@ -35,6 +41,16 @@ class Fetcher:
 
     def close(self) -> None:
         self._client.close()
+
+    def reachable(self, host: str) -> bool:
+        """One quick request to an allowed site; any answer counts, even an error page."""
+        _allowed_host(f"https://{host}/")
+        self._space_out(host)
+        try:
+            self._client.head(f"https://{host}/", timeout=REACH_TIMEOUT_SECONDS)
+        except httpx.RequestError:
+            return False
+        return True
 
     def get_json(self, url: str, etag: str | None = None) -> tuple[Any, str | None] | None:
         """Return (data, version tag), or None when the file is unchanged since `etag`."""
@@ -54,14 +70,15 @@ class Fetcher:
                         raise NotFound("not found (404)")
                     if status != 429 and status < 500:
                         raise FetchError(_refusal(status))
-                    reason, site_wait = f"busy or failing (status {status})", _retry_after(response)
+                    reason, site_wait, answered = f"busy or failing (status {status})", _retry_after(response), True
             except httpx.TimeoutException:
-                reason, site_wait = "timed out", None
+                reason, site_wait, answered = "timed out", None, False
             except httpx.RequestError as error:  # dropped connection, broken compression, ...
-                reason, site_wait = f"connection failed ({type(error).__name__})", None
+                reason, site_wait, answered = f"connection failed ({type(error).__name__})", None, False
             wait = next(waits, None)
             if wait is None:
-                raise FetchError(f"{reason}; gave up after {len(RETRY_WAITS)} retries")
+                gave_up = f"{reason}; gave up after {len(RETRY_WAITS)} retries"
+                raise FetchError(gave_up) if answered else Unreachable(f"{gave_up} ({BLOCKED_HINT})")
             time.sleep(wait if site_wait is None else site_wait)
 
     def _space_out(self, host: str) -> None:

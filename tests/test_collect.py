@@ -30,14 +30,20 @@ def board_job(**changes):
 
 
 class FakeWeb:
-    """Answers each address from `pages`: JSON, (JSON, version tag), a status code or an error to raise."""
+    """Answers each address from `pages`: JSON, (JSON, version tag), a status code or an error to raise.
 
-    def __init__(self, pages):
-        self.pages = pages
+    Sites in `down` never answer at all; sites in `silent` answer the quick reachability check, then go quiet.
+    """
+
+    def __init__(self, pages, down=(), silent=()):
+        self.pages, self.down, self.silent = pages, set(down), set(silent)
         self.requests = []
 
     def __call__(self, request):
         self.requests.append(request)
+        host = request.url.host
+        if host in self.down or (host in self.silent and request.method == "GET"):
+            raise httpx.ConnectError("no route to host")
         page = self.pages.get(str(request.url), 404)
         if isinstance(page, BaseException):
             raise page
@@ -86,12 +92,20 @@ def settings(data_dir, extra_boards=()):
     )
 
 
-def run(conn, data_dir, pages, extra_boards=()):
+def run(conn, data_dir, pages, extra_boards=(), **web_options):
     """One collection against a fake web; returns the printed lines and the web's record of requests."""
-    web, lines = FakeWeb(pages), []
+    web, lines = FakeWeb(pages, **web_options), []
     with closing(fetch.Fetcher(httpx.MockTransport(web))) as fetcher:
         collect.collect(conn, settings(data_dir, extra_boards), fetcher, lines.append)
     return lines, web
+
+
+def requested(web):
+    return [str(request.url) for request in web.requests if request.method == "GET"]
+
+
+def list_request(web):
+    return next(request for request in web.requests if str(request.url) == LIST)
 
 
 def one(conn, sql, *values):
@@ -123,7 +137,7 @@ def test_second_run_creates_no_duplicates_and_skips_an_unchanged_list(conn, data
     lines, web = run(conn, data_dir, PAGES)
     assert lines[0] == "Simplify Summer2027-Internships: unchanged since the last run"
     assert lines[2] == "Company boards: 1 of 1 read, 1 matching (0 new, 0 updated, 0 no longer listed)"
-    assert web.requests[0].headers["If-None-Match"] == '"v1"'
+    assert list_request(web).headers["If-None-Match"] == '"v1"'
     assert one(conn, "SELECT count(*) FROM jobs") == (1,)
 
 
@@ -150,13 +164,14 @@ def test_version_tag_is_kept_only_after_a_successful_save(conn, data_dir, monkey
     assert one(conn, "SELECT count(*) FROM sources") == (0,)
     assert one(conn, "SELECT outcome FROM collect_runs") == ("stopped",)
     _, web = run(conn, data_dir, PAGES)
-    assert "If-None-Match" not in web.requests[0].headers  # downloaded afresh
+    assert "If-None-Match" not in list_request(web).headers  # downloaded afresh
 
 
 def test_boards_dropped_by_simplify_are_still_read(conn, data_dir):
     run(conn, data_dir, PAGES)
-    _, web = run(conn, data_dir, {LIST: ([entry(url="https://acme.example/jobs/1")], '"v2"'), ACME: {"jobs": []}})
-    assert ACME in [str(request.url) for request in web.requests]
+    other = board_job(id=999, absolute_url="https://job-boards.greenhouse.io/acme/jobs/999", title="Accountant")
+    _, web = run(conn, data_dir, {LIST: ([entry(url="https://acme.example/jobs/1")], '"v2"'), ACME: {"jobs": [other]}})
+    assert ACME in requested(web)
     assert one(conn, "SELECT status FROM jobs WHERE apply_url = ?", ACME_JOB) == ("no longer listed",)
 
 
@@ -281,10 +296,6 @@ def board_state(conn, name="greenhouse:acme"):
     return one(conn, "SELECT misses, retired_on FROM sources WHERE name = ?", name)
 
 
-def requested(web):
-    return [str(request.url) for request in web.requests]
-
-
 def test_a_board_not_found_three_runs_in_a_row_is_retired_and_named_once(conn, data_dir):
     pages = PAGES | {ACME: 404}
     summaries = [run(conn, data_dir, pages)[0] for _ in range(3)]
@@ -355,3 +366,82 @@ def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeyp
     monkeypatch.setattr(collect.db, "connect", lambda folder: pytest.fail("opened before the lock"))
     with closing(collect._lock(data_dir)):
         assert main([], settings(data_dir)) == (1, "Error: A collection is already running. Wait for it to finish.\n")
+
+
+ALL_SITES = ("raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com")
+
+
+def test_no_internet_stops_at_once(conn, data_dir):
+    with pytest.raises(collect.CollectError, match="No internet connection"):
+        run(conn, data_dir, PAGES, down=ALL_SITES)
+    assert one(conn, "SELECT count(*) FROM collect_runs") == (0,)
+
+
+def test_an_unreachable_site_is_skipped_with_one_line_and_closes_nothing(conn, data_dir):
+    run(conn, data_dir, PAGES)
+    lines, web = run(conn, data_dir, PAGES, down=["boards-api.greenhouse.io"])
+    assert ACME not in requested(web)
+    assert lines[-2:] == [
+        "1 source failed:",
+        "  - boards-api.greenhouse.io: could not be reached; 1 source skipped this run, closing nothing "
+        "(the site may be down, or your network may be blocking it)",
+    ]
+    assert one(conn, "SELECT status FROM jobs") == ("open",)
+
+
+def test_a_site_that_stops_answering_mid_run_is_skipped_after_five_boards(conn, data_dir):
+    boards = [f"greenhouse:board{number}" for number in range(7)]
+    lines, web = run(conn, data_dir, {}, extra_boards=boards, silent=["boards-api.greenhouse.io"])
+    board_requests = [url for url in requested(web) if "boards-api.greenhouse.io" in url]
+    assert len(board_requests) == 5 * 4  # five boards, each tried four times, then the site is skipped
+    hint = "(the site may be down, or your network may be blocking it)"
+    assert (
+        lines[-2] == f"  - Greenhouse board 'board4': connection failed (ConnectError); gave up after 3 retries {hint}"
+    )
+    assert (
+        lines[-1]
+        == f"  - boards-api.greenhouse.io: could not be reached; 2 sources skipped this run, closing nothing {hint}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("page", "reason"),
+    [
+        ({"jobs": [{"id": 123, "absolute_url": ACME_JOB}]}, "none of its 1 entries could be read"),  # no title
+        ({"jobs": []}, "sent no jobs, but its last good read listed 1 job"),
+        ({"postings": []}, "unexpected format"),
+    ],
+)
+def test_a_board_whose_data_looks_wrong_needs_investigation_and_changes_nothing(conn, data_dir, page, reason):
+    run(conn, data_dir, PAGES)
+    lines, _ = run(conn, data_dir, {LIST: 404, ACME: page})
+    heading = lines.index(
+        "Needs investigation (1 source; the data looks different from usual, so nothing was changed for them):"
+    )
+    assert lines[heading + 1].startswith(f"  - Greenhouse board 'acme': {reason}")
+    assert one(conn, "SELECT status, description FROM jobs") == ("open", "Train models.")
+
+
+def test_a_board_that_never_had_jobs_may_be_empty(conn, data_dir):
+    lines, _ = run(conn, data_dir, {GLOBEX: []}, extra_boards=["lever:globex"])
+    assert not any(line.startswith("Needs investigation") for line in lines)
+
+
+def test_a_reshaped_simplify_list_needs_investigation(conn, data_dir):
+    lines, _ = run(conn, data_dir, {LIST: ([{"renamed": "fields"}], '"v1"')})
+    assert any(line.startswith("  - Simplify Summer2027-Internships: none of its 1 entries") for line in lines)
+
+
+def test_an_unreachable_simplify_list_is_skipped(conn, data_dir):
+    lines, web = run(conn, data_dir, PAGES, down=["raw.githubusercontent.com"])
+    assert LIST not in requested(web)
+    assert lines[-1].startswith("  - raw.githubusercontent.com: could not be reached; 1 source skipped this run")
+
+
+def test_only_failures_in_a_row_skip_a_site(conn, data_dir):
+    boards = [f"greenhouse:board{number}" for number in range(9)]
+    urls = [f"https://boards-api.greenhouse.io/v1/boards/board{number}/jobs?content=true" for number in range(9)]
+    pages = {url: httpx.ConnectError("no route to host") for url in urls} | {urls[4]: {"jobs": []}}  # board4 answers
+    lines, web = run(conn, data_dir, pages, extra_boards=boards)
+    assert set(urls) <= set(requested(web))  # 4 failures, an answer, 4 failures: never 5 in a row
+    assert not any("could not be reached" in line for line in lines)

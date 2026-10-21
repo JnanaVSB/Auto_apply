@@ -153,3 +153,22 @@ def test_one_request_per_second_per_website(clock):
     fetcher.get_json(GREENHOUSE)  # another website: no wait
     fetcher.get_json(LEVER)
     assert clock.waits == [fetch.MIN_GAP_SECONDS]
+
+
+def test_reachable_means_any_answer_and_only_allowed_sites_are_asked():
+    fetcher, requests = fake_web(httpx.Response(404), httpx.ConnectError("down"))
+    assert fetcher.reachable("api.lever.co") is True  # even an error page is an answer
+    assert fetcher.reachable("api.ashbyhq.com") is False
+    assert [request.method for request in requests] == ["HEAD", "HEAD"]
+    with pytest.raises(fetch.FetchError, match="address not allowed"):
+        fetcher.reachable("simplify.jobs")
+
+
+def test_no_answer_at_all_is_reported_as_unreachable_with_the_blocking_hint():
+    fetcher, _ = fake_web(*[httpx.ConnectError("down")] * 4)
+    with pytest.raises(fetch.Unreachable, match="network may be blocking it"):
+        fetcher.get_json(LEVER)
+    fetcher, _ = fake_web(*[httpx.Response(503)] * 4)
+    with pytest.raises(fetch.FetchError) as error:
+        fetcher.get_json(LEVER)
+    assert not isinstance(error.value, fetch.Unreachable)  # the site answered; it is just failing
