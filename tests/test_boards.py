@@ -2,6 +2,7 @@
 
 import pytest
 
+from app import jobs as rules
 from app.sources import SourceError, ashby, greenhouse, lever
 
 
@@ -66,7 +67,12 @@ def test_greenhouse_job():
     jobs, skipped = greenhouse.parse({"jobs": [greenhouse_job()]}, "acme")
     job = jobs[0]
     assert (skipped, job.source, job.source_job_id, job.company) == (0, "greenhouse:acme", "123", "Acme")
-    assert (job.locations, job.countries) == (["San Francisco, CA", "New York, NY"], ["United States"])
+    assert job.locations == ["San Francisco, CA", "New York, NY"]
+    assert job.place_checks == [
+        ("San Francisco, CA", None),
+        ("New York, NY", None),
+        ("San Francisco, California, United States", None),
+    ]
     assert (job.remote, job.date_posted, job.salary) == ("on-site", "2026-10-19", None)
     assert job.description == "Train & evaluate agents."  # the HTML arrives escaped; the script is dropped
 
@@ -79,9 +85,9 @@ def test_lever_job():
         "globex",
         "Machine Learning Intern",
     )
-    assert (job.locations, job.countries, job.remote, job.level) == (
+    assert (job.locations, job.place_checks, job.remote, job.level) == (
         ["Austin, TX", "Remote"],
-        ["US"],
+        [("Austin, TX", "US"), ("Remote", None)],
         "hybrid",
         "intern",
     )
@@ -93,11 +99,11 @@ def test_lever_job():
 
 def test_ashby_job():
     job = ashby.parse({"jobs": [ashby_job()]}, "initech")[0][0]
-    assert (job.source, job.company, job.locations, job.countries) == (
+    assert (job.source, job.company, job.locations, job.place_checks) == (
         "ashby:initech",
         "initech",
         ["Seattle", "London"],
-        ["United States", "UK"],
+        [("Seattle", "United States"), ("London", "UK")],
     )
     assert (job.remote, job.level, job.description) == ("on-site", None, "Build LLM tools.")
     assert (job.salary, job.date_posted) == ("$150K - $200K", "2026-07-30")
@@ -141,8 +147,20 @@ def test_empty_board_means_no_openings(module, empty):
 def test_optional_fields_in_odd_shapes_do_not_lose_the_job():
     odd = {"offices": "Remote", "metadata": None, "content": None, "first_published": "yesterday", "location": {}}
     job = greenhouse.parse({"jobs": [greenhouse_job(**odd)]}, "acme")[0][0]
-    assert (job.locations, job.countries, job.remote, job.description, job.date_posted) == ([], [], None, None, None)
+    assert (job.locations, job.place_checks, job.remote, job.description, job.date_posted) == ([], [], None, None, None)
     job = lever.parse([lever_job(salaryRange={"min": "lots"}, lists=None, country=None, createdAt=None)], "globex")[0][
         0
     ]
-    assert (job.salary, job.countries, job.date_posted) == (None, [], None)
+    assert (job.salary, job.place_checks, job.date_posted) == (None, [("Austin, TX", None), ("Remote", None)], None)
+
+
+@pytest.mark.parametrize("office", ["New York, NY", "San Francisco, California", "New York", "Hybrid"])
+def test_greenhouse_us_job_with_short_office_text_is_us(office):
+    job = greenhouse_job(location={"name": "New York, NY"}, offices=[{"location": office}])
+    assert rules.us_location(greenhouse.parse({"jobs": [job]}, "acme")[0][0]) == "yes"
+
+
+def test_ashby_us_job_with_a_foreign_second_office_is_us():
+    london = {"location": "London", "address": {"postalAddress": {"addressCountry": "United Kingdom"}}}
+    job = ashby_job(location="New York", address=None, secondaryLocations=[london])
+    assert rules.us_location(ashby.parse({"jobs": [job]}, "initech")[0][0]) == "yes"

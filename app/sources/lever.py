@@ -18,7 +18,8 @@ def parse(data: Any, board: str) -> tuple[list[Job], int]:
 def _job(entry: dict, board: str) -> Job:
     categories = entry.get("categories") or {}
     places = categories.get("allLocations") or [categories.get("location")]
-    commitment, country = categories.get("commitment"), entry.get("country")
+    locations = [place.strip() for place in places if isinstance(place, str) and place.strip()]
+    commitment, main, country = categories.get("commitment"), categories.get("location"), entry.get("country")
     sections = [entry.get("description") or ""]
     for item in entry.get("lists") or []:  # e.g. "What you'll do", with its bullet points
         if isinstance(item, dict):
@@ -30,8 +31,9 @@ def _job(entry: dict, board: str) -> Job:
         company=board,  # Lever does not send the company name
         title=required_text(entry, "text"),
         url=required_text(entry, "hostedUrl"),
-        locations=[place.strip() for place in places if isinstance(place, str) and place.strip()],
-        countries=[country] if isinstance(country, str) else [],
+        locations=locations,
+        # Lever's country belongs to the main location only; the others are judged by their text
+        place_checks=[(place, country if place == main and isinstance(country, str) else None) for place in locations],
         remote=workplace(entry.get("workplaceType")),
         level="intern" if isinstance(commitment, str) and "intern" in commitment.lower() else None,
         description=html_to_text("".join(sections)) or None,

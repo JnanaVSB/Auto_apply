@@ -34,7 +34,8 @@ class Job:
     title: str
     url: str
     locations: list[str]
-    countries: list[str] = field(default_factory=list)  # from the board's own country fields
+    # Each place to judge for "is it in the US", with the board's own country for it when given; empty = locations
+    place_checks: list[tuple[str, str | None]] = field(default_factory=list)
     remote: str | None = None  # remote / hybrid / on-site, when the source says
     level: str | None = None  # intern / new grad, from the Simplify list
     category: str | None = None
@@ -75,6 +76,12 @@ def required_text(entry: dict, key: str) -> str:
 def workplace(value: Any) -> str | None:
     """remote / hybrid / on-site from a board's own wording (OnSite, On-Site, onsite, Remote...)."""
     return WORKPLACES.get(re.sub(r"[^a-z]", "", value.lower())) if isinstance(value, str) else None
+
+
+def is_simplify_site(url: str) -> bool:
+    """True for any address on simplify.jobs, which the app must never open itself (its terms forbid it)."""
+    host = (urlsplit(url.strip()).hostname or "").rstrip(".")  # "simplify.jobs." reaches the same site
+    return host == "simplify.jobs" or host.endswith(".simplify.jobs")
 
 
 def posting_of(url: str) -> tuple[str, str, str] | None:
@@ -126,29 +133,38 @@ class _TextOnly(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self._hidden = 0
+        self.held: list[str] = []  # text inside a script/style; kept only if that tag is never closed
+        self.hidden = 0
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         if tag in self.HIDDEN:
-            self._hidden += 1
+            self.hidden += 1
+            self.held.clear()
         elif tag in self.BLOCKS:
             self.parts.append("\n- " if tag == "li" else "\n")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self.HIDDEN:
-            self._hidden = max(0, self._hidden - 1)
+            self.hidden = max(0, self.hidden - 1)
+            self.held.clear()
         elif tag in self.BLOCKS:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if not self._hidden:
-            self.parts.append(data)
+        (self.held if self.hidden else self.parts).append(data)
+
+
+def _visible(html: str) -> str:
+    parser = _TextOnly()
+    parser.feed(html)
+    parser.close()
+    text = "".join(parser.parts)
+    if parser.hidden:  # an unclosed <script> or <style> must not swallow the rest: read what followed as HTML
+        text += "\n" + _visible("".join(parser.held))
+    return text
 
 
 def html_to_text(html: str) -> str:
     """The visible text of an HTML fragment; scripts, styles and tags are dropped, so nothing can run later."""
-    parser = _TextOnly()
-    parser.feed(html.replace("\0", ""))
-    parser.close()
-    lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
+    lines = (" ".join(line.split()) for line in _visible(html.replace("\0", "")).splitlines())
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()

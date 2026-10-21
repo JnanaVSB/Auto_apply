@@ -65,6 +65,7 @@ US_WORDS = re.compile(
 )
 STATE_NAMES = _any_of(STATES.values())
 FOREIGN_NAMES = _any_of([*COUNTRIES, *PROVINCES.values(), *FOREIGN_REGIONS])
+FOREIGN_NAME_KEYS = {_key(name) for name in [*COUNTRIES, *PROVINCES.values(), *FOREIGN_REGIONS]}
 REMOTE_ONLY = re.compile(r"(?:remote|anywhere|worldwide|global|[\s,;:/()–-])*", re.IGNORECASE)
 CODE = re.compile(r"[A-Z]{2}")
 
@@ -80,18 +81,25 @@ def classify(place: str) -> str:
     for name in (_key(part) for part in parts if not CODE.fullmatch(part)):  # "Arlington County, Arlington, VA"
         if any(code in US_CITIES.get(name, NO_CITY)[1] for code in codes):  # a US city in that state
             return "us"
-    if STATE_NAMES.search(place):
-        return "us"
     us, foreign = US_CITIES.get(city, NO_CITY), FOREIGN_CITIES.get(city, NO_CITY)
+    if STATE_NAMES.search(place) and not (len(parts) > 1 and foreign[1] and not us[1]):  # not "Tbilisi, Georgia"
+        return "us"
     for code in codes:
         if code in PROVINCES or (code in COUNTRY_CODES and (code not in STATES or code in foreign[1])):
             return "foreign"  # "Vancouver, BC", "London, UK", "Toronto, CA" (a Canadian city), "Bengaluru, IN"
         if code in STATES and code not in COUNTRY_CODES:
             return "us"  # a state code no country uses, e.g. "Smallville, TX"
+    if len(parts) == 1 and us[1]:  # a whole US city name first: "Jersey City", "West Jordan"
+        return "unclear" if city in FOREIGN_NAME_KEYS else _by_population(us, foreign)  # "Ontario" is both
     if FOREIGN_NAMES.search(place):
         return "foreign"
-    if city in US_CITIES and us[0] >= MAINLY * foreign[0]:
+    return _by_population(us, foreign)
+
+
+def _by_population(us: tuple[int, set[str]], foreign: tuple[int, set[str]]) -> str:
+    """A bare city name belongs to the side whose city has 10x the people of the other's."""
+    if us[1] and us[0] >= MAINLY * foreign[0]:
         return "us"  # "Seattle", "Austin"
-    if city in FOREIGN_CITIES and foreign[0] >= MAINLY * us[0]:
+    if foreign[1] and foreign[0] >= MAINLY * us[0]:
         return "foreign"  # "London" (8.9 million) rather than London, Kentucky
     return "unclear"  # "Vancouver", "Cambridge", or a place not recognised

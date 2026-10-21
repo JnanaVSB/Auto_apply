@@ -59,7 +59,7 @@ def test_role_matching(changes, matches):
 
 
 @pytest.mark.parametrize(
-    ("locations", "countries", "expected"),
+    ("locations", "place_checks", "expected"),
     [
         (["Austin, TX"], [], "yes"),
         (["NYC"], [], "yes"),
@@ -70,10 +70,14 @@ def test_role_matching(changes, matches):
         (["London, UK"], [], "no"),
         (["Remote"], [], "unclear"),
         ([], [], "unclear"),
-        (["Remote"], ["US"], "yes"),
-        (["Toronto"], ["CA"], "no"),  # Lever's code for Canada, not California
-        (["Berlin, DE"], ["DE"], "no"),  # the board's country field wins over "DE" looking like Delaware
-        (["New York"], ["Remote", "United States"], "yes"),
+        (["Remote"], [("Remote", "US")], "yes"),
+        (["Toronto"], [("Toronto", "CA")], "no"),  # Lever's code for Canada, not California
+        (["Berlin, DE"], [("Berlin, DE", "DE")], "no"),  # the country field wins over "DE" looking like Delaware
+        (["New York"], [("New York", "Remote")], "yes"),  # "Remote" is no country: judged by the text
+        (["New York, NY"], [("New York, NY", None), ("New York, NY", None)], "yes"),  # a Greenhouse office
+        (["San Francisco"], [("San Francisco, California", None)], "yes"),
+        (["New York", "London"], [("New York", None), ("London", "United Kingdom")], "yes"),  # Ashby, mixed
+        (["London"], [("London", "United Kingdom")], "no"),
         (["São Paulo, Brasil"], [], "no"),
         (["Seattle"], [], "yes"),
         (["Toronto, CA", "Bengaluru, IN"], [], "no"),  # every location clearly foreign
@@ -81,8 +85,8 @@ def test_role_matching(changes, matches):
         (["Qwertyville Base 7"], [], "unclear"),  # not recognised: kept, never silently dropped
     ],
 )
-def test_us_location(locations, countries, expected):
-    assert jobs.us_location(job(locations=locations, countries=countries)) == expected
+def test_us_location(locations, place_checks, expected):
+    assert jobs.us_location(job(locations=locations, place_checks=place_checks)) == expected
 
 
 @pytest.mark.parametrize(
@@ -122,6 +126,10 @@ def test_remote_label():
             "http://Careers.Example.com/jobs/7/?utm_source=Simplify&ref=x&jobId=7#apply",
             "https://careers.example.com/jobs/7?jobId=7",
         ),
+        (SIMPLIFY, "https://careers.example.com/#/jobs/123", "https://careers.example.com#/jobs/123"),
+        (SIMPLIFY, "https://careers.example.com/#!/jobs/9", "https://careers.example.com#!/jobs/9"),
+        (SIMPLIFY, "https://careers.example.com/jobs/7#apply", "https://careers.example.com/jobs/7"),
+        (SIMPLIFY, "https://Careers.Example.com./jobs/7", "https://careers.example.com/jobs/7"),
         (SIMPLIFY, "javascript:alert(1)", None),
         (SIMPLIFY, "https://user@careers.example.com/jobs/7", None),
         (SIMPLIFY, "not a link", None),
@@ -198,13 +206,33 @@ def test_the_other_source_fills_gaps_but_changes_nothing_known(conn):
     assert rows(conn, "remote, locations") == [("remote", '["San Francisco, CA"]')]
 
 
-def test_an_old_us_label_is_corrected_to_no_by_the_owning_source(conn, monkeypatch):
+def test_a_saved_job_judged_foreign_later_stays_visible_and_is_marked_for_checking(conn, monkeypatch):
     toronto = job(locations=["Toronto, CA"])
     with monkeypatch.context() as old_rule:
         old_rule.setattr(jobs, "us_location", lambda job: "yes")  # how the old rule judged it
         jobs.save(conn, "greenhouse:acme", [toronto], ROLES, NOW)
     counts = jobs.save(conn, "greenhouse:acme", [toronto], ROLES, LATER)
-    assert (counts.updated, rows(conn, "us_location, status")) == (1, [("no", "open")])  # kept, never deleted
+    assert (counts.updated, rows(conn, "us_location, check_location")) == (1, [("yes", 1)])  # never hidden
+
+
+def test_only_the_owning_source_asks_for_a_location_check(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)  # the company's own board: San Francisco
+    jobs.save(conn, SIMPLIFY, [simplify_job(locations=["Toronto, CA"])], ROLES, LATER)  # Simplify disagrees
+    assert rows(conn, "us_location, check_location") == [("yes", 0)]
+
+
+def test_a_job_you_picked_is_marked_as_yours(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, LATER, complete=False, chosen=True)
+    assert rows(conn, "added_by_you") == [(1,)]
+
+
+def test_a_closed_job_is_left_alone(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    conn.execute("UPDATE jobs SET status = 'closed'")  # set by hand in a later phase
+    jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, LATER)
+    assert rows(conn) == [("Machine Learning Engineer", "closed")]
 
 
 def test_unclear_never_replaces_a_known_us_label(conn):
@@ -238,7 +266,7 @@ def test_company_board_decides_when_a_job_closes(conn):
     jobs.save(conn, SIMPLIFY, [simplify_job()], ROLES, NOW)
     jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
     counts = jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)  # gone from the board, still on Simplify
-    assert (counts.closed, rows(conn)) == (1, [("Machine Learning Engineer", "closed")])
+    assert (counts.unlisted, rows(conn)) == (1, [("Machine Learning Engineer", "no longer listed")])
     counts = jobs.save(conn, "greenhouse:acme", [job()], ROLES, LATER)  # back on the board
     assert (counts.updated, rows(conn)) == (1, [("Machine Learning Engineer", "open")])
     jobs.save(conn, SIMPLIFY, [simplify_job(listed=False)], ROLES, LATER)  # Simplify's inactive mark is overruled
@@ -251,7 +279,7 @@ def test_simplify_decides_for_jobs_only_it_knows(conn):
         conn, SIMPLIFY, [simplify_job(url=workday), simplify_job(source_job_id="s-2", url=workday + "2")], ROLES, NOW
     )
     counts = jobs.save(conn, SIMPLIFY, [simplify_job(url=workday)], ROLES, LATER)
-    assert (counts.closed, [status for _, status in rows(conn)]) == (1, ["open", "closed"])
+    assert (counts.unlisted, [status for _, status in rows(conn)]) == (1, ["open", "no longer listed"])
 
 
 def test_partial_list_closes_nothing(conn):
@@ -261,11 +289,11 @@ def test_partial_list_closes_nothing(conn):
 
 
 def test_simplify_jobs_links_are_open_manually_only_and_bad_links_skipped(conn):
-    link = "https://simplify.jobs/p/5"
+    link = "https://simplify.jobs./p/5"  # a trailing dot reaches the same site
     counts = jobs.save(
         conn, SIMPLIFY, [simplify_job(url=link), simplify_job(source_job_id="x", url="ftp://x")], ROLES, NOW
     )
-    assert (counts.skipped, rows(conn, "apply_url, open_manually_only")) == (1, [(link, 1)])
+    assert (counts.skipped, rows(conn, "apply_url, open_manually_only")) == (1, [("https://simplify.jobs/p/5", 1)])
 
 
 def test_failed_save_leaves_the_database_unchanged(conn, monkeypatch):

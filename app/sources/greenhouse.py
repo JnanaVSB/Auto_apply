@@ -24,6 +24,7 @@ def _job(entry: dict, board: str) -> Job:
     offices = [office.get("location") for office in entry.get("offices") or [] if isinstance(office, dict)]
     metadata = [item.get("value") for item in entry.get("metadata") or [] if isinstance(item, dict)]
     location = (entry.get("location") or {}).get("name") or ""
+    locations = [place.strip() for place in re.split(r"[|;]", location) if place.strip()]
     company = entry.get("company_name")
     return Job(
         source=f"greenhouse:{board}",
@@ -31,8 +32,8 @@ def _job(entry: dict, board: str) -> Job:
         company=company.strip() if isinstance(company, str) and company.strip() else board,
         title=required_text(entry, "title"),
         url=required_text(entry, "absolute_url"),
-        locations=[place.strip() for place in re.split(r"[|;]", location) if place.strip()],
-        countries=[place.rsplit(",", 1)[-1].strip() for place in offices if isinstance(place, str)],
+        locations=locations,
+        place_checks=[(place, None) for place in [*locations, *offices] if isinstance(place, str) and place.strip()],
         remote=next(filter(None, map(workplace, metadata)), None),  # from the "Location Type" field
         description=html_to_text(html.unescape(entry.get("content") or "")) or None,  # sent HTML-escaped
         date_posted=day_from_iso(entry.get("first_published") or entry.get("updated_at")),

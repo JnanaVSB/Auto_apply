@@ -1,6 +1,6 @@
 import pytest
 
-from app.sources import day_from_timestamp, html_to_text, posting_of
+from app.sources import day_from_timestamp, html_to_text, is_simplify_site, posting_of
 
 
 @pytest.mark.parametrize(
@@ -33,6 +33,16 @@ def test_board_jobs_are_recognised(url, expected):
 )
 def test_other_links_are_not_board_jobs(url):
     assert posting_of(url) is None
+
+
+def test_simplify_site_is_recognised_with_or_without_a_trailing_dot():
+    for url in ("https://simplify.jobs/p/1", "https://SIMPLIFY.JOBS./p/1", "https://www.simplify.jobs/p/1"):
+        assert is_simplify_site(url)
+    assert not is_simplify_site("https://notsimplify.jobs/p/1")
+
+
+def test_an_unclosed_script_does_not_swallow_the_rest():
+    assert html_to_text("<p>Intro</p><script>x<p>Requirements: Python</p>") == "Intro\n\nx\nRequirements: Python"
 
 
 def test_dates_in_seconds_or_milliseconds():

@@ -530,6 +530,37 @@ def test_version_3_keeps_saved_jobs_and_allows_not_us(tmp_path, monkeypatch):
         assert "jobs_match_key" in {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
 
 
+def test_version_4_never_hides_a_job_and_marks_your_own(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as phase_3:
+        phase_3.setattr(db, "UPGRADES", db.UPGRADES[:3])
+        phase_3.setattr(db, "SCHEMA_VERSION", 3)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            for number, (us, status) in enumerate([("no", "open"), ("yes", "closed"), ("yes", "open")], 1):
+                conn.execute(
+                    "INSERT INTO jobs (id, apply_url, match_key, company, title, locations, us_location, remote, "
+                    "level, sponsorship, terms, first_seen, last_seen, status) VALUES (?, ?, 'k', 'Acme', 'ML', "
+                    "'[]', ?, 'unknown', 'intern', 'unknown', '[]', 'now', 'now', ?)",
+                    (number, f"https://acme.example/{number}", us, status),
+                )
+            conn.execute("INSERT INTO job_sources VALUES ('manual', 'https://acme.example/3', 3, 1)")
+    with closing(db.connect(path)) as conn:
+        rows = conn.execute("SELECT us_location, status, added_by_you, check_location FROM jobs ORDER BY id")
+        assert rows.fetchall() == [
+            ("unclear", "open", 0, 1),  # was hidden as 'no': visible again, to be checked
+            ("yes", "no longer listed", 0, 0),
+            ("yes", "open", 1, 0),  # added with `add` (another site)
+        ]
+        conn.execute("UPDATE jobs SET status = 'closed'")  # still allowed, for a later phase
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("UPDATE jobs SET status = 'deleted'")
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v3") as conn:  # SQLite's own copy, still encrypted
+        assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 3
+    with closing(sqlite3.connect(path / f"{db.DB_FILE}.bak-v3")) as plain, pytest.raises(sqlite3.DatabaseError):
+        plain.execute("SELECT count(*) FROM sqlite_master")
+
+
 def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):
     with monkeypatch.context() as broken:
         broken.setattr(db, "UPGRADES", ("", "CREATE TABLE half_done (x); not valid sql"))
@@ -542,11 +573,11 @@ def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeyp
 
 
 def test_failed_backup_stops_before_upgrading(v1_data_dir, monkeypatch):
-    def disk_full(source, target):
-        target.write_bytes(b"half a copy")
+    def disk_full(path, mode):
+        assert path.name.endswith(".partial")  # the copy is already written when this fails
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(db.shutil, "copyfile", disk_full)
+    monkeypatch.setattr(db.Path, "chmod", disk_full)
     with pytest.raises(OSError):
         db.connect(v1_data_dir)
     assert {path.name for path in v1_data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE}

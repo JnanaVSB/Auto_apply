@@ -9,7 +9,6 @@ import argparse
 import getpass
 import re
 import secrets
-import shutil
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -29,6 +28,8 @@ KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
 SIMPLE_SEQUENCES = ("0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl", "zxcvbnm")
 
 # UPGRADES[n - 1] turns a version n - 1 database into version n. Append new steps; never edit old ones.
+# "REFERENCES" is documentation only: SQLite leaves foreign keys unenforced unless asked, which the table
+# rebuilds in steps 3 and 4 rely on.
 UPGRADES = (
     "",  # version 1: the empty Phase 1 database
     """
@@ -107,6 +108,41 @@ UPGRADES = (
     INSERT INTO jobs_v3 SELECT * FROM jobs;
     DROP TABLE jobs;
     ALTER TABLE jobs_v3 RENAME TO jobs;
+    CREATE INDEX jobs_match_key ON jobs (match_key);
+    """,
+    """
+    -- A run never hides or closes a job. Status 'no longer listed' replaces 'closed' ('closed' stays allowed for
+    -- a later phase); two new marks. Jobs labelled 'no' become 'unclear' with the check mark, so none stays hidden.
+    -- collect_runs.closed_jobs now counts jobs that became 'no longer listed'.
+    CREATE TABLE jobs_v4 (
+        id INTEGER PRIMARY KEY,
+        apply_url TEXT NOT NULL UNIQUE,
+        match_key TEXT NOT NULL,
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        locations TEXT NOT NULL,
+        us_location TEXT NOT NULL CHECK (us_location IN ('yes', 'unclear', 'no')),
+        remote TEXT NOT NULL CHECK (remote IN ('remote', 'hybrid', 'on-site', 'unknown')),
+        level TEXT NOT NULL CHECK (level IN ('intern', 'new grad', 'entry', 'mid', 'senior', 'staff+', 'unknown')),
+        role_category TEXT,
+        sponsorship TEXT NOT NULL CHECK (sponsorship IN ('offers', 'no', 'citizens only', 'unknown')),
+        terms TEXT NOT NULL,
+        description TEXT,
+        salary TEXT,
+        date_posted TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'no longer listed', 'closed')),
+        open_manually_only INTEGER NOT NULL DEFAULT 0,
+        added_by_you INTEGER NOT NULL DEFAULT 0,  -- picked with `add`: later runs never change its US label
+        check_location INTEGER NOT NULL DEFAULT 0  -- a later run judged it outside the US: please check by hand
+    );
+    INSERT INTO jobs_v4 SELECT *, id IN (SELECT job_id FROM job_sources WHERE source = 'manual'), us_location = 'no'
+        FROM jobs;
+    UPDATE jobs_v4 SET status = 'no longer listed' WHERE status = 'closed';
+    UPDATE jobs_v4 SET us_location = 'unclear' WHERE us_location = 'no';
+    DROP TABLE jobs;
+    ALTER TABLE jobs_v4 RENAME TO jobs;
     CREATE INDEX jobs_match_key ON jobs (match_key);
     """,
 )
@@ -207,12 +243,16 @@ def _upgrade(conn: sqlcipher3.Connection, version: int) -> None:
         conn.executescript(f"BEGIN; {UPGRADES[number - 1]}; PRAGMA user_version = {number}; COMMIT;")
 
 
-def _backup(data_dir: Path, version: int) -> None:
-    """Copy app.db, still encrypted, to app.db.bak-v<version>; swapped in only once complete."""
+def _backup(conn: sqlcipher3.Connection, data_dir: Path, version: int) -> None:
+    """Copy app.db, still encrypted, to app.db.bak-v<version>; swapped in only once complete.
+
+    SQLite makes the copy itself (VACUUM INTO), so it is consistent even if another program has the database open.
+    """
     backup = data_dir / f"{DB_FILE}.bak-v{version}"
     partial = data_dir / f"{backup.name}.partial"
     try:
-        shutil.copyfile(data_dir / DB_FILE, partial)
+        partial.unlink(missing_ok=True)  # VACUUM INTO refuses to overwrite a leftover from an interrupted copy
+        conn.execute("VACUUM INTO ?", (str(partial),))
         partial.chmod(0o600)
         partial.replace(backup)
     except BaseException:
@@ -231,7 +271,7 @@ def _open_db(data_dir: Path, key_hex: str) -> sqlcipher3.Connection:
         if version < 1:  # an emptied file opens with any key
             raise DatabaseError("app.db is empty or damaged. Restore the data folder from a backup.")
         if version < SCHEMA_VERSION:
-            _backup(data_dir, version)
+            _backup(conn, data_dir, version)
             _upgrade(conn, version)
     except BaseException:
         conn.close()

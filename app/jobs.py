@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import sqlcipher3
 
 from app import places
-from app.sources import Job, posting_of
+from app.sources import Job, is_simplify_site, posting_of
 
 LEVELS = (  # first match wins, so "Associate Director" is staff+ and "Engineer II" is mid
     ("intern", r"intern|internship|co-?op"),
@@ -32,17 +32,16 @@ FIELDS = (
     "company", "title", "locations", "us_location", "remote", "level", "role_category", "sponsorship", "terms",
     "description", "salary", "date_posted",
 )  # fmt: skip
-SELECT_FIELDS = """SELECT company, title, locations, us_location, remote, level, role_category, sponsorship, terms,
-    description, salary, date_posted FROM jobs WHERE id = ?"""
+SELECT_FIELDS = f"SELECT {', '.join(FIELDS)}, added_by_you, check_location FROM jobs WHERE id = ?"  # noqa: S608 (fixed names)
 INSERT_JOB = """INSERT INTO jobs (apply_url, match_key, first_seen, last_seen, status, open_manually_only,
-    company, title, locations, us_location, remote, level, role_category, sponsorship, terms, description, salary,
-    date_posted)
-    VALUES (:apply_url, :match_key, :now, :now, 'open', :manual, :company, :title, :locations, :us_location, :remote,
-    :level, :role_category, :sponsorship, :terms, :description, :salary, :date_posted)"""
+    added_by_you, company, title, locations, us_location, remote, level, role_category, sponsorship, terms,
+    description, salary, date_posted)
+    VALUES (:apply_url, :match_key, :now, :now, 'open', :manual, :chosen, :company, :title, :locations, :us_location,
+    :remote, :level, :role_category, :sponsorship, :terms, :description, :salary, :date_posted)"""
 UPDATE_JOB = """UPDATE jobs SET last_seen = :now, company = :company, title = :title, locations = :locations,
     us_location = :us_location, remote = :remote, level = :level, role_category = :role_category,
     sponsorship = :sponsorship, terms = :terms, description = :description, salary = :salary,
-    date_posted = :date_posted WHERE id = :id"""
+    date_posted = :date_posted, added_by_you = :added, check_location = :check WHERE id = :id"""
 # Who owns a job's details: the first Simplify entry / company-board entry that found it (see SIMPLIFY_OWNS),
 # or, when the job has none of that kind, the first entry of any kind. Entries are job_sources rows.
 OWNERS = """SELECT
@@ -50,11 +49,13 @@ OWNERS = """SELECT
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id AND source NOT LIKE 'simplify:%'),
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id),
     (SELECT rowid FROM job_sources WHERE source = :source AND source_job_id = :source_job_id)"""
-# A job is open while a deciding source lists it: its company board if it has one, otherwise Simplify.
+# A job is open while a deciding source lists it: its company board if it has one that is still read (not
+# retired), otherwise Simplify. 'closed' is never set or changed here; it is left for a later phase.
 STATUS_CHECK = """SELECT id, status, EXISTS (
     SELECT 1 FROM job_sources s WHERE s.job_id = jobs.id AND s.listed = 1 AND (s.source NOT LIKE 'simplify:%'
-        OR NOT EXISTS (SELECT 1 FROM job_sources b WHERE b.job_id = jobs.id AND b.source NOT LIKE 'simplify:%')))
-    FROM jobs WHERE id IN (SELECT job_id FROM job_sources WHERE source = ?)"""
+        OR NOT EXISTS (SELECT 1 FROM job_sources b LEFT JOIN sources r ON r.name = b.source
+            WHERE b.job_id = jobs.id AND b.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL)))
+    FROM jobs WHERE status != 'closed' AND id IN (SELECT job_id FROM job_sources WHERE source = ?)"""
 
 
 @dataclass(frozen=True)
@@ -83,19 +84,23 @@ class Counts:
     kept: int = 0  # jobs from this source that are stored (new or already known)
     new: int = 0
     updated: int = 0
-    closed: int = 0
+    unlisted: int = 0  # became "no longer listed"
     skipped: int = 0  # unusable links
 
 
 def us_location(job: Job) -> str:
     """'yes', 'unclear' (kept for the user to decide) or 'no': every location is clearly outside the US."""
-    countries = [country for country in job.countries if not places.REMOTE_ONLY.fullmatch(country)]
-    if countries:  # the board's own country field decides
-        return "yes" if any(places.US_WORDS.search(country) for country in countries) else "no"
-    verdicts = {places.classify(place) for place in job.locations}
+    verdicts = {_judge(place, country) for place, country in job.place_checks or [(p, None) for p in job.locations]}
     if "us" in verdicts:
         return "yes"
     return "no" if verdicts == {"foreign"} else "unclear"
+
+
+def _judge(place: str, country: str | None) -> str:
+    """One location: by its own country field when the board gives one, otherwise by its text."""
+    if country and not places.REMOTE_ONLY.fullmatch(country):
+        return "us" if places.US_WORDS.search(country) else "foreign"
+    return places.classify(place)
 
 
 def level(job: Job) -> str:
@@ -107,8 +112,8 @@ def level(job: Job) -> str:
 def remote(job: Job) -> str:
     if job.remote:
         return job.remote
-    places = " ".join(job.locations).lower()
-    return "remote" if "remote" in places else "hybrid" if "hybrid" in places else "unknown"
+    text = " ".join(job.locations).lower()
+    return "remote" if "remote" in text else "hybrid" if "hybrid" in text else "unknown"
 
 
 def clean_link(job: Job) -> str | None:
@@ -125,7 +130,9 @@ def clean_link(job: Job) -> str | None:
         for key, value in parse_qsl(parts.query, keep_blank_values=True)
         if key.lower() not in TRACKING and not key.lower().startswith("utm_")
     ]
-    return urlunsplit(("https", parts.netloc.lower(), parts.path.rstrip("/"), urlencode(query), ""))
+    fragment = parts.fragment if parts.fragment.startswith(("/", "!/")) else ""  # "#/jobs/123" is the job's page
+    host = parts.netloc.lower().removesuffix(".")  # "example.com." is the same site
+    return urlunsplit(("https", host, parts.path.rstrip("/"), urlencode(query), fragment))
 
 
 def match_key(job: Job) -> str:
@@ -189,9 +196,8 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     if new:
         if not job.listed or (not chosen and (us == "no" or not roles.match(job))):  # foreign: never added
             return
-        host = urlsplit(url).hostname or ""
-        manual = host == "simplify.jobs" or host.endswith(".simplify.jobs")  # the app must never open it itself
-        values = fields | {"apply_url": url, "match_key": match_key(job), "now": now, "manual": manual}
+        values = fields | {"apply_url": url, "match_key": match_key(job), "now": now, "chosen": chosen}
+        values["manual"] = is_simplify_site(url)
         job_id = conn.execute(INSERT_JOB, values).lastrowid
     conn.execute(  # recorded before merging, so a newly found company board owns its details at once
         "INSERT INTO job_sources (source, source_job_id, job_id, listed) VALUES (?, ?, ?, ?) "
@@ -202,19 +208,27 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     if new:
         counts.new += 1
         return
-    old = dict(zip(FIELDS, conn.execute(SELECT_FIELDS, (job_id,)).fetchone(), strict=True))
+    *row, old_added, old_check = conn.execute(SELECT_FIELDS, (job_id,)).fetchone()
+    old = dict(zip(FIELDS, row, strict=True))
     owners = {"id": job_id, "source": job.source, "source_job_id": job.source_job_id}
     first_simplify, first_board, first, this_entry = conn.execute(OWNERS, owners).fetchone()
 
     def may_replace(name: str) -> bool:  # the owner's value wins; other entries only fill gaps
         return this_entry == ((first_simplify if name in SIMPLIFY_OWNS else first_board) or first)
 
+    added, check = old_added or chosen, old_check
+    if added:  # the user picked this job: its US label never changes
+        fields["us_location"] = old["us_location"]
+    elif fields["us_location"] == "no" and old["us_location"] != "no":  # a saved job is never hidden
+        fields["us_location"] = "unclear"  # which never replaces a known label
+        check = check or may_replace("us_location")  # its owner now says "not US": please check by hand
+
     merged = {
         name: value if value not in NOT_KNOWN and (old[name] in NOT_KNOWN or may_replace(name)) else old[name]
         for name, value in fields.items()
     }
-    conn.execute(UPDATE_JOB, merged | {"now": now, "id": job_id})
-    counts.updated += merged != old
+    conn.execute(UPDATE_JOB, merged | {"now": now, "id": job_id, "added": added, "check": check})
+    counts.updated += merged != old or (added, check) != (old_added, old_check)
 
 
 def _find(conn: sqlcipher3.Connection, job: Job, url: str) -> int | None:
@@ -235,8 +249,8 @@ def _find(conn: sqlcipher3.Connection, job: Job, url: str) -> int | None:
 
 def _refresh_status(conn: sqlcipher3.Connection, source: str, counts: Counts) -> None:
     for job_id, old_status, is_open in conn.execute(STATUS_CHECK, (source,)).fetchall():
-        status = "open" if is_open else "closed"
+        status = "open" if is_open else "no longer listed"
         if status != old_status:
             conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
-            counts.closed += status == "closed"
+            counts.unlisted += status == "no longer listed"
             counts.updated += status == "open"  # reopened

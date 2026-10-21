@@ -23,6 +23,11 @@ def _job(entry: dict, board: str) -> Job | None:
     places = [entry.get("location"), *(item.get("location") for item in secondary)]
     addresses = [entry.get("address"), *(item.get("address") for item in secondary)]
     countries = [((address or {}).get("postalAddress") or {}).get("addressCountry") for address in addresses]
+    checks = [  # each location with its own address country, when it has one
+        (place.strip(), country if isinstance(country, str) else None)
+        for place, country in zip(places, countries, strict=True)
+        if isinstance(place, str) and place.strip()
+    ]
     pay = entry.get("compensation") or {}
     salary = pay.get("scrapeableCompensationSalarySummary") or pay.get("compensationTierSummary")
     return Job(
@@ -31,8 +36,8 @@ def _job(entry: dict, board: str) -> Job | None:
         company=board,  # Ashby does not send the company name
         title=required_text(entry, "title"),
         url=required_text(entry, "jobUrl"),
-        locations=[place.strip() for place in places if isinstance(place, str) and place.strip()],
-        countries=[country for country in countries if isinstance(country, str)],
+        locations=[place for place, _ in checks],
+        place_checks=checks,
         remote=workplace(entry.get("workplaceType")) or ("remote" if entry.get("isRemote") is True else None),
         level="intern" if entry.get("employmentType") == "Intern" else None,
         description=html_to_text(entry.get("descriptionHtml") or "") or None,

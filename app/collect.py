@@ -17,7 +17,7 @@ from app import db, jobs
 from app.config import Config, ConfigError, SimplifyList, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
-from app.sources import Job, SourceError, ashby, greenhouse, lever, posting_of, simplify
+from app.sources import Job, SourceError, ashby, greenhouse, is_simplify_site, lever, posting_of, simplify
 
 BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
@@ -47,13 +47,23 @@ def _add_up(total: jobs.Counts, counts: jobs.Counts) -> None:
         setattr(total, field.name, getattr(total, field.name) + getattr(counts, field.name))
 
 
+def _plural(count: int, word: str) -> str:
+    return f"{count:,} {word}{'' if count == 1 else 's'}"
+
+
 def _describe(counts: jobs.Counts) -> str:
-    text = f"{counts.kept:,} matching ({counts.new:,} new, {counts.updated:,} updated, {counts.closed:,} closed)"
-    return text + (f", {counts.skipped:,} unusable entries skipped" if counts.skipped else "")
+    text = f"{counts.kept:,} matching ({counts.new:,} new, {counts.updated:,} updated, "
+    text += f"{counts.unlisted:,} no longer listed)"
+    return text + (f", {_plural(counts.skipped, 'unusable entry')} skipped" if counts.skipped else "")
 
 
 def _lock(data_dir: Path) -> sqlite3.Connection:
     """Hold an exclusive lock for the whole run; the operating system releases it if the program dies."""
+    if not data_dir.is_dir():
+        raise CollectError(
+            "The data folder was not found. Check data_dir in data/config.yaml; "
+            "for a brand-new install run: python -m app.db setup"
+        )
     lock = sqlite3.connect(data_dir / LOCK_FILE, timeout=0, isolation_level=None)
     try:
         lock.execute("BEGIN EXCLUSIVE")
@@ -84,16 +94,17 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
             conn.execute(
                 "UPDATE collect_runs SET finished_at = ?, outcome = ?, new_jobs = ?, updated_jobs = ?, "
                 "closed_jobs = ?, failures = ? WHERE id = ?",
-                (_now(), outcome, total.new, total.updated, total.closed, json.dumps(failures), run_id),
+                (_now(), outcome, total.new, total.updated, total.unlisted, json.dumps(failures), run_id),
             )
-    out(f"Total: {total.new:,} new, {total.updated:,} updated, {total.closed:,} closed.")
-    out(f"{len(failures)} sources failed:" if failures else "No sources failed.")
+    out(f"Total: {total.new:,} new, {total.updated:,} updated, {total.unlisted:,} no longer listed.")
+    out(f"{_plural(len(failures), 'source')} failed:" if failures else "No sources failed.")
     for failure in failures:
         out(f"  - {failure}")
     if retired:
         out(
-            f"Stopped reading {len(retired)} boards that were not found {RETIRE_AFTER} runs in a row "
-            "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
+            f"Stopped reading {_plural(len(retired), 'board')} not found {RETIRE_AFTER} runs in a row; their jobs are "
+            "marked no longer listed by that board (read again if Simplify links a newer job there, or if you add "
+            "them to extra_boards):"
         )
         for board in retired:
             out(f"  - {board}")
@@ -142,7 +153,8 @@ def _read_boards(
     """Read every board that is not retired, plus extra_boards; return the boards retired in this run."""
     known = conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL")
     boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
-    out(f"Reading {len(boards):,} company boards one at a time (about {len(boards) * 2 // 60 + 1} minutes)...")
+    minutes = _plural(len(boards) * 2 // 60 + 1, "minute")
+    out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
     board_counts, read, retired = jobs.Counts(), 0, []
     for number, board in enumerate(boards, 1):
         kind, _, name = board.partition(":")
@@ -157,6 +169,8 @@ def _read_boards(
                 misses = conn.execute(COUNT_MISS, (board,)).fetchone()[0]
                 if misses >= RETIRE_AFTER and board not in extra_boards:
                     conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
+                    # in the same step: its jobs are no longer listed by it, so Simplify decides for them now
+                    _add_up(board_counts, jobs.save(conn, board, [], roles, _now()))
                     retired.append(label)
         except (FetchError, SourceError) as error:
             failures.append(f"{label}: {error}")
@@ -179,7 +193,7 @@ def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[
     parts = urlsplit(link)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise CollectError("That is not a web link; it must start with https://")
-    if parts.hostname == "simplify.jobs" or parts.hostname.endswith(".simplify.jobs"):
+    if is_simplify_site(link):
         raise CollectError(
             "This is a simplify.jobs link, which the app must not open. "
             "Open it in your browser, click Apply, and add the company's own link instead."
@@ -227,8 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command is None:
             _check_settings(config)
         with (
+            closing(_lock(config.data_dir)),  # first, so two copies can never both upgrade the database
             closing(db.connect(config.data_dir)) as conn,
-            closing(_lock(config.data_dir)),
             closing(Fetcher()) as fetcher,
         ):
             if args.command == "add":

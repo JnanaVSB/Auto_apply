@@ -107,10 +107,10 @@ PAGES = {
 def test_full_run_saves_matching_jobs_and_prints_a_summary(conn, data_dir):
     lines, _ = run(conn, data_dir, PAGES | {GLOBEX: []}, extra_boards=["lever:globex"])
     assert lines == [
-        "Simplify Summer2027-Internships: 1 matching (1 new, 0 updated, 0 closed)",
-        "Reading 2 company boards one at a time (about 1 minutes)...",
-        "Company boards: 2 of 2 read, 1 matching (0 new, 1 updated, 0 closed)",
-        "Total: 1 new, 1 updated, 0 closed.",
+        "Simplify Summer2027-Internships: 1 matching (1 new, 0 updated, 0 no longer listed)",
+        "Reading 2 company boards one at a time (about 1 minute)...",
+        "Company boards: 2 of 2 read, 1 matching (0 new, 1 updated, 0 no longer listed)",
+        "Total: 1 new, 1 updated, 0 no longer listed.",
         "No sources failed.",
     ]
     assert one(conn, "SELECT count(*), max(description), max(status) FROM jobs") == (1, "Train models.", "open")
@@ -122,7 +122,7 @@ def test_second_run_creates_no_duplicates_and_skips_an_unchanged_list(conn, data
     run(conn, data_dir, PAGES)
     lines, web = run(conn, data_dir, PAGES)
     assert lines[0] == "Simplify Summer2027-Internships: unchanged since the last run"
-    assert lines[2] == "Company boards: 1 of 1 read, 1 matching (0 new, 0 updated, 0 closed)"
+    assert lines[2] == "Company boards: 1 of 1 read, 1 matching (0 new, 0 updated, 0 no longer listed)"
     assert web.requests[0].headers["If-None-Match"] == '"v1"'
     assert one(conn, "SELECT count(*) FROM jobs") == (1,)
 
@@ -157,7 +157,7 @@ def test_boards_dropped_by_simplify_are_still_read(conn, data_dir):
     run(conn, data_dir, PAGES)
     _, web = run(conn, data_dir, {LIST: ([entry(url="https://acme.example/jobs/1")], '"v2"'), ACME: {"jobs": []}})
     assert ACME in [str(request.url) for request in web.requests]
-    assert one(conn, "SELECT status FROM jobs WHERE apply_url = ?", ACME_JOB) == ("closed",)
+    assert one(conn, "SELECT status FROM jobs WHERE apply_url = ?", ACME_JOB) == ("no longer listed",)
 
 
 def test_cancelling_keeps_finished_sources_and_is_recorded(conn, data_dir):
@@ -197,6 +197,7 @@ def test_add_another_site_asks_for_company_and_title_once(conn):
     ("link", "message"),
     [
         ("https://simplify.jobs/p/123", "must not open"),
+        ("https://simplify.jobs./p/123", "must not open"),
         ("javascript:alert(1)", "not a web link"),
         ("https://someone@initech.example/1", "cannot be used"),
     ],
@@ -230,10 +231,11 @@ def test_missing_settings_and_database_are_explained(main, data_dir, tmp_path):
         1,
         "Error: No roles set in data/config.yaml. Copy the 'roles' section from config.example.yaml.\n",
     )
-    code, err = main([], settings(tmp_path / "nothing-here"))
-    assert code == 1
-    assert "app.db not found" in err
-    assert "python -m app.db setup" in err
+    for missing in (tmp_path / "nothing-here", tmp_path):  # no data folder; a folder without app.db
+        code, err = main([], settings(missing))
+        assert code == 1
+        assert "not found" in err
+        assert "python -m app.db setup" in err
 
 
 def test_cancel_messages(main, data_dir, monkeypatch):
@@ -288,15 +290,15 @@ def test_a_board_not_found_three_runs_in_a_row_is_retired_and_named_once(conn, d
     summaries = [run(conn, data_dir, pages)[0] for _ in range(3)]
     stopped = [line for lines in summaries for line in lines if line.startswith("Stopped reading")]
     assert stopped == [
-        "Stopped reading 1 boards that were not found 3 runs in a row "
-        "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
+        "Stopped reading 1 board not found 3 runs in a row; their jobs are marked no longer listed by that "
+        "board (read again if Simplify links a newer job there, or if you add them to extra_boards):"
     ]
     assert summaries[2][-1] == "  - Greenhouse board 'acme'"
     assert board_state(conn)[0] == 3
     lines, web = run(conn, data_dir, pages)
     assert ACME not in requested(web)
     assert lines[-1] == "No sources failed."
-    assert one(conn, "SELECT status FROM jobs") == ("open",)  # retiring closes nothing
+    assert one(conn, "SELECT status FROM jobs") == ("open",)  # Simplify still lists it, so it stays open
 
 
 def test_only_not_found_runs_in_a_row_count(conn, data_dir):
@@ -330,3 +332,26 @@ def test_adding_a_job_brings_its_retired_board_back(conn, data_dir):
     with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({ACME: {"jobs": [board_job()]}})))) as fetcher:
         collect.add(conn, fetcher, ACME_JOB)
     assert board_state(conn) == (0, None)
+
+
+def test_a_job_you_added_keeps_its_label_when_its_board_is_read_again(conn, data_dir):
+    london = {"jobs": [board_job(title="Accountant", location={"name": "London, UK"})]}
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({ACME: london})))) as fetcher:
+        collect.add(conn, fetcher, ACME_JOB)
+    run(conn, data_dir, {LIST: 404, ACME: london})
+    assert one(conn, "SELECT us_location, added_by_you, check_location FROM jobs") == ("unclear", 1, 0)
+
+
+def test_a_retired_boards_jobs_are_decided_by_simplify(conn, data_dir):
+    run(conn, data_dir, PAGES)  # the board lists the job, so the board decides
+    for _ in range(3):
+        run(conn, data_dir, {LIST: 404, ACME: 404})
+    assert one(conn, "SELECT status FROM jobs") == ("open",)  # retired; Simplify still lists it
+    run(conn, data_dir, {LIST: ([entry(active=False)], '"v2"')})  # now Simplify drops it too
+    assert one(conn, "SELECT status FROM jobs") == ("no longer listed",)
+
+
+def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeypatch):
+    monkeypatch.setattr(collect.db, "connect", lambda folder: pytest.fail("opened before the lock"))
+    with closing(collect._lock(data_dir)):
+        assert main([], settings(data_dir)) == (1, "Error: A collection is already running. Wait for it to finish.\n")

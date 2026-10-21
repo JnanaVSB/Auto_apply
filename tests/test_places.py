@@ -43,7 +43,13 @@ from app import places
         ("Mexico City, Mexico", "foreign"),
         ("London", "foreign"),  # 8.9 million people vs London, Kentucky
         ("São Paulo, Brasil", "foreign"),
-        ("Ontario", "foreign"),  # the province
+        ("Ontario", "unclear"),  # the province, or Ontario, California
+        ("New Brunswick", "unclear"),  # the province, or New Brunswick, New Jersey
+        ("Jersey City", "us"),  # not the island of Jersey
+        ("West Jordan", "us"),  # not the country
+        ("Tbilisi, Georgia", "foreign"),  # the country, not the state
+        ("Atlanta, Georgia", "us"),
+        ("Canada", "foreign"),
         ("Tinytown, ON", "foreign"),  # unknown town, but ON is only ever Ontario
         ("Netherlands", "foreign"),
         ("Europe", "foreign"),
