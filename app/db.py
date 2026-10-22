@@ -198,6 +198,20 @@ UPGRADES = (
     ALTER TABLE jobs_v5 RENAME TO jobs;
     CREATE INDEX jobs_match_key ON jobs (match_key);
     """,
+    """
+    -- Phase 3 dashboard. "Not interested" only hides a job (never deletes it); a US label you set by hand is never
+    -- changed by a run; the dashboard's own password is kept only as a slow hash, never as itself.
+    ALTER TABLE jobs ADD COLUMN not_interested INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE jobs ADD COLUMN location_by_you INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE dashboard_login (
+        id INTEGER PRIMARY KEY CHECK (id = 1),  -- one dashboard password per database
+        password_hash TEXT NOT NULL,
+        set_on TEXT NOT NULL
+    );
+    -- Everything the jobs list filters, sorts or shows, so listing never reads the long descriptions.
+    CREATE INDEX jobs_list ON jobs (not_interested, status, status_reason, us_location, check_location, level, remote,
+        added_by_you, role_category, sponsorship, terms, date_posted, first_seen, company, title, locations);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

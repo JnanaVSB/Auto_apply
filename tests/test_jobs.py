@@ -227,6 +227,14 @@ def test_a_job_you_picked_is_marked_as_yours(conn):
     assert rows(conn, "added_by_you") == [(1,)]
 
 
+@pytest.mark.parametrize(("your_label", "board_place"), [("no", "San Francisco, CA"), ("yes", "Toronto, CA")])
+def test_a_location_you_set_is_never_changed_by_a_run(conn, your_label, board_place):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    conn.execute("UPDATE jobs SET us_location = ?, location_by_you = 1", (your_label,))  # fixed in the dashboard
+    jobs.save(conn, "greenhouse:acme", [job(locations=[board_place])], ROLES, LATER)
+    assert rows(conn, "us_location, check_location") == [(your_label, 0)]
+
+
 def test_a_closed_job_is_left_alone(conn):
     jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
     conn.execute("UPDATE jobs SET status = 'closed'")  # set by hand in a later phase

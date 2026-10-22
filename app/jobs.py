@@ -36,7 +36,7 @@ FIELDS = (
     "company", "title", "locations", "us_location", "remote", "level", "role_category", "sponsorship", "terms",
     "description", "salary", "date_posted",
 )  # fmt: skip
-SELECT_FIELDS = f"SELECT {', '.join(FIELDS)}, added_by_you, check_location FROM jobs WHERE id = ?"  # noqa: S608 (fixed names)
+SELECT_FIELDS = f"SELECT {', '.join(FIELDS)}, added_by_you, check_location, location_by_you FROM jobs WHERE id = ?"  # noqa: S608 (fixed names)
 INSERT_JOB = """INSERT INTO jobs (apply_url, match_key, first_seen, last_seen, status, open_manually_only,
     added_by_you, company, title, locations, us_location, remote, level, role_category, sponsorship, terms,
     description, salary, date_posted)
@@ -236,7 +236,7 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     if new:
         counts.new += 1
         return
-    *row, old_added, old_check = conn.execute(SELECT_FIELDS, (job_id,)).fetchone()
+    *row, old_added, old_check, by_you = conn.execute(SELECT_FIELDS, (job_id,)).fetchone()
     old = dict(zip(FIELDS, row, strict=True))
     owners = {"id": job_id, "source": job.source, "source_job_id": job.source_job_id}
     first_simplify, first_board, first, this_entry = conn.execute(OWNERS, owners).fetchone()
@@ -245,7 +245,7 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
         return this_entry == ((first_simplify if name in SIMPLIFY_OWNS else first_board) or first)
 
     added, check = old_added or chosen, old_check
-    if added:  # the user picked this job: its US label never changes
+    if added or by_you:  # the user picked this job or set its US label: runs never change that label
         fields["us_location"] = old["us_location"]
     elif fields["us_location"] == "no" and old["us_location"] != "no":  # a saved job is never hidden
         fields["us_location"] = "unclear"  # which never replaces a known label

@@ -601,6 +601,34 @@ def test_version_5_gives_each_job_that_is_not_open_a_reason(tmp_path, monkeypatc
         assert conn.execute("SELECT count(*) FROM jobs WHERE status = 'no longer listed'").fetchone()[0] == 2
 
 
+def test_version_6_adds_the_dashboard_marks_and_keeps_jobs(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_5:
+        version_5.setattr(db, "UPGRADES", db.UPGRADES[:5])
+        version_5.setattr(db, "SCHEMA_VERSION", 5)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO jobs (apply_url, match_key, company, title, locations, us_location, remote, level, "
+                "sponsorship, terms, first_seen, last_seen, status, check_location) VALUES ('https://acme.example/1', "
+                "'k', 'Acme', 'ML', '[]', 'unclear', 'unknown', 'intern', 'unknown', '[]', 'now', 'now', 'open', 1)"
+            )
+    with closing(db.connect(path)) as conn:
+        assert conn.execute(
+            "SELECT company, us_location, check_location, not_interested, location_by_you FROM jobs"
+        ).fetchall() == [("Acme", "unclear", 1, 0, 0)]
+        conn.execute("INSERT INTO dashboard_login VALUES (1, 'scrypt$fake', 'now')")
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("INSERT INTO dashboard_login VALUES (2, 'scrypt$other', 'now')")
+        plan = conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id, title, company, locations FROM jobs "
+            "WHERE not_interested = 0 AND status = 'open' ORDER BY date_posted DESC"
+        ).fetchall()
+        assert "COVERING INDEX jobs_list" in str(plan)  # the list never reads the long descriptions
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v5") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
 def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):
     with monkeypatch.context() as broken:
         broken.setattr(db, "UPGRADES", ("", "CREATE TABLE half_done (x); not valid sql"))
