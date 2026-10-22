@@ -73,7 +73,7 @@ def test_right_password_logs_in_with_a_safe_cookie(client):
     assert (response.status_code, response.headers["location"]) == (303, "/")
     cookie = response.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie
-    assert "You are logged in" in client.get("/").text
+    assert "<h1>Jobs</h1>" in client.get("/").text
 
 
 def test_a_new_login_gets_a_new_session(client):

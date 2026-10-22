@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import sqlcipher3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -12,12 +13,13 @@ from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException
 
 from app import db
-from app.web import security
+from app.web import queries, security
 
 HERE = Path(__file__).parent
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
 MAX_FORM_BYTES = 64 * 1024
 EXPIRED = "This page has expired; reload it and try again."
+BUSY = "The database is busy (a collection is saving). Try again in a moment."
 log = logging.getLogger("app.web")
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
 
@@ -45,13 +47,16 @@ def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI
         except HTTPException as refusal:
             response = _error(request, refusal.status_code, refusal.detail)
         except Exception as error:  # never a crash report in the browser, nor job data in the terminal
-            log.error("Unexpected error: %s", type(error).__name__)
-            response = _error(
-                request,
-                500,
-                f"Something went wrong ({type(error).__name__}); nothing was saved. "
-                "Try again; if it keeps happening, restart the dashboard.",
-            )
+            if isinstance(error, sqlcipher3.OperationalError) and "locked" in str(error):
+                response = _error(request, 503, BUSY)  # a collection is saving; waited 5 seconds already
+            else:
+                log.error("Unexpected error: %s", type(error).__name__)
+                response = _error(
+                    request,
+                    500,
+                    f"Something went wrong ({type(error).__name__}); nothing was saved. "
+                    "Try again; if it keeps happening, restart the dashboard.",
+                )
         response.headers.update(security.SAFETY_HEADERS)
         return response
 
@@ -83,8 +88,10 @@ def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI
         return response
 
     @app.get("/")
-    async def home(request: Request) -> Response:
-        return _page(request, "home.html")
+    async def jobs_list(request: Request) -> Response:
+        conn, view = request.app.state.conn, queries.Filters.from_address(request.url.query)
+        page, choices = queries.list_jobs(conn, view), queries.choices(conn)
+        return _page(request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS)
 
     return app
 

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% set us_labels = {"yes": "US", "unclear": "unclear", "no": "not US"} %}
+{% macro boxes(name, labels={}) %}
+  {% for value in options[name] %}
+  <label><input type="checkbox" name="{{ name }}" value="{{ value }}"{% if value in view[name] %} checked{% endif %}> {{ labels.get(value, value) }}</label>
+  {% endfor %}
+{% endmacro %}
+{% macro pick(name, values) %}
+  <select name="{{ name }}" id="{{ name }}">
+    <option value="">any</option>
+    {% for value in values %}<option{% if value == view[name] %} selected{% endif %}>{{ value }}</option>{% endfor %}
+  </select>
+{% endmacro %}
+{% block content %}
+<h1>Jobs</h1>
+<form method="get" action="/" class="filters">
+  <input type="hidden" name="f" value="1">
+  <p>
+    <label>Search title or company <input name="q" value="{{ view.q }}" maxlength="200" type="search"></label>
+    <label>Source
+      <select name="source">
+        <option value="">any</option>
+        {% for value, label in [("simplify", "Simplify lists"), ("greenhouse", "Greenhouse"), ("lever", "Lever"), ("ashby", "Ashby"), ("manual", "Added by link")] %}
+        <option value="{{ value }}"{% if value == view.source %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+        {% for name in choices.simplify %}
+        <option value="{{ name }}"{% if name == view.source %} selected{% endif %}>Simplify {{ name.partition(":")[2] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>or one board <input name="board" placeholder="greenhouse:acme" maxlength="200"
+      value="{{ view.source if ':' in view.source and not view.source.startswith('simplify:') else '' }}"></label>
+  </p>
+  <fieldset><legend>Level</legend>{{ boxes("level") }}</fieldset>
+  <fieldset><legend>US location</legend>{{ boxes("us", us_labels) }}
+    <label><input type="checkbox" name="check" value="1"{% if view.check %} checked{% endif %}> only "please check location"</label>
+  </fieldset>
+  <fieldset><legend>Remote</legend>{{ boxes("remote") }}</fieldset>
+  <fieldset><legend>Sponsorship</legend>{{ boxes("sponsorship") }}</fieldset>
+  <fieldset><legend>Status</legend>{{ boxes("status") }}
+    <label>reason {{ pick("reason", options.reason) }}</label>
+  </fieldset>
+  <p>
+    <label>Posted from <input type="date" name="posted_from" value="{{ view.posted_from }}"></label>
+    <label>to <input type="date" name="posted_to" value="{{ view.posted_to }}"></label>
+    <label>Role category {{ pick("category", choices.category) }}</label>
+    <label>Term {{ pick("term", choices.term) }}</label>
+  </p>
+  <p>
+    <label><input type="checkbox" name="added" value="1"{% if view.added %} checked{% endif %}> added by you only</label>
+    <label>Not interested
+      <select name="hidden">
+        {% for value, label in [("hide", "hidden"), ("show", "shown too"), ("only", "only those")] %}
+        <option value="{{ value }}"{% if value == view.hidden %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Sort
+      <select name="sort">
+        {% for value, label in [("posted", "newest posted"), ("found", "newest found"), ("company", "company A-Z"), ("title", "title A-Z")] %}
+        <option value="{{ value }}"{% if value == view.sort %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Apply filters</button>
+    <a href="/">Clear filters</a>
+  </p>
+</form>
+
+<p class="summary">
+  {% if page.total %}Showing {{ "{:,}".format(page.first) }}–{{ "{:,}".format(page.first + page.jobs | length - 1) }} of {{ "{:,}".format(page.total) }} jobs.{% else %}No jobs match these filters.{% endif %}
+  {% if page.other_statuses %}<a href="{{ view.address(status=(), page=1) }}">+{{ "{:,}".format(page.other_statuses) }} with another status</a>{% endif %}
+</p>
+
+{% if page.jobs %}
+<table class="jobs">
+  <thead>
+    <tr><th>Title</th><th>Company</th><th>Location</th><th>Level</th><th>Remote</th><th>US</th><th>Posted</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for job in page.jobs %}
+    <tr{% if job.not_interested %} class="hidden-job"{% endif %}>
+      <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a>
+        {% if job.added_by_you %}<span class="mark">added by you</span>{% endif %}
+        {% if job.not_interested %}<span class="mark">not interested</span>{% endif %}</td>
+      <td>{{ job.company }}</td>
+      <td>{{ job.locations[:2] | join("; ") }}{% if job.locations | length > 2 %} <span class="muted">+{{ job.locations | length - 2 }} more</span>{% endif %}</td>
+      <td>{{ job.level }}</td>
+      <td>{{ job.remote }}</td>
+      <td>{{ us_labels[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
+      <td>{{ job.date_posted or "" }}</td>
+      <td>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if page.pages > 1 %}
+<nav class="pager">
+  {% if page.number > 1 %}<a href="{{ view.address(page=page.number - 1) }}">Previous</a>{% endif %}
+  <span>Page {{ page.number }} of {{ "{:,}".format(page.pages) }}</span>
+  {% if page.number < page.pages %}<a href="{{ view.address(page=page.number + 1) }}">Next</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

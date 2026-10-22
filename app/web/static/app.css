@@ -16,3 +16,16 @@ button { cursor: pointer; }
 .login { display: grid; gap: 0.5rem; max-width: 22rem; }
 .error { color: var(--error); }
 .hint { color: var(--muted); }
+.filters fieldset { display: inline-block; border: 1px solid var(--line); border-radius: 4px; margin: 0 0.5rem 0.5rem 0;
+  padding: 0.25rem 0.6rem; }
+.filters label { margin-right: 0.6rem; white-space: nowrap; }
+.summary, .muted { color: var(--muted); }
+table.jobs { width: 100%; border-collapse: collapse; }
+table.jobs th, table.jobs td { text-align: left; vertical-align: top; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--line); }
+table.jobs th { position: sticky; top: 0; background: var(--bg); }
+.hidden-job { opacity: 0.6; }
+.mark { display: inline-block; font-size: 0.8em; padding: 0 0.35rem; border: 1px solid var(--line); border-radius: 3px;
+  color: var(--muted); }
+.mark.warn { color: var(--error); border-color: var(--error); }
+.pager { display: flex; gap: 1rem; justify-content: center; margin: 1rem 0; }
+table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
