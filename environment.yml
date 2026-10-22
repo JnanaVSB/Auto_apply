@@ -13,6 +13,10 @@ dependencies:
   - pyyaml=6.0.3
   - keyring=25.7.0
   - httpx=0.28.1  # web downloads (job lists and job-board APIs)
+  - fastapi-core=0.141.1  # dashboard web app (FastAPI without its optional extras)
+  - starlette=1.6.0  # the web toolkit FastAPI is built on
+  - uvicorn=0.53.0  # local web server for the dashboard
+  - jinja2=3.1.6  # dashboard page templates
   - pytest=9.1.1
   - ruff=0.16.10
   - pip:
