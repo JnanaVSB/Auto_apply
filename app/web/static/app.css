@@ -1,0 +1,18 @@
+/* Plain, readable styles; no fonts or images from the internet. */
+:root { --text: #1d1d1f; --muted: #5f6368; --line: #d9d9de; --accent: #1a5fb4; --error: #b3261e; --bg: #fff; }
+@media (prefers-color-scheme: dark) {
+  :root { --text: #e8e8ea; --muted: #a0a0a8; --line: #3a3a40; --accent: #8ab4f8; --error: #f28b82; --bg: #18181b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--text); background: var(--bg); }
+header { border-bottom: 1px solid var(--line); padding: 0.5rem 1rem; }
+nav { display: flex; gap: 1rem; align-items: center; }
+nav form { margin-left: auto; }
+main { max-width: 72rem; margin: 0 auto; padding: 1rem; }
+a { color: var(--accent); }
+button, input, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--bg); color: var(--text); }
+button { cursor: pointer; }
+.login { display: grid; gap: 0.5rem; max-width: 22rem; }
+.error { color: var(--error); }
+.hint { color: var(--muted); }

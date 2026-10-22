@@ -23,6 +23,7 @@ from app.sources import Job, SourceError, ashby, greenhouse, is_simplify_site, l
 
 BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
+BUSY = "A collection is already running. Wait for it to finish."
 PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
@@ -77,21 +78,21 @@ def _describe(counts: jobs.Counts) -> str:
     return text + (f", {_plural(counts.skipped, 'unusable entry')} skipped" if counts.skipped else "")
 
 
-def _lock(data_dir: Path) -> sqlite3.Connection:
-    """Hold an exclusive lock for the whole run; the operating system releases it if the program dies."""
+def _lock(data_dir: Path, file: str = LOCK_FILE, busy: str = BUSY) -> sqlite3.Connection:
+    """Hold an exclusive lock until closed; the operating system releases it if the program dies."""
     if not data_dir.is_dir():
         raise CollectError(
             "The data folder was not found. Check data_dir in data/config.yaml; "
             "for a brand-new install run: python -m app.db setup"
         )
-    lock = sqlite3.connect(data_dir / LOCK_FILE, timeout=0, isolation_level=None)
+    lock = sqlite3.connect(data_dir / file, timeout=0, isolation_level=None)
     try:
         lock.execute("BEGIN EXCLUSIVE")
     except sqlite3.OperationalError as error:
         lock.close()
         if error.sqlite_errorcode != sqlite3.SQLITE_BUSY:
             raise
-        raise CollectError("A collection is already running. Wait for it to finish.") from None
+        raise CollectError(busy) from None
     return lock
 
 

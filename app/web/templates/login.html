@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<h1>auto_apply dashboard</h1>
+<form method="post" action="/login" class="login">
+  <label for="password">Dashboard password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Log in</button>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+</form>
+<p class="hint">Forgot it? Stop the dashboard and run <code>python -m app.web reset-password</code>.</p>
+{% endblock %}

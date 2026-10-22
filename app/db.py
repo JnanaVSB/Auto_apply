@@ -237,15 +237,14 @@ def _passphrase(password: str) -> str:
     return "'" + password.replace("'", "''") + "'"
 
 
-def _check_password(password: str) -> None:
+def _check_password(password: str, name: str = "master password") -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise DatabaseError(f"The master password must be at least {MIN_PASSWORD_LENGTH} characters.")
+        raise DatabaseError(f"The {name} must be at least {MIN_PASSWORD_LENGTH} characters.")
     text = password.lower()
     runs = (run * (len(text) // len(run) + 2) for seq in SIMPLE_SEQUENCES for run in (seq, seq[::-1]))
     if len(set(text)) == 1 or any(text in run for run in runs):
         raise DatabaseError(
-            "The master password is too easy to guess (one repeated character or a simple sequence). "
-            "Try a 4-5 word passphrase."
+            f"The {name} is too easy to guess (one repeated character or a simple sequence). Try a 4-5 word passphrase."
         )
 
 
