@@ -121,10 +121,10 @@ PAGES = {
 def test_full_run_saves_matching_jobs_and_prints_a_summary(conn, data_dir):
     lines, _ = run(conn, data_dir, PAGES | {GLOBEX: []}, extra_boards=["lever:globex"])
     assert lines == [
-        "Simplify Summer2027-Internships: 1 matching (1 new, 0 updated, 0 no longer listed)",
+        "Simplify Summer2027-Internships: 1 matching (1 new, 0 updated, 0 no longer available)",
         "Reading 2 company boards one at a time (about 1 minute)...",
-        "Company boards: 2 of 2 read, 1 matching (0 new, 1 updated, 0 no longer listed)",
-        "Total: 1 new, 1 updated, 0 no longer listed.",
+        "Company boards: 2 of 2 read, 1 matching (0 new, 1 updated, 0 no longer available)",
+        "Total: 1 new, 1 updated, 0 no longer available.",
         "No sources failed.",
     ]
     assert one(conn, "SELECT count(*), max(description), max(status) FROM jobs") == (1, "Train models.", "open")
@@ -136,7 +136,7 @@ def test_second_run_creates_no_duplicates_and_skips_an_unchanged_list(conn, data
     run(conn, data_dir, PAGES)
     lines, web = run(conn, data_dir, PAGES)
     assert lines[0] == "Simplify Summer2027-Internships: unchanged since the last run"
-    assert lines[2] == "Company boards: 1 of 1 read, 1 matching (0 new, 0 updated, 0 no longer listed)"
+    assert lines[2] == "Company boards: 1 of 1 read, 1 matching (0 new, 0 updated, 0 no longer available)"
     assert list_request(web).headers["If-None-Match"] == '"v1"'
     assert one(conn, "SELECT count(*) FROM jobs") == (1,)
 
@@ -172,7 +172,7 @@ def test_boards_dropped_by_simplify_are_still_read(conn, data_dir):
     other = board_job(id=999, absolute_url="https://job-boards.greenhouse.io/acme/jobs/999", title="Accountant")
     _, web = run(conn, data_dir, {LIST: ([entry(url="https://acme.example/jobs/1")], '"v2"'), ACME: {"jobs": [other]}})
     assert ACME in requested(web)
-    assert one(conn, "SELECT status FROM jobs WHERE apply_url = ?", ACME_JOB) == ("no longer listed",)
+    assert one(conn, "SELECT status_reason FROM jobs WHERE apply_url = ?", ACME_JOB) == ("removed from its board",)
 
 
 def test_cancelling_keeps_finished_sources_and_is_recorded(conn, data_dir):
@@ -301,8 +301,9 @@ def test_a_board_not_found_three_runs_in_a_row_is_retired_and_named_once(conn, d
     summaries = [run(conn, data_dir, pages)[0] for _ in range(3)]
     stopped = [line for lines in summaries for line in lines if line.startswith("Stopped reading")]
     assert stopped == [
-        "Stopped reading 1 board not found 3 runs in a row; their jobs are marked no longer listed by that "
-        "board (read again if Simplify links a newer job there, or if you add them to extra_boards):"
+        "Stopped reading 1 board not found 3 runs in a row; their jobs are marked 'board shut down' and Simplify "
+        "now decides for any it also lists (read again if Simplify links a newer job there, or if you add them to "
+        "extra_boards):"
     ]
     assert summaries[2][-1] == "  - Greenhouse board 'acme'"
     assert board_state(conn)[0] == 3
@@ -359,7 +360,59 @@ def test_a_retired_boards_jobs_are_decided_by_simplify(conn, data_dir):
         run(conn, data_dir, {LIST: 404, ACME: 404})
     assert one(conn, "SELECT status FROM jobs") == ("open",)  # retired; Simplify still lists it
     run(conn, data_dir, {LIST: ([entry(active=False)], '"v2"')})  # now Simplify drops it too
-    assert one(conn, "SELECT status FROM jobs") == ("no longer listed",)
+    assert one(conn, "SELECT status, status_reason FROM jobs") == ("no longer available", "board shut down")
+    assert conn.execute("SELECT source, unlisted_reason FROM job_sources ORDER BY rowid").fetchall() == [
+        ("simplify:Summer2027-Internships", "inactive on Simplify"),
+        ("greenhouse:acme", "board shut down"),  # same day, so the board's reason is shown
+    ]
+
+
+def test_a_board_empty_three_runs_in_a_row_means_the_company_stopped_hiring(conn, data_dir):
+    run(conn, data_dir, PAGES)
+    summaries = [run(conn, data_dir, {LIST: 404, ACME: {"jobs": []}})[0] for _ in range(3)]
+    for number, lines in enumerate(summaries[:2], 1):
+        assert lines[-1] == (
+            "  - Greenhouse board 'acme': sent no jobs, but its last good read listed 1 job "
+            f"(empty {number} of 3 runs in a row; then its jobs are marked 'company stopped hiring')"
+        )
+    assert summaries[2][1:3] == [
+        "Company boards: 1 of 1 read, 0 matching (0 new, 0 updated, 1 no longer available: 1 company stopped hiring)",
+        "Total: 0 new, 0 updated, 1 no longer available: 1 company stopped hiring.",
+    ]
+    assert summaries[2][-2:] == [
+        "Company stopped hiring (1 board empty 3 runs in a row; their jobs are kept and marked "
+        "'company stopped hiring'):",
+        "  - Greenhouse board 'acme'",
+    ]
+    assert one(conn, "SELECT status, status_reason FROM jobs") == ("no longer available", "company stopped hiring")
+    lines, _ = run(conn, data_dir, {LIST: 404, ACME: {"jobs": []}})  # still empty: nothing more to say
+    assert not any("acme" in line for line in lines)
+
+
+def test_only_empty_runs_in_a_row_mean_the_company_stopped_hiring(conn, data_dir):
+    run(conn, data_dir, PAGES)
+    empty = {LIST: 404, ACME: {"jobs": []}}
+    for pages in (empty, {LIST: 404, ACME: 500}):  # a server error counts for nothing
+        run(conn, data_dir, pages)
+    assert "(empty 2 of 3 runs in a row;" in run(conn, data_dir, empty)[0][-1]
+    run(conn, data_dir, PAGES)  # jobs again: start counting afresh
+    assert "(empty 1 of 3 runs in a row;" in run(conn, data_dir, empty)[0][-1]
+    assert one(conn, "SELECT status FROM jobs") == ("open",)
+
+
+def test_show_prints_a_jobs_status_and_every_source(conn, data_dir):
+    run(conn, data_dir, PAGES)
+    run(conn, data_dir, {LIST: ([entry(id="s-9", url="https://acme.example/9")], '"v2"'), ACME: {"jobs": []}})
+    today = one(conn, "SELECT unlisted_on FROM job_sources WHERE source LIKE 'simplify:%'")[0]
+    assert collect.show(conn, ACME_JOB + "?gh_src=x") == "\n".join([
+        "Acme, ML Intern",
+        "Status: open",
+        "Sources:",
+        f"  - Simplify Summer2027-Internships: removed from Simplify (since {today})",
+        "  - Greenhouse board 'acme': listed",  # an empty board needs investigation first, so nothing changed
+    ])  # fmt: skip
+    with pytest.raises(collect.CollectError, match="No saved job has that link"):
+        collect.show(conn, "https://acme.example/never-saved")
 
 
 def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeypatch):

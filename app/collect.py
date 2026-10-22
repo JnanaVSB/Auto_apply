@@ -1,4 +1,4 @@
-"""Collect jobs: `python -m app.collect`, or `python -m app.collect add "<job link>"` for one job."""
+"""Collect jobs: `python -m app.collect`; `add "<job link>"` saves one job, `show "<job link>"` shows one."""
 
 import argparse
 import dataclasses
@@ -25,10 +25,11 @@ BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
 PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
+STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
 SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
 Output = Callable[[str], None]
 SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON CONFLICT (name)
-    DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, retired_on = NULL"""
+    DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, empty_runs = 0, retired_on = NULL"""
 # A board Simplify links to is remembered; a retired one is read again once Simplify links a job posted after
 # the day it was retired.
 LINK_BOARD = """INSERT INTO sources (name) VALUES (?) ON CONFLICT (name)
@@ -36,6 +37,8 @@ LINK_BOARD = """INSERT INTO sources (name) VALUES (?) ON CONFLICT (name)
 LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
 COUNT_MISS = """INSERT INTO sources (name, misses) VALUES (?, 1) ON CONFLICT (name)
     DO UPDATE SET misses = misses + 1 RETURNING misses"""
+COUNT_EMPTY = """INSERT INTO sources (name, empty_runs) VALUES (?, 1) ON CONFLICT (name)
+    DO UPDATE SET empty_runs = empty_runs + 1 RETURNING empty_runs"""
 
 
 class CollectError(Exception):
@@ -55,9 +58,22 @@ def _plural(count: int, word: str) -> str:
     return f"{count:,} {word}{'' if count == 1 else 's'}"
 
 
+def _label(source: str) -> str:
+    """A source as messages name it: Simplify Summer2027-Internships, Greenhouse board 'acme', added by you."""
+    kind, _, name = source.partition(":")
+    if kind == "simplify":
+        return f"Simplify {name}"
+    return f"{kind.title()} board '{name}'" if name else "added by you"
+
+
+def _unavailable(counts: jobs.Counts) -> str:
+    """E.g. "4 no longer available: 3 removed from its board, 1 company stopped hiring"."""
+    reasons = ", ".join(f"{count:,} {reason}" for reason, count in counts.unavailable.most_common())
+    return f"{counts.unavailable.total():,} no longer available" + (f": {reasons}" if reasons else "")
+
+
 def _describe(counts: jobs.Counts) -> str:
-    text = f"{counts.kept:,} matching ({counts.new:,} new, {counts.updated:,} updated, "
-    text += f"{counts.unlisted:,} no longer listed)"
+    text = f"{counts.kept:,} matching ({counts.new:,} new, {counts.updated:,} updated, {_unavailable(counts)})"
     return text + (f", {_plural(counts.skipped, 'unusable entry')} skipped" if counts.skipped else "")
 
 
@@ -91,6 +107,7 @@ class _Run:
     failed: list[str] = field(default_factory=list)  # could not be downloaded
     investigate: list[str] = field(default_factory=list)  # downloaded, but the data looks wrong; nothing changed
     retired: list[str] = field(default_factory=list)
+    stopped_hiring: list[str] = field(default_factory=list)
     unreachable: set[str] = field(default_factory=set)  # sites skipped for the rest of this run
     skipped: Counter = field(default_factory=Counter)  # sources skipped, per unreachable site
 
@@ -103,7 +120,7 @@ class _Run:
 
     def read_simplify(self, listing: SimplifyList) -> None:
         name, host = simplify.source_name(listing.url), urlsplit(listing.url).hostname
-        label = name.replace("simplify:", "Simplify ")
+        label = _label(name)
         if host in self.unreachable:
             self.skipped[host] += 1
             return
@@ -156,15 +173,12 @@ class _Run:
     def _read_board(self, board: str, url: str, extra: bool, counts: jobs.Counts) -> str:
         """Read and save one board; return "read", "missing", "unreachable", "failed" or "investigate"."""
         kind, _, name = board.partition(":")
-        label = f"{kind.title()} board '{name}'"
+        label = _label(board)
         try:
             data, _ = self.fetcher.get_json(url)
             found, skipped = BOARDS[kind].parse(data, name)
-            if not found and not skipped:  # an empty board after a good read with jobs: check before closing any
-                listed = self.conn.execute(LISTED_BY, (board,)).fetchone()[0]
-                if listed:
-                    raise SourceError(f"sent no jobs, but its last good read listed {_plural(listed, 'job')}")
-            board_counts = jobs.save(self.conn, board, found, self.roles, _now())
+            reason = self._stopped_hiring(board, label) if not found and not skipped else None
+            board_counts = jobs.save(self.conn, board, found, self.roles, _now(), reason=reason)
         except NotFound as error:
             self.failed.append(f"{label}: {error}")
             self._count_miss(board, label, extra, counts)
@@ -181,13 +195,28 @@ class _Run:
         _add_up(counts, board_counts)
         return "read"
 
+    def _stopped_hiring(self, board: str, label: str) -> str | None:
+        """An empty board that listed jobs needs investigation, until it stays empty STOPPED_HIRING_AFTER runs."""
+        listed = self.conn.execute(LISTED_BY, (board,)).fetchone()[0]
+        if not listed:  # a board that never had jobs, or whose jobs are already unlisted, may be empty
+            return None
+        with self.conn:
+            empty = self.conn.execute(COUNT_EMPTY, (board,)).fetchone()[0]
+        if empty < STOPPED_HIRING_AFTER:
+            raise SourceError(
+                f"sent no jobs, but its last good read listed {_plural(listed, 'job')} (empty {empty} of "
+                f"{STOPPED_HIRING_AFTER} runs in a row; then its jobs are marked '{jobs.STOPPED_HIRING}')"
+            )
+        self.stopped_hiring.append(label)
+        return jobs.STOPPED_HIRING
+
     def _count_miss(self, board: str, label: str, extra: bool, counts: jobs.Counts) -> None:
         with self.conn:
             misses = self.conn.execute(COUNT_MISS, (board,)).fetchone()[0]
             if misses >= RETIRE_AFTER and not extra:
                 self.conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
                 # in the same step: its jobs are no longer listed by it, so Simplify decides for them now
-                _add_up(counts, jobs.save(self.conn, board, [], self.roles, _now()))
+                _add_up(counts, jobs.save(self.conn, board, [], self.roles, _now(), reason=jobs.BOARD_SHUT_DOWN))
                 self.retired.append(label)
 
     def problems(self) -> list[str]:
@@ -201,7 +230,7 @@ class _Run:
 
     def summary(self) -> None:
         total, problems = self.total, self.problems()
-        self.out(f"Total: {total.new:,} new, {total.updated:,} updated, {total.unlisted:,} no longer listed.")
+        self.out(f"Total: {total.new:,} new, {total.updated:,} updated, {_unavailable(total)}.")
         self.out(f"{_plural(len(problems), 'source')} failed:" if problems else "No sources failed.")
         for line in problems:
             self.out(f"  - {line}")
@@ -215,10 +244,17 @@ class _Run:
         if self.retired:
             self.out(
                 f"Stopped reading {_plural(len(self.retired), 'board')} not found {RETIRE_AFTER} runs in a row; "
-                "their jobs are marked no longer listed by that board (read again if Simplify links a newer job "
-                "there, or if you add them to extra_boards):"
+                f"their jobs are marked '{jobs.BOARD_SHUT_DOWN}' and Simplify now decides for any it also lists "
+                "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
             )
             for line in self.retired:
+                self.out(f"  - {line}")
+        if self.stopped_hiring:
+            self.out(
+                f"Company stopped hiring ({_plural(len(self.stopped_hiring), 'board')} empty "
+                f"{STOPPED_HIRING_AFTER} runs in a row; their jobs are kept and marked '{jobs.STOPPED_HIRING}'):"
+            )
+            for line in self.stopped_hiring:
                 self.out(f"  - {line}")
 
 
@@ -239,11 +275,12 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
         raise
     finally:
         failures = run.problems() + [f"needs investigation: {line}" for line in run.investigate]
+        unavailable = run.total.unavailable.total()
         with suppress(sqlcipher3.Error), conn:  # a broken database must not hide the original error
             conn.execute(
                 "UPDATE collect_runs SET finished_at = ?, outcome = ?, new_jobs = ?, updated_jobs = ?, "
                 "closed_jobs = ?, failures = ? WHERE id = ?",
-                (_now(), outcome, run.total.new, run.total.updated, run.total.unlisted, json.dumps(failures), run_id),
+                (_now(), outcome, run.total.new, run.total.updated, unavailable, json.dumps(failures), run_id),
             )
     run.summary()
 
@@ -285,6 +322,26 @@ def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[
     return f"{'Added' if counts.new else 'Already saved'}: {job.company}, {job.title}"
 
 
+def show(conn: sqlcipher3.Connection, link: str) -> str:
+    """One saved job's status, with each source's own state. Reads only."""
+    link = link.strip()
+    url = jobs.clean_link(Job(source="manual", source_job_id=link, company="", title="", url=link, locations=[]))
+    sql = "SELECT id, company, title, status, status_reason FROM jobs WHERE apply_url = ?"
+    job = conn.execute(sql, (url,)).fetchone()
+    if job is None:
+        raise CollectError("No saved job has that link. Copy the link exactly as it was added or collected.")
+    job_id, company, title, status, reason = job
+    lines = [f"{company}, {title}", f"Status: {status}" + (f" ({reason})" if reason else ""), "Sources:"]
+    entries = conn.execute(
+        "SELECT source, listed, unlisted_on, unlisted_reason FROM job_sources WHERE job_id = ? ORDER BY rowid",
+        (job_id,),
+    )
+    for source, listed, since, why in entries:
+        state = "listed" if listed else f"{why} (since {since})" if since else why
+        lines.append(f"  - {_label(source)}: {state}")
+    return "\n".join(lines)
+
+
 def _check_settings(config: Config) -> None:
     if not (config.roles.simplify_categories or config.roles.keywords):
         raise CollectError("No roles set in data/config.yaml. Copy the 'roles' section from config.example.yaml.")
@@ -296,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.collect", description="Collect matching jobs.")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("add", help="save one job by its link").add_argument("link")
+    commands.add_parser("show", help="show one saved job's status and sources").add_argument("link")
     args = parser.parse_args(argv)
     try:
         config = load_config()
@@ -308,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         ):
             if args.command == "add":
                 print(add(conn, fetcher, args.link))
+            elif args.command == "show":
+                print(show(conn, args.link))
             else:
                 collect(conn, config, fetcher)
     except (ConfigError, KeychainError, db.DatabaseError, CollectError) as error:

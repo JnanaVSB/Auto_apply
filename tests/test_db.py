@@ -549,7 +549,7 @@ def test_version_4_never_hides_a_job_and_marks_your_own(tmp_path, monkeypatch):
         rows = conn.execute("SELECT us_location, status, added_by_you, check_location FROM jobs ORDER BY id")
         assert rows.fetchall() == [
             ("unclear", "open", 0, 1),  # was hidden as 'no': visible again, to be checked
-            ("yes", "no longer listed", 0, 0),
+            ("yes", "no longer available", 0, 0),  # 'no longer listed' in version 4
             ("yes", "open", 1, 0),  # added with `add` (another site)
         ]
         conn.execute("UPDATE jobs SET status = 'closed'")  # still allowed, for a later phase
@@ -559,6 +559,46 @@ def test_version_4_never_hides_a_job_and_marks_your_own(tmp_path, monkeypatch):
         assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 3
     with closing(sqlite3.connect(path / f"{db.DB_FILE}.bak-v3")) as plain, pytest.raises(sqlite3.DatabaseError):
         plain.execute("SELECT count(*) FROM sqlite_master")
+
+
+def test_version_5_gives_each_job_that_is_not_open_a_reason(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as phase_2:
+        phase_2.setattr(db, "UPGRADES", db.UPGRADES[:4])
+        phase_2.setattr(db, "SCHEMA_VERSION", 4)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            for number, status in enumerate(["open", "no longer listed", "no longer listed"], 1):
+                conn.execute(
+                    "INSERT INTO jobs (id, apply_url, match_key, company, title, locations, us_location, remote, "
+                    "level, sponsorship, terms, first_seen, last_seen, status) VALUES (?, ?, 'k', 'Acme', 'ML', "
+                    "'[]', 'yes', 'unknown', 'intern', 'unknown', '[]', 'now', 'now', ?)",
+                    (number, f"https://acme.example/{number}", status),
+                )
+            conn.execute("INSERT INTO sources (name, retired_on) VALUES ('greenhouse:gone', '2026-10-20')")
+            conn.executemany(
+                "INSERT INTO job_sources VALUES (?, ?, ?, ?)",
+                [("greenhouse:acme", "1", 1, 1), ("greenhouse:gone", "2", 2, 0), ("simplify:List", "3", 3, 0)],
+            )
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT status, status_reason FROM jobs ORDER BY id").fetchall() == [
+            ("open", None),
+            ("no longer available", "board shut down"),
+            ("no longer available", "reason not recorded (before 2026-10-21)"),
+        ]
+        assert conn.execute("SELECT unlisted_on, unlisted_reason FROM job_sources ORDER BY job_id").fetchall() == [
+            (None, None),
+            (None, "board shut down"),
+            (None, "reason not recorded (before 2026-10-21)"),
+        ]
+        assert conn.execute("SELECT empty_runs FROM sources").fetchall() == [(0,)]
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("UPDATE jobs SET status = 'no longer listed'")
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("UPDATE jobs SET status_reason = 'gone'")
+        assert "jobs_match_key" in {row[1] for row in conn.execute("PRAGMA index_list(jobs)")}
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v4") as conn:
+        assert conn.execute("SELECT count(*) FROM jobs WHERE status = 'no longer listed'").fetchone()[0] == 2
 
 
 def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):

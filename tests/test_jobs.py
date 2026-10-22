@@ -266,11 +266,14 @@ def test_company_board_decides_when_a_job_closes(conn):
     jobs.save(conn, SIMPLIFY, [simplify_job()], ROLES, NOW)
     jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
     counts = jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)  # gone from the board, still on Simplify
-    assert (counts.unlisted, rows(conn)) == (1, [("Machine Learning Engineer", "no longer listed")])
+    assert (counts.unavailable, rows(conn, "status, status_reason")) == (
+        {"removed from its board": 1},
+        [("no longer available", "removed from its board")],
+    )
     counts = jobs.save(conn, "greenhouse:acme", [job()], ROLES, LATER)  # back on the board
     assert (counts.updated, rows(conn)) == (1, [("Machine Learning Engineer", "open")])
     jobs.save(conn, SIMPLIFY, [simplify_job(listed=False)], ROLES, LATER)  # Simplify's inactive mark is overruled
-    assert rows(conn) == [("Machine Learning Engineer", "open")]
+    assert rows(conn, "status, status_reason") == [("open", None)]
 
 
 def test_simplify_decides_for_jobs_only_it_knows(conn):
@@ -279,7 +282,53 @@ def test_simplify_decides_for_jobs_only_it_knows(conn):
         conn, SIMPLIFY, [simplify_job(url=workday), simplify_job(source_job_id="s-2", url=workday + "2")], ROLES, NOW
     )
     counts = jobs.save(conn, SIMPLIFY, [simplify_job(url=workday)], ROLES, LATER)
-    assert (counts.unlisted, [status for _, status in rows(conn)]) == (1, ["open", "no longer listed"])
+    assert (counts.unavailable, rows(conn, "status, status_reason")) == (
+        {"removed from Simplify": 1},
+        [("open", None), ("no longer available", "removed from Simplify")],
+    )
+
+
+def entries(conn):
+    return conn.execute(
+        "SELECT source, listed, unlisted_on, unlisted_reason FROM job_sources ORDER BY rowid"
+    ).fetchall()
+
+
+def test_each_source_keeps_its_own_state_and_the_day_it_stopped(conn):
+    jobs.save(conn, SIMPLIFY, [simplify_job()], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)  # the day it stopped is kept
+    assert entries(conn) == [(SIMPLIFY, 1, None, None), ("greenhouse:acme", 0, NOW[:10], "removed from its board")]
+    jobs.save(conn, SIMPLIFY, [simplify_job(listed=False)], ROLES, LATER)  # the board still decides
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, LATER)  # back on the board
+    assert entries(conn) == [(SIMPLIFY, 0, LATER[:10], "inactive on Simplify"), ("greenhouse:acme", 1, None, None)]
+    assert rows(conn, "status, status_reason") == [("open", None)]
+
+
+def test_the_source_that_stopped_listing_a_job_last_gives_the_reason(conn):
+    workday, other_list = "https://acme.wd1.myworkdayjobs.com/jobs/1", "simplify:New-Grad-Positions"
+    jobs.save(conn, SIMPLIFY, [simplify_job(url=workday)], ROLES, NOW)
+    jobs.save(conn, other_list, [simplify_job(source=other_list, url=workday)], ROLES, NOW)
+    jobs.save(conn, SIMPLIFY, [], ROLES, NOW)
+    assert rows(conn, "status") == [("open",)]  # the other list still has it
+    counts = jobs.save(conn, other_list, [simplify_job(source=other_list, url=workday, listed=False)], ROLES, LATER)
+    assert (counts.unavailable, rows(conn, "status_reason")) == (
+        {"inactive on Simplify": 1},
+        [("inactive on Simplify",)],
+    )
+
+
+def test_a_reason_not_recorded_is_filled_in_on_the_next_read(conn):
+    jobs.save(conn, "greenhouse:acme", [job(), job(source_job_id="9", title="AI Engineer")], ROLES, NOW)
+    conn.execute(  # as the version 5 upgrade leaves a job that was 'no longer listed' before
+        "UPDATE job_sources SET listed = 0, unlisted_reason = ? WHERE source_job_id = '123'", (jobs.NOT_RECORDED,)
+    )
+    conn.execute("UPDATE jobs SET status = 'no longer available', status_reason = ? WHERE id = 1", (jobs.NOT_RECORDED,))
+    counts = jobs.save(conn, "greenhouse:acme", [job(source_job_id="9", title="AI Engineer")], ROLES, LATER)
+    assert counts.updated == 1  # its reason is now known; the day stays unknown
+    assert entries(conn)[0] == ("greenhouse:acme", 0, None, "removed from its board")
+    assert rows(conn, "status, status_reason") == [("no longer available", "removed from its board"), ("open", None)]
 
 
 def test_partial_list_closes_nothing(conn):

@@ -57,8 +57,9 @@ python -m app.collect
 Reads Simplify's two public job lists on GitHub and every Greenhouse, Lever and Ashby board they link
 to (plus your `extra_boards`), one request per second per site. It keeps only US jobs matching your
 `roles` and stores each job once. Jobs are never deleted or hidden: a job its board or list drops becomes
-"no longer listed", and a saved job later judged to be outside the US keeps its label and gets a "please check
-location" mark. A full run takes about 15–25 minutes; running it again is safe.
+"no longer available" with the reason ("removed from its board", "board shut down", "company stopped hiring",
+"removed from Simplify" or "inactive on Simplify"), and a saved job later judged to be outside the US keeps its
+label and gets a "please check location" mark. A full run takes about 15–25 minutes; running it again is safe.
 
 At the end it prints a summary:
 - **failed**: sources that could not be downloaded. They change nothing. If a site does not answer at all, the
@@ -68,6 +69,8 @@ At the end it prints a summary:
   board suddenly lists no jobs at all). Nothing is changed for it, so no application is missed; please check.
 - **Stopped reading**: a board that answered "not found" three runs in a row. It is read again automatically if
   Simplify links a newer job there, or if you add it to `extra_boards`.
+- **Company stopped hiring**: a board that listed jobs and then sent none three runs in a row (the first two show
+  under "Needs investigation"). Its jobs are kept, marked "company stopped hiring".
 
 If your settings file is from before Phase 2, copy the `roles` and `sources` sections from `config.example.yaml`.
 
@@ -78,6 +81,11 @@ python -m app.collect add "<job link>"
 Greenhouse, Lever and Ashby links are read from the company's board; for other sites you type the
 company and job title. A job you add is marked "added by you", and later runs never change its US label.
 simplify.jobs links themselves are refused: the app never opens that website.
+
+To see one saved job's status and every board or list it appears on (changes nothing):
+```bash
+python -m app.collect show "<job link>"
+```
 
 ## Adding companies and board types
 - **Another company** on Greenhouse, Lever or Ashby: add one line to `extra_boards` in `data/config.yaml`, using the

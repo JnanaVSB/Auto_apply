@@ -2,8 +2,12 @@
 
 import json
 import re
+from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import groupby
+from operator import itemgetter
+from typing import NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import sqlcipher3
@@ -49,13 +53,23 @@ OWNERS = """SELECT
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id AND source NOT LIKE 'simplify:%'),
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id),
     (SELECT rowid FROM job_sources WHERE source = :source AND source_job_id = :source_job_id)"""
-# A job is open while a deciding source lists it: its company board if it has one that is still read (not
-# retired), otherwise Simplify. 'closed' is never set or changed here; it is left for a later phase.
-STATUS_CHECK = """SELECT id, status, EXISTS (
-    SELECT 1 FROM job_sources s WHERE s.job_id = jobs.id AND s.listed = 1 AND (s.source NOT LIKE 'simplify:%'
-        OR NOT EXISTS (SELECT 1 FROM job_sources b LEFT JOIN sources r ON r.name = b.source
-            WHERE b.job_id = jobs.id AND b.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL)))
-    FROM jobs WHERE status != 'closed' AND id IN (SELECT job_id FROM job_sources WHERE source = ?)"""
+# Why a source stopped listing a job; a job that is not open shows the reason of its deciding source.
+REMOVED_FROM_BOARD, REMOVED_FROM_SIMPLIFY = "removed from its board", "removed from Simplify"
+INACTIVE = "inactive on Simplify"  # only Simplify marks jobs inactive
+BOARD_SHUT_DOWN, STOPPED_HIRING = "board shut down", "company stopped hiring"
+NOT_RECORDED = "reason not recorded (before 2026-10-21)"  # filled in on the source's next successful read
+SAVE_ENTRY = """INSERT INTO job_sources (source, source_job_id, job_id, listed, unlisted_on, unlisted_reason)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (source, source_job_id) DO UPDATE SET job_id = excluded.job_id,
+    listed = excluded.listed, unlisted_reason = excluded.unlisted_reason, unlisted_on = CASE
+        WHEN excluded.listed THEN NULL WHEN job_sources.listed THEN excluded.unlisted_on
+        ELSE job_sources.unlisted_on END"""  # the day it stopped being listed is kept on later runs
+UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
+    unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
+# Every source entry of the jobs `source` has. 'closed' is never set or changed here; it is left for a later phase.
+ENTRIES = """SELECT j.id, j.status, j.status_reason, s.listed, s.unlisted_on, s.unlisted_reason,
+        s.source NOT LIKE 'simplify:%', s.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL
+    FROM jobs j JOIN job_sources s ON s.job_id = j.id LEFT JOIN sources r ON r.name = s.source
+    WHERE j.status != 'closed' AND j.id IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY j.id"""
 
 
 @dataclass(frozen=True)
@@ -84,8 +98,18 @@ class Counts:
     kept: int = 0  # jobs from this source that are stored (new or already known)
     new: int = 0
     updated: int = 0
-    unlisted: int = 0  # became "no longer listed"
+    unavailable: Counter = field(default_factory=Counter)  # became "no longer available", per reason
     skipped: int = 0  # unusable links
+
+
+class _Entry(NamedTuple):
+    """One source's state for a job."""
+
+    listed: bool
+    unlisted_on: str | None
+    reason: str | None
+    board: bool  # a company board (or a job you added), not a Simplify list
+    live_board: bool  # ... that is still read (not retired)
 
 
 def us_location(job: Job) -> str:
@@ -153,20 +177,26 @@ def save(
     *,
     complete: bool = True,
     chosen: bool = False,
+    reason: str | None = None,
 ) -> Counts:
     """Save one source's jobs all-or-nothing. When the list is `complete`, jobs it no longer lists are unlisted.
 
-    `chosen` jobs were picked by the user, so the role and US filters do not apply to them.
+    `chosen` jobs were picked by the user, so the role and US filters do not apply to them. `reason` says why the
+    missing jobs are gone; by default they were removed from that board or Simplify list.
     """
     counts = Counts()
+    reason = reason or (REMOVED_FROM_SIMPLIFY if source.startswith("simplify:") else REMOVED_FROM_BOARD)
     with conn:  # one transaction: saved together at the end, or not at all
         for job in jobs:
             _save_one(conn, job, roles, now, counts, chosen)
         if complete:
             seen = {job.source_job_id for job in jobs}
-            rows = conn.execute("SELECT source_job_id FROM job_sources WHERE source = ? AND listed = 1", (source,))
-            gone = [(source, job_id) for (job_id,) in rows.fetchall() if job_id not in seen]
-            conn.executemany("UPDATE job_sources SET listed = 0 WHERE source = ? AND source_job_id = ?", gone)
+            rows = conn.execute(
+                "SELECT source_job_id FROM job_sources WHERE source = ? AND (listed = 1 OR unlisted_reason = ?)",
+                (source, NOT_RECORDED),
+            )
+            gone = [(reason, now[:10], source, job_id) for (job_id,) in rows.fetchall() if job_id not in seen]
+            conn.executemany(UNLIST, gone)
         _refresh_status(conn, source, counts)
     return counts
 
@@ -199,11 +229,9 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
         values = fields | {"apply_url": url, "match_key": match_key(job), "now": now, "chosen": chosen}
         values["manual"] = is_simplify_site(url)
         job_id = conn.execute(INSERT_JOB, values).lastrowid
-    conn.execute(  # recorded before merging, so a newly found company board owns its details at once
-        "INSERT INTO job_sources (source, source_job_id, job_id, listed) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT (source, source_job_id) DO UPDATE SET job_id = excluded.job_id, listed = excluded.listed",
-        (job.source, job.source_job_id, job_id, job.listed),
-    )
+    unlisted = (None, None) if job.listed else (now[:10], INACTIVE)
+    # recorded before merging, so a newly found company board owns its details at once
+    conn.execute(SAVE_ENTRY, (job.source, job.source_job_id, job_id, job.listed, *unlisted))
     counts.kept += job.listed
     if new:
         counts.new += 1
@@ -247,10 +275,25 @@ def _find(conn: sqlcipher3.Connection, job: Job, url: str) -> int | None:
     return None
 
 
+def _status(entries: list[_Entry]) -> tuple[str, str | None]:
+    """Open while a deciding source lists the job: its company boards that are still read, else all its sources.
+
+    Otherwise the reason is that of the deciding source that stopped listing it last (a board first on the same day).
+    """
+    deciding = [entry for entry in entries if entry.live_board] or entries
+    if any(entry.listed for entry in deciding):
+        return "open", None
+    latest = max(deciding, key=lambda entry: (entry.unlisted_on or "", entry.board))
+    return "no longer available", latest.reason
+
+
 def _refresh_status(conn: sqlcipher3.Connection, source: str, counts: Counts) -> None:
-    for job_id, old_status, is_open in conn.execute(STATUS_CHECK, (source,)).fetchall():
-        status = "open" if is_open else "no longer listed"
-        if status != old_status:
-            conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
-            counts.unlisted += status == "no longer listed"
-            counts.updated += status == "open"  # reopened
+    rows = conn.execute(ENTRIES, (source,)).fetchall()
+    for (job_id, old_status, old_reason), entries in groupby(rows, key=itemgetter(0, 1, 2)):
+        status, reason = _status([_Entry(*row[3:]) for row in entries])
+        if (status, reason) != (old_status, old_reason):
+            conn.execute("UPDATE jobs SET status = ?, status_reason = ? WHERE id = ?", (status, reason, job_id))
+            if old_status == "open":
+                counts.unavailable[reason] += 1
+            else:
+                counts.updated += 1  # reopened, or its reason is now known

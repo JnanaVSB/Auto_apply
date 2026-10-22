@@ -29,7 +29,7 @@ SIMPLE_SEQUENCES = ("0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "a
 
 # UPGRADES[n - 1] turns a version n - 1 database into version n. Append new steps; never edit old ones.
 # "REFERENCES" is documentation only: SQLite leaves foreign keys unenforced unless asked, which the table
-# rebuilds in steps 3 and 4 rely on.
+# rebuilds in steps 3 to 5 rely on.
 UPGRADES = (
     "",  # version 1: the empty Phase 1 database
     """
@@ -143,6 +143,59 @@ UPGRADES = (
     UPDATE jobs_v4 SET us_location = 'unclear' WHERE us_location = 'no';
     DROP TABLE jobs;
     ALTER TABLE jobs_v4 RENAME TO jobs;
+    CREATE INDEX jobs_match_key ON jobs (match_key);
+    """,
+    """
+    -- Every job that is not open says why, and each source entry says since when and why it stopped listing the
+    -- job. 'no longer listed' becomes 'no longer available'. What the saved data can't tell is 'reason not recorded
+    -- (before 2026-10-21)'; the next successful read of each source fills in the real reason.
+    ALTER TABLE sources ADD COLUMN empty_runs INTEGER NOT NULL DEFAULT 0;  -- runs in a row a board with jobs sent none
+    ALTER TABLE job_sources ADD COLUMN unlisted_on TEXT;  -- the day the app noticed this source stopped listing it
+    ALTER TABLE job_sources ADD COLUMN unlisted_reason TEXT;  -- why, in the words of jobs.status_reason
+    UPDATE job_sources SET unlisted_reason = CASE
+        WHEN source IN (SELECT name FROM sources WHERE retired_on IS NOT NULL) THEN 'board shut down'
+        ELSE 'reason not recorded (before 2026-10-21)' END
+        WHERE listed = 0;
+    CREATE TABLE jobs_v5 (
+        id INTEGER PRIMARY KEY,
+        apply_url TEXT NOT NULL UNIQUE,
+        match_key TEXT NOT NULL,
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        locations TEXT NOT NULL,
+        us_location TEXT NOT NULL CHECK (us_location IN ('yes', 'unclear', 'no')),
+        remote TEXT NOT NULL CHECK (remote IN ('remote', 'hybrid', 'on-site', 'unknown')),
+        level TEXT NOT NULL CHECK (level IN ('intern', 'new grad', 'entry', 'mid', 'senior', 'staff+', 'unknown')),
+        role_category TEXT,
+        sponsorship TEXT NOT NULL CHECK (sponsorship IN ('offers', 'no', 'citizens only', 'unknown')),
+        terms TEXT NOT NULL,
+        description TEXT,
+        salary TEXT,
+        date_posted TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'no longer available', 'closed')),
+        open_manually_only INTEGER NOT NULL DEFAULT 0,
+        added_by_you INTEGER NOT NULL DEFAULT 0,
+        check_location INTEGER NOT NULL DEFAULT 0,
+        status_reason TEXT CHECK (status_reason IN ('removed from its board', 'board shut down',
+            'company stopped hiring', 'removed from Simplify', 'inactive on Simplify',
+            'reason not recorded (before 2026-10-21)'))  -- why it is not open; NULL while open
+    );
+    -- Renamed while copied, since the new table refuses the old name. A retired board gives the reason only when
+    -- no board that is still read has the job.
+    INSERT INTO jobs_v5 SELECT id, apply_url, match_key, company, title, locations, us_location, remote, level,
+        role_category, sponsorship, terms, description, salary, date_posted, first_seen, last_seen,
+        CASE status WHEN 'no longer listed' THEN 'no longer available' ELSE status END,
+        open_manually_only, added_by_you, check_location,
+        CASE WHEN status != 'no longer listed' THEN NULL
+            WHEN EXISTS (SELECT 1 FROM job_sources WHERE job_id = jobs.id AND unlisted_reason = 'board shut down')
+                AND NOT EXISTS (SELECT 1 FROM job_sources s LEFT JOIN sources r ON r.name = s.source
+                    WHERE s.job_id = jobs.id AND s.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL)
+            THEN 'board shut down' ELSE 'reason not recorded (before 2026-10-21)' END
+        FROM jobs;
+    DROP TABLE jobs;
+    ALTER TABLE jobs_v5 RENAME TO jobs;
     CREATE INDEX jobs_match_key ON jobs (match_key);
     """,
 )
