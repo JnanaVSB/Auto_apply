@@ -21,7 +21,9 @@ MAX_FORM_BYTES = 64 * 1024
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
 log = logging.getLogger("app.web")
+MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
+templates.env.globals["US_LABELS"] = queries.US_LABELS
 
 
 def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI:
@@ -92,6 +94,15 @@ def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI
         conn, view = request.app.state.conn, queries.Filters.from_address(request.url.query)
         page, choices = queries.list_jobs(conn, view), queries.choices(conn)
         return _page(request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS)
+
+    @app.get("/jobs/{job_id:int}")
+    async def job_page(request: Request, job_id: int) -> Response:
+        job = queries.job(request.app.state.conn, job_id) if job_id <= MAX_JOB_ID else None
+        if job is None:
+            raise HTTPException(404)
+        back = request.query_params.get("back", "")
+        back = back if back.startswith("/?") and len(back) <= 4000 else "/"  # only the dashboard's own list addresses
+        return _page(request, "job.html", job=job, back=back)
 
     return app
 

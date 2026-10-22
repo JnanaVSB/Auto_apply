@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% set us_labels = {"yes": "US", "unclear": "unclear", "no": "not US"} %}
 {% macro boxes(name, labels={}) %}
   {% for value in options[name] %}
   <label><input type="checkbox" name="{{ name }}" value="{{ value }}"{% if value in view[name] %} checked{% endif %}> {{ labels.get(value, value) }}</label>
@@ -32,7 +31,7 @@
       value="{{ view.source if ':' in view.source and not view.source.startswith('simplify:') else '' }}"></label>
   </p>
   <fieldset><legend>Level</legend>{{ boxes("level") }}</fieldset>
-  <fieldset><legend>US location</legend>{{ boxes("us", us_labels) }}
+  <fieldset><legend>US location</legend>{{ boxes("us", US_LABELS) }}
     <label><input type="checkbox" name="check" value="1"{% if view.check %} checked{% endif %}> only "please check location"</label>
   </fieldset>
   <fieldset><legend>Remote</legend>{{ boxes("remote") }}</fieldset>
@@ -80,14 +79,14 @@
   <tbody>
     {% for job in page.jobs %}
     <tr{% if job.not_interested %} class="hidden-job"{% endif %}>
-      <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a>
+      <td><a href="/jobs/{{ job.id }}?back={{ view.address(page=page.number) | urlencode }}">{{ job.title }}</a>
         {% if job.added_by_you %}<span class="mark">added by you</span>{% endif %}
         {% if job.not_interested %}<span class="mark">not interested</span>{% endif %}</td>
       <td>{{ job.company }}</td>
       <td>{{ job.locations[:2] | join("; ") }}{% if job.locations | length > 2 %} <span class="muted">+{{ job.locations | length - 2 }} more</span>{% endif %}</td>
       <td>{{ job.level }}</td>
       <td>{{ job.remote }}</td>
-      <td>{{ us_labels[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
+      <td>{{ US_LABELS[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
       <td>{{ job.date_posted or "" }}</td>
       <td>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</td>
     </tr>

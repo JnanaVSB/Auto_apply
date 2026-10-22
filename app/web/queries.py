@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode
 import sqlcipher3
 
 from app import jobs
+from app.collect import _label
 
 PAGE_SIZE = 50
 MAX_TEXT = 200
@@ -34,9 +35,15 @@ SORTS = {
     "title": "title COLLATE NOCASE, company COLLATE NOCASE, id",
 }
 HIDDEN = {"hide": "not_interested = 0", "only": "not_interested = 1", "show": ""}
+US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 # Only columns of the jobs_list index, so listing never reads the long descriptions.
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
+JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
+    terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
+    added_by_you, check_location, location_by_you, not_interested"""
+SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok
+    FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
 
 
 @dataclass(frozen=True)
@@ -207,3 +214,22 @@ def choices(conn: sqlcipher3.Connection) -> dict[str, list[str]]:
         "term": column("SELECT DISTINCT value FROM jobs, json_each(jobs.terms) ORDER BY 1"),
         "simplify": column("SELECT name FROM sources WHERE name LIKE 'simplify:%' ORDER BY 1"),
     }
+
+
+def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
+    """One job with every detail and every board or list it is on, each with its own state; None if there is none."""
+    rows = conn.execute(f"SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?", (job_id,))  # noqa: S608 (fixed names)
+    row = rows.fetchone()
+    if row is None:
+        return None
+    found = dict(zip([column[0] for column in rows.description], row, strict=True))
+    found["locations"], found["terms"] = json.loads(found["locations"]), json.loads(found["terms"])
+    found["sources"] = [
+        {
+            "label": _label(source),
+            "state": "listed" if listed else f"{reason} (since {since})" if since else reason,
+            "board": f"board no longer read since {retired}" if retired else f"last read {read[:10]}" if read else "",
+        }
+        for source, listed, since, reason, retired, read in conn.execute(SOURCES_OF, (job_id,))
+    ]
+    return found

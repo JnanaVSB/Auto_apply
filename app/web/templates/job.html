@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<p><a href="{{ back }}">Back to the list</a></p>
+<h1>{{ job.title }}</h1>
+<p class="company">{{ job.company }}</p>
+
+<p class="apply">
+  {% if job.open_manually_only %}
+  <span class="mark warn">open manually only</span> <code class="address">{{ job.apply_url }}</code><br>
+  <span class="muted">simplify.jobs: copy this into your browser yourself; the app never opens this site.</span>
+  {% elif job.apply_url.startswith(("https://", "http://")) %}
+  <a href="{{ job.apply_url }}" target="_blank" rel="noopener noreferrer">Open the job posting</a>
+  <span class="muted">(new tab)</span>
+  {% else %}
+  <code class="address">{{ job.apply_url }}</code>
+  {% endif %}
+</p>
+
+<dl class="details">
+  <dt>Status</dt><dd>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</dd>
+  <dt>Locations</dt><dd>{{ job.locations | join("; ") or "not given" }}</dd>
+  <dt>US location</dt>
+  <dd>{{ US_LABELS[job.us_location] }}
+    {% if job.check_location %}<span class="mark warn">please check location</span>{% endif %}
+    {% if job.location_by_you %}<span class="mark">location set by you</span>{% endif %}</dd>
+  <dt>Level</dt><dd>{{ job.level }}</dd>
+  <dt>Remote</dt><dd>{{ job.remote }}</dd>
+  <dt>Sponsorship</dt><dd>{{ job.sponsorship }}</dd>
+  {% if job.terms %}<dt>Terms</dt><dd>{{ job.terms | join(", ") }}</dd>{% endif %}
+  {% if job.role_category %}<dt>Role category</dt><dd>{{ job.role_category }}</dd>{% endif %}
+  {% if job.salary %}<dt>Salary</dt><dd>{{ job.salary }}</dd>{% endif %}
+  <dt>Posted</dt><dd>{{ job.date_posted or "not given" }}</dd>
+  <dt>First found</dt><dd>{{ job.first_seen[:10] }}</dd>
+  <dt>Last seen</dt><dd>{{ job.last_seen[:10] }}</dd>
+  {% if job.added_by_you or job.not_interested %}
+  <dt>Marks</dt>
+  <dd>{% if job.added_by_you %}<span class="mark">added by you</span>{% endif %}
+    {% if job.not_interested %}<span class="mark">not interested</span>{% endif %}</dd>
+  {% endif %}
+</dl>
+
+<h2>Where this job is listed</h2>
+<ul class="sources">
+  {% for source in job.sources %}
+  <li>{{ source.label }}: {{ source.state }}{% if source.board %} <span class="muted">({{ source.board }})</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+
+<h2>Description</h2>
+{% if job.description %}
+<div class="description">{{ job.description }}</div>
+{% else %}
+<p class="muted">Description not fetched yet (this site has no public job data; a later phase will read it).</p>
+{% endif %}
+{% endblock %}
