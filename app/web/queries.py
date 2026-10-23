@@ -11,6 +11,7 @@ import sqlcipher3
 
 from app import jobs
 from app.collect import _label
+from app.sources import Job
 
 PAGE_SIZE = 50
 MAX_TEXT = 200
@@ -233,3 +234,26 @@ def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
         for source, listed, since, reason, retired, read in conn.execute(SOURCES_OF, (job_id,))
     ]
     return found
+
+
+def job_id_by_link(conn: sqlcipher3.Connection, link: str) -> int | None:
+    """The saved job with this link, cleaned the way saving cleans it."""
+    url = jobs.clean_link(
+        Job(source="manual", source_job_id=link, company="", title="", url=link.strip(), locations=[])
+    )
+    row = conn.execute("SELECT id FROM jobs WHERE apply_url = ?", (url,)).fetchone()
+    return row[0] if row else None
+
+
+def last_runs(conn: sqlcipher3.Connection, count: int = 5) -> list[dict]:
+    """The latest collections, newest first, with how many sources failed or need investigation."""
+    rows = conn.execute(
+        "SELECT started_at, outcome, new_jobs, updated_jobs, closed_jobs, failures FROM collect_runs "
+        "ORDER BY id DESC LIMIT ?",
+        (count,),
+    )
+    return [
+        {"started": started[:16].replace("T", " "), "outcome": outcome or "not finished (running, or interrupted)",
+         "new": new, "updated": updated, "unavailable": unavailable, "problems": len(json.loads(failures))}
+        for started, outcome, new, updated, unavailable, failures in rows
+    ]  # fmt: skip

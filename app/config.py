@@ -1,11 +1,11 @@
 """Load and validate the user's private settings from data/config.yaml."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.sources import BOARD_NAME
 
@@ -62,6 +62,7 @@ class Config(BaseModel):
     data_dir: Path
     roles: RoleSettings = RoleSettings()  # optional, so older settings files still work for app.db
     sources: SourceSettings = SourceSettings()
+    collect_every_hours: Annotated[int, Field(ge=0, le=168, strict=True)] = 0  # dashboard schedule; 0 = off
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config:

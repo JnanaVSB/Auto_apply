@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Collect{% endblock %}
+{% block content %}
+<h1>Collect jobs</h1>
+<form method="post" action="/collect">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <button type="submit"{% if collector.running %} disabled{% endif %}>Collect now</button>
+  <span class="muted">Reads every job list and board, the same as <code>python -m app.collect</code> (about 15–25 minutes).</span>
+</form>
+{% if refused %}<p class="error" role="alert">{{ refused }}</p>{% endif %}
+
+{% include "collect_progress.html" %}
+
+<h2>Automatic collection</h2>
+{% if settings_error %}
+<p class="error">{{ settings_error }}</p>
+{% elif every %}
+<p>Every {{ every }} hour{{ "s" if every != 1 }} while the dashboard is open (checked once a minute). Change it in
+  <code>data/config.yaml</code>: <code>collect_every_hours</code>.</p>
+{% else %}
+<p>Off. To turn it on, set <code>collect_every_hours</code> in <code>data/config.yaml</code> to 1–168.</p>
+{% endif %}
+
+<h2>Last collections</h2>
+{% if runs %}
+<table class="jobs">
+  <thead><tr><th>Started (UTC)</th><th>Result</th><th>New</th><th>Updated</th><th>No longer available</th><th>Sources with problems</th></tr></thead>
+  <tbody>
+    {% for run in runs %}
+    <tr><td>{{ run.started }}</td><td>{{ run.outcome }}</td><td>{{ "{:,}".format(run.new) }}</td>
+      <td>{{ "{:,}".format(run.updated) }}</td><td>{{ "{:,}".format(run.unavailable) }}</td><td>{{ run.problems }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No collections yet.</p>
+{% endif %}
+{% endblock %}

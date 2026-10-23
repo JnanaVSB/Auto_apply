@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Add{% endblock %}
+{% block content %}
+<h1>Add</h1>
+
+<section>
+  <h2>Add a job by its link</h2>
+  <form method="post" action="/add/job" class="stacked">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>Job link <input name="link" type="url" required maxlength="2000" value="{{ form.link or '' }}"
+      placeholder="https://job-boards.greenhouse.io/acme/jobs/123"></label>
+    <p class="hint">Greenhouse, Lever and Ashby links are read from the company's board. For any other site, also type
+      the company and the job title. simplify.jobs links are refused: open the job there, click Apply, and add the
+      company's own link.</p>
+    <label>Company <input name="company" maxlength="200" value="{{ form.company or '' }}"></label>
+    <label>Job title <input name="title" maxlength="300" value="{{ form.title or '' }}"></label>
+    <button type="submit">Add job</button>
+  </form>
+  {% if job_message %}
+  <p class="result" role="status">{{ job_message }}{% if job_id %} <a href="/jobs/{{ job_id }}">Open it</a>{% endif %}</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Add a company</h2>
+  <form method="post" action="/add/company" class="stacked">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>Company name, or one board <input name="name" required maxlength="100" value="{{ form.name or '' }}"
+      placeholder="Acme AI, or greenhouse:acme"></label>
+    <p class="hint">Looks for the company's board on Greenhouse, Lever and Ashby (a few seconds). A board that is found
+      is read on every collection from now on.</p>
+    <button type="submit">Find and add</button>
+  </form>
+  {% if company_lines %}
+  <ul class="result" role="status">{% for line in company_lines %}<li>{{ line }}</li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endblock %}

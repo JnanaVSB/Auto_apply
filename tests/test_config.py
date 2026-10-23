@@ -94,3 +94,14 @@ def test_the_example_settings_are_valid():
     config = load_config(PROJECT_DIR / "config.example.yaml")
     assert config.roles.keywords
     assert [listing.level for listing in config.sources.simplify_lists] == ["intern", "new grad"]
+
+
+@pytest.mark.parametrize(("value", "ok"), [("0", True), ("168", True), ("-1", False), ("169", False),
+                                            ('"6"', False), ("true", False), ("1.5", False)])  # fmt: skip
+def test_the_dashboard_schedule_is_0_to_168_hours(tmp_path, value, ok):
+    path = write(tmp_path, f"data_dir: data\ncollect_every_hours: {value}\n")
+    if ok:
+        assert load_config(path).collect_every_hours == int(value)
+    else:
+        with pytest.raises(ConfigError, match="collect_every_hours"):
+            load_config(path)

@@ -20,3 +20,6 @@ sources:
     - url: https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json
       level: new grad
   extra_boards: []
+
+# While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
+collect_every_hours: 0

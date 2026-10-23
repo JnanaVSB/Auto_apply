@@ -1,19 +1,25 @@
 """The dashboard web app: safety checks on every request, login, and the pages."""
 
+import asyncio
 import logging
+from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import sqlcipher3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import db
-from app.web import queries, security
+from app.config import ConfigError, load_config
+from app.fetch import Fetcher
+from app.web import actions, queries, security
+from app.web.collector import Collector
 
 HERE = Path(__file__).parent
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
@@ -22,19 +28,28 @@ EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
 log = logging.getLogger("app.web")
 MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
+SCHEDULE_CHECK_SECONDS = 60
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
 templates.env.globals["US_LABELS"] = queries.US_LABELS
 
 
-def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI:
+def create_app(
+    data_dir: Path, logins: security.Logins | None = None, new_fetcher: Callable[[], Fetcher] = Fetcher
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         with closing(db.connect(data_dir)) as conn:  # opened here, so pages use it from the server's own thread
             app.state.conn = conn
-            yield
+            schedule = asyncio.create_task(_schedule(app))
+            try:
+                yield
+            finally:  # the dashboard is closing: so are the schedule and any collection
+                schedule.cancel()
+                await asyncio.to_thread(app.state.collector.stop)
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
+    app.state.collector = Collector(data_dir, new_fetcher)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
@@ -100,11 +115,80 @@ def create_app(data_dir: Path, logins: security.Logins | None = None) -> FastAPI
         job = queries.job(request.app.state.conn, job_id) if job_id <= MAX_JOB_ID else None
         if job is None:
             raise HTTPException(404)
-        back = request.query_params.get("back", "")
-        back = back if back.startswith("/?") and len(back) <= 4000 else "/"  # only the dashboard's own list addresses
-        return _page(request, "job.html", job=job, back=back)
+        return _page(request, "job.html", job=job, back=_back(request.query_params.get("back", "")))
+
+    @app.post("/jobs/{job_id:int}/not-interested")
+    async def not_interested(request: Request, job_id: int) -> Response:
+        form = request.state.form
+        if not actions.set_not_interested(request.app.state.conn, job_id, form.get("value") == "1"):
+            raise HTTPException(404)
+        return _to_job(job_id, form)
+
+    @app.post("/jobs/{job_id:int}/location")
+    async def fix_location(request: Request, job_id: int) -> Response:
+        form = request.state.form
+        if form.get("choice") not in ("yes", "no", "auto"):
+            raise HTTPException(400, "Choose US, not US, or let collections decide again.")
+        if not actions.set_location(request.app.state.conn, job_id, form["choice"]):
+            raise HTTPException(404)
+        return _to_job(job_id, form)
+
+    @app.get("/add")
+    async def add_page(request: Request) -> Response:
+        return _page(request, "add.html", form={})
+
+    @app.post("/add/job")
+    async def add_job(request: Request) -> Response:
+        form = request.state.form
+        with closing(new_fetcher()) as fetcher:  # beside the dashboard: sites can take a while to answer
+            message, job_id = await run_in_threadpool(
+                actions.add_job, data_dir, fetcher, form.get("link", ""), form.get("company", ""),
+                form.get("title", ""),
+            )  # fmt: skip
+        return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
+
+    @app.post("/add/company")
+    async def add_company(request: Request) -> Response:
+        form = request.state.form
+        with closing(new_fetcher()) as fetcher:
+            lines = await run_in_threadpool(actions.add_company, data_dir, fetcher, form.get("name", ""))
+        return _page(request, "add.html", form=form, company_lines=lines)
+
+    @app.get("/collect")
+    async def collect_page(request: Request) -> Response:
+        return _collect_page(request)
+
+    @app.post("/collect")
+    async def collect_now(request: Request) -> Response:
+        return _collect_page(request, refused=request.app.state.collector.start())
+
+    @app.get("/collect/progress")
+    async def collect_progress(request: Request) -> Response:
+        return _page(request, "collect_progress.html", collector=request.app.state.collector)
 
     return app
+
+
+async def _schedule(app: FastAPI) -> None:
+    """The schedule's check, once a minute while the dashboard is open."""
+    while True:
+        await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
+        try:
+            app.state.collector.tick(app.state.conn)
+        except Exception as error:  # e.g. the database busy for a moment: try again next minute
+            log.error("Schedule check failed: %s", type(error).__name__)
+
+
+def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:
+    try:
+        every, settings_error = load_config().collect_every_hours, None
+    except ConfigError as error:
+        every, settings_error = 0, str(error)
+    runs = queries.last_runs(request.app.state.conn)
+    return _page(
+        request, "collect.html", collector=request.app.state.collector, refused=refused, runs=runs, every=every,
+        settings_error=settings_error,
+    )  # fmt: skip
 
 
 async def _checked(request: Request, call_next) -> Response:
@@ -142,6 +226,16 @@ async def _form(request: Request) -> dict[str, str]:
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "The form could not be read.") from None
     return {name: values[-1] for name, values in fields.items()}
+
+
+def _back(address: str) -> str:
+    """The list view to go back to: only the dashboard's own list addresses, else the first view."""
+    return address if address.startswith("/?") and len(address) <= 4000 else "/"
+
+
+def _to_job(job_id: int, form: dict[str, str]) -> Response:
+    """Back to the job's page after a change, keeping the way back to the list."""
+    return RedirectResponse(f"/jobs/{job_id}?back={quote(_back(form.get('back', '')), safe='')}", 303)
 
 
 def _to_login(request: Request) -> Response:

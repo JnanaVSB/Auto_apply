@@ -35,3 +35,9 @@ table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
 .details dd { margin: 0; }
 .address { word-break: break-all; user-select: all; }
 .description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 50rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: center; margin: 0.5rem 0 1rem; }
+.stacked { display: grid; gap: 0.5rem; max-width: 40rem; }
+.stacked label { display: grid; gap: 0.2rem; }
+.result { border-left: 3px solid var(--accent); padding: 0.25rem 0.75rem; }
+.lines { white-space: pre-wrap; background: var(--line); padding: 0.5rem 0.75rem; border-radius: 4px; max-height: 30rem;
+  overflow-y: auto; }

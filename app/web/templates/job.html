@@ -17,6 +17,26 @@
   {% endif %}
 </p>
 
+<div class="actions">
+  <form method="post" action="/jobs/{{ job.id }}/not-interested">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    {% if job.not_interested %}
+    <input type="hidden" name="value" value="0"><button type="submit">Undo "not interested"</button>
+    {% else %}
+    <input type="hidden" name="value" value="1"><button type="submit">Not interested</button>
+    {% endif %}
+  </form>
+  <form method="post" action="/jobs/{{ job.id }}/location">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <span class="muted">Location:</span>
+    <button type="submit" name="choice" value="yes">US</button>
+    <button type="submit" name="choice" value="no">not US</button>
+    {% if job.location_by_you %}<button type="submit" name="choice" value="auto">Let collections decide again</button>{% endif %}
+  </form>
+</div>
+
 <dl class="details">
   <dt>Status</dt><dd>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</dd>
   <dt>Locations</dt><dd>{{ job.locations | join("; ") or "not given" }}</dd>
