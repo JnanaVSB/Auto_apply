@@ -182,6 +182,7 @@ def command(data_dir, monkeypatch, capsys):
     monkeypatch.setattr(web_command, "load_config", lambda: Config(data_dir=data_dir))
     monkeypatch.setattr(web_command.uvicorn, "run", lambda app, **options: served.append(options))
     monkeypatch.setattr(web_command.threading, "Timer", lambda *args: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(web_command, "_port_free", lambda port: True)  # never ask what runs on this computer
 
     def run(argv=(), answers=()):
         replies = iter(answers)
