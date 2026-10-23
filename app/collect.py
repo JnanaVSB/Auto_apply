@@ -46,7 +46,7 @@ class CollectError(Exception):
     """A problem the user can fix; the message says what to do."""
 
 
-def _now() -> str:
+def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
@@ -59,12 +59,17 @@ def _plural(count: int, word: str) -> str:
     return f"{count:,} {word}{'' if count == 1 else 's'}"
 
 
-def _label(source: str) -> str:
+def source_label(source: str) -> str:
     """A source as messages name it: Simplify Summer2027-Internships, Greenhouse board 'acme', added by you."""
     kind, _, name = source.partition(":")
     if kind == "simplify":
         return f"Simplify {name}"
     return f"{kind.title()} board '{name}'" if name else "added by you"
+
+
+def source_state(listed: bool, since: str | None, reason: str | None) -> str:
+    """One source's state for a job: "listed", or why it stopped (with the day the app noticed, when known)."""
+    return "listed" if listed else f"{reason} (since {since})" if since else str(reason)
 
 
 def _unavailable(counts: jobs.Counts) -> str:
@@ -78,22 +83,22 @@ def _describe(counts: jobs.Counts) -> str:
     return text + (f", {_plural(counts.skipped, 'unusable entry')} skipped" if counts.skipped else "")
 
 
-def _lock(data_dir: Path, file: str = LOCK_FILE, busy: str = BUSY) -> sqlite3.Connection:
+def lock(data_dir: Path, file: str = LOCK_FILE, busy: str = BUSY) -> sqlite3.Connection:
     """Hold an exclusive lock until closed; the operating system releases it if the program dies."""
     if not data_dir.is_dir():
         raise CollectError(
             "The data folder was not found. Check data_dir in data/config.yaml; "
             "for a brand-new install run: python -m app.db setup"
         )
-    lock = sqlite3.connect(data_dir / file, timeout=0, isolation_level=None)
+    held = sqlite3.connect(data_dir / file, timeout=0, isolation_level=None)
     try:
-        lock.execute("BEGIN EXCLUSIVE")
+        held.execute("BEGIN EXCLUSIVE")
     except sqlite3.OperationalError as error:
-        lock.close()
+        held.close()
         if error.sqlite_errorcode != sqlite3.SQLITE_BUSY:
             raise
         raise CollectError(busy) from None
-    return lock
+    return held
 
 
 @dataclass
@@ -121,7 +126,7 @@ class _Run:
 
     def read_simplify(self, listing: SimplifyList) -> None:
         name, host = simplify.source_name(listing.url), urlsplit(listing.url).hostname
-        label = _label(name)
+        label = source_label(name)
         if host in self.unreachable:
             self.skipped[host] += 1
             return
@@ -133,7 +138,7 @@ class _Run:
                 return
             data, etag = result
             found, skipped = simplify.parse(data, name, listing.level)
-            counts = jobs.save(self.conn, name, found, self.roles, _now())
+            counts = jobs.save(self.conn, name, found, self.roles, now())
         except FetchError as error:
             self.failed.append(f"{label}: {error}")
             return
@@ -141,7 +146,7 @@ class _Run:
             self.investigate.append(f"{label}: {error}")
             return
         with self.conn:  # only after a successful save, so a failed save means a fresh download next time
-            self.conn.execute(SAVE_SOURCE, (name, etag, _now()))
+            self.conn.execute(SAVE_SOURCE, (name, etag, now()))
             self.conn.executemany(LINK_BOARD, simplify.linked_boards(found).items())
         counts.skipped += skipped
         _add_up(self.total, counts)
@@ -149,7 +154,9 @@ class _Run:
 
     def read_boards(self, extra_boards: list[str]) -> None:
         """Read every board that is not retired, plus extra_boards, skipping sites that stopped answering."""
-        known = self.conn.execute("SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL")
+        known = self.conn.execute(
+            "SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"
+        )  # boards you stopped are left out; extra_boards are always read
         boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
         minutes = _plural(len(boards) * 2 // 60 + 1, "minute")
         self.out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
@@ -174,12 +181,12 @@ class _Run:
     def _read_board(self, board: str, url: str, extra: bool, counts: jobs.Counts) -> str:
         """Read and save one board; return "read", "missing", "unreachable", "failed" or "investigate"."""
         kind, _, name = board.partition(":")
-        label = _label(board)
+        label = source_label(board)
         try:
             data, _ = self.fetcher.get_json(url)
             found, skipped = BOARDS[kind].parse(data, name)
             reason = self._stopped_hiring(board, label) if not found and not skipped else None
-            board_counts = jobs.save(self.conn, board, found, self.roles, _now(), reason=reason)
+            board_counts = jobs.save(self.conn, board, found, self.roles, now(), reason=reason)
         except NotFound as error:
             self.failed.append(f"{label}: {error}")
             self._count_miss(board, label, extra, counts)
@@ -191,7 +198,7 @@ class _Run:
             self.investigate.append(f"{label}: {error}")
             return "investigate"
         with self.conn:
-            self.conn.execute(SAVE_SOURCE, (board, None, _now()))
+            self.conn.execute(SAVE_SOURCE, (board, None, now()))
         board_counts.skipped += skipped
         _add_up(counts, board_counts)
         return "read"
@@ -215,9 +222,9 @@ class _Run:
         with self.conn:
             misses = self.conn.execute(COUNT_MISS, (board,)).fetchone()[0]
             if misses >= RETIRE_AFTER and not extra:
-                self.conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (_now()[:10], board))
+                self.conn.execute("UPDATE sources SET retired_on = ? WHERE name = ?", (now()[:10], board))
                 # in the same step: its jobs are no longer listed by it, so Simplify decides for them now
-                _add_up(counts, jobs.save(self.conn, board, [], self.roles, _now(), reason=jobs.BOARD_SHUT_DOWN))
+                _add_up(counts, jobs.save(self.conn, board, [], self.roles, now(), reason=jobs.BOARD_SHUT_DOWN))
                 self.retired.append(label)
 
     def problems(self) -> list[str]:
@@ -264,7 +271,7 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
     run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords), out)
     run.check_internet()
     with conn:
-        run_id = conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (_now(),)).lastrowid
+        run_id = conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (now(),)).lastrowid
     outcome = "stopped"
     try:
         for listing in config.sources.simplify_lists:
@@ -281,13 +288,22 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
             conn.execute(
                 "UPDATE collect_runs SET finished_at = ?, outcome = ?, new_jobs = ?, updated_jobs = ?, "
                 "closed_jobs = ?, failures = ? WHERE id = ?",
-                (_now(), outcome, run.total.new, run.total.updated, unavailable, json.dumps(failures), run_id),
+                (now(), outcome, run.total.new, run.total.updated, unavailable, json.dumps(failures), run_id),
             )
     run.summary()
 
 
-def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[[str], str] = input) -> str:
-    """Save one job the user found; their role and US filters do not apply. Returns what happened."""
+def add(
+    conn: sqlcipher3.Connection,
+    fetcher: Fetcher,
+    link: str,
+    ask: Callable[[str], str] = input,
+    details: tuple[str, str] | None = None,
+) -> str:
+    """Save one job the user found; their role and US filters do not apply. Returns what happened.
+
+    For a link that is not on a job board, `details` gives the company and job title; without them, `ask` asks.
+    """
     link = link.strip()
     parts = urlsplit(link)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -311,24 +327,23 @@ def add(conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, ask: Callable[
         row = conn.execute("SELECT company, title FROM jobs WHERE apply_url = ?", (jobs.clean_link(job),)).fetchone()
         if row:
             return f"Already saved: {row[0]}, {row[1]}"
-        job.company, job.title = ask("Company: ").strip(), ask("Job title: ").strip()
+        company, title = details or (ask("Company: "), ask("Job title: "))
+        job.company, job.title = company.strip(), title.strip()
         if not job.company or not job.title:
             raise CollectError("Both the company and the job title are needed.")
-    counts = jobs.save(conn, source, [job], jobs.Roles.from_settings([], []), _now(), complete=False, chosen=True)
+    counts = jobs.save(conn, source, [job], jobs.Roles.from_settings([], []), now(), complete=False, chosen=True)
     if counts.skipped:
         raise CollectError("That link cannot be used; copy the job's address straight from the browser.")
     if posting:
         with conn:  # remembered (and no longer retired), so later collections keep this job up to date
-            conn.execute(SAVE_SOURCE, (source, None, _now()))
+            conn.execute(SAVE_SOURCE, (source, None, now()))
     return f"{'Added' if counts.new else 'Already saved'}: {job.company}, {job.title}"
 
 
 def show(conn: sqlcipher3.Connection, link: str) -> str:
     """One saved job's status, with each source's own state. Reads only."""
-    link = link.strip()
-    url = jobs.clean_link(Job(source="manual", source_job_id=link, company="", title="", url=link, locations=[]))
     sql = "SELECT id, company, title, status, status_reason FROM jobs WHERE apply_url = ?"
-    job = conn.execute(sql, (url,)).fetchone()
+    job = conn.execute(sql, (jobs.clean_url(link),)).fetchone()
     if job is None:
         raise CollectError("No saved job has that link. Copy the link exactly as it was added or collected.")
     job_id, company, title, status, reason = job
@@ -338,12 +353,11 @@ def show(conn: sqlcipher3.Connection, link: str) -> str:
         (job_id,),
     )
     for source, listed, since, why in entries:
-        state = "listed" if listed else f"{why} (since {since})" if since else why
-        lines.append(f"  - {_label(source)}: {state}")
+        lines.append(f"  - {source_label(source)}: {source_state(listed, since, why)}")
     return "\n".join(lines)
 
 
-def _check_settings(config: Config) -> None:
+def check_settings(config: Config) -> None:
     if not (config.roles.simplify_categories or config.roles.keywords):
         raise CollectError("No roles set in data/config.yaml. Copy the 'roles' section from config.example.yaml.")
     if not (config.sources.simplify_lists or config.sources.extra_boards):
@@ -359,9 +373,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config()
         if args.command is None:
-            _check_settings(config)
+            check_settings(config)
         with (
-            closing(_lock(config.data_dir)),  # first, so two copies can never both upgrade the database
+            closing(lock(config.data_dir)),  # first, so two copies can never both upgrade the database
             closing(db.connect(config.data_dir)) as conn,
             closing(Fetcher()) as fetcher,
         ):

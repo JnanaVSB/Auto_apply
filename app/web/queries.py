@@ -10,8 +10,8 @@ from urllib.parse import parse_qs, urlencode
 import sqlcipher3
 
 from app import jobs
-from app.collect import _label
-from app.sources import Job
+from app.collect import source_label, source_state
+from app.sources import is_simplify_site
 
 PAGE_SIZE = 50
 MAX_TEXT = 200
@@ -28,6 +28,7 @@ OPTIONS = {  # every value a list filter accepts; anything else in the address i
     "hidden": ("hide", "show", "only"),
     "sort": ("posted", "found", "company", "title"),
 }  # fmt: skip
+DIGITS = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
 SOURCE = re.compile(r"(simplify|greenhouse|lever|ashby)(:[\w.-]+)?|manual")  # a kind, or one list or board
 SORTS = {
     "posted": "date_posted IS NULL, date_posted DESC, id DESC",  # jobs with no date go last
@@ -43,7 +44,8 @@ LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, che
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
     added_by_you, check_location, location_by_you, not_interested"""
-SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok
+SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
+        r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%'
     FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
 
 
@@ -107,7 +109,7 @@ class Filters:
             added=one("added") == "1",
             hidden=one("hidden") or cls.hidden,
             sort=one("sort") or cls.sort,
-            page=max(1, int(page)) if page.isdigit() else 1,
+            page=max(1, int(page)) if DIGITS.fullmatch(page) else 1,
         )
 
     def address(self, **changes) -> str:
@@ -225,23 +227,34 @@ def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
         return None
     found = dict(zip([column[0] for column in rows.description], row, strict=True))
     found["locations"], found["terms"] = json.loads(found["locations"]), json.loads(found["terms"])
+    # checked again here, not only when the job was first saved: the app must never open simplify.jobs
+    found["open_manually_only"] = bool(found["open_manually_only"]) or is_simplify_site(found["apply_url"])
     found["sources"] = [
         {
-            "label": _label(source),
-            "state": "listed" if listed else f"{reason} (since {since})" if since else reason,
-            "board": f"board no longer read since {retired}" if retired else f"last read {read[:10]}" if read else "",
+            "label": source_label(source),
+            "state": source_state(listed, since, reason),
+            "board": _board_state(stopped, retired, read),
+            "name": source,
+            "stoppable": bool(board),  # a company board, which you can stop reading or read again
+            "stopped": bool(stopped),
         }
-        for source, listed, since, reason, retired, read in conn.execute(SOURCES_OF, (job_id,))
+        for source, listed, since, reason, retired, read, stopped, board in conn.execute(SOURCES_OF, (job_id,))
     ]
     return found
 
 
+def _board_state(stopped: str | None, retired: str | None, read: str | None) -> str:
+    """The board's own state: stopped by you, no longer read, or when it was last read."""
+    if stopped:
+        return f"stopped by you on {stopped}"
+    if retired:
+        return f"board no longer read since {retired}"
+    return f"last read {read[:10]}" if read else ""
+
+
 def job_id_by_link(conn: sqlcipher3.Connection, link: str) -> int | None:
     """The saved job with this link, cleaned the way saving cleans it."""
-    url = jobs.clean_link(
-        Job(source="manual", source_job_id=link, company="", title="", url=link.strip(), locations=[])
-    )
-    row = conn.execute("SELECT id FROM jobs WHERE apply_url = ?", (url,)).fetchone()
+    row = conn.execute("SELECT id FROM jobs WHERE apply_url = ?", (jobs.clean_url(link),)).fetchone()
     return row[0] if row else None
 
 
@@ -257,3 +270,8 @@ def last_runs(conn: sqlcipher3.Connection, count: int = 5) -> list[dict]:
          "new": new, "updated": updated, "unavailable": unavailable, "problems": len(json.loads(failures))}
         for started, outcome, new, updated, unavailable, failures in rows
     ]  # fmt: skip
+
+
+def stopped_boards(conn: sqlcipher3.Connection) -> list[tuple[str, str]]:
+    """Boards you stopped reading, with the day you stopped them."""
+    return conn.execute("SELECT name, stopped_on FROM sources WHERE stopped_on IS NOT NULL ORDER BY name").fetchall()

@@ -11,6 +11,8 @@ import sqlcipher3
 from app import collect, db, fetch, jobs
 from app.config import Config, RoleSettings, SimplifyList, SourceSettings
 
+pytestmark = pytest.mark.usefixtures("no_waiting")  # downloads never really wait
+
 LIST = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
 ACME = "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"
 GLOBEX = "https://api.lever.co/v0/postings/globex?mode=json"
@@ -53,20 +55,6 @@ class FakeWeb:
         if etag and request.headers.get("If-None-Match") == etag:
             return httpx.Response(304)
         return httpx.Response(200, json=data, headers={"ETag": etag} if etag else {})
-
-
-@pytest.fixture(autouse=True)
-def no_waiting(monkeypatch):
-    class Clock:
-        now = 0.0
-
-        def monotonic(self):
-            return self.now
-
-        def sleep(self, seconds):
-            self.now += seconds
-
-    monkeypatch.setattr(fetch, "time", Clock())
 
 
 @pytest.fixture
@@ -183,10 +171,10 @@ def test_cancelling_keeps_finished_sources_and_is_recorded(conn, data_dir):
 
 
 def test_a_second_copy_is_refused(tmp_path):
-    with closing(collect._lock(tmp_path)):
+    with closing(collect.lock(tmp_path)):
         with pytest.raises(collect.CollectError, match="already running"):
-            collect._lock(tmp_path)
-    collect._lock(tmp_path).close()  # free again once the first run has finished
+            collect.lock(tmp_path)
+    collect.lock(tmp_path).close()  # free again once the first run has finished
 
 
 def test_add_a_board_job_ignores_filters_and_remembers_the_board(conn):
@@ -367,6 +355,21 @@ def test_a_retired_boards_jobs_are_decided_by_simplify(conn, data_dir):
     ]
 
 
+def test_a_board_you_stopped_is_never_read_and_no_longer_decides(conn, data_dir):
+    run(conn, data_dir, PAGES)  # the board lists the job
+    with conn:
+        conn.execute("UPDATE sources SET stopped_on = '2026-10-22' WHERE name = 'greenhouse:acme'")
+    newer = entry(id="s-4", url="https://job-boards.greenhouse.io/acme/jobs/6", date_posted=int(time.time()) + 86400)
+    _, web = run(conn, data_dir, {LIST: ([entry(), newer], '"v2"'), ACME: {"jobs": [board_job()]}})
+    assert ACME not in requested(web)  # not even when Simplify links a newer job there
+    run(conn, data_dir, {LIST: ([entry(active=False), newer], '"v3"')})  # Simplify drops the job: it decides now
+    assert one(conn, "SELECT status, status_reason FROM jobs WHERE title = 'ML Intern' ORDER BY id") == (
+        "no longer available", "inactive on Simplify")  # fmt: skip
+    _, web = run(conn, data_dir, {ACME: {"jobs": [board_job()]}}, extra_boards=["greenhouse:acme"])
+    assert ACME in requested(web)  # listed in extra_boards by you: that wins
+    assert one(conn, "SELECT count(*) FROM jobs")[0] >= 1  # nothing deleted
+
+
 def test_a_board_empty_three_runs_in_a_row_means_the_company_stopped_hiring(conn, data_dir):
     run(conn, data_dir, PAGES)
     summaries = [run(conn, data_dir, {LIST: 404, ACME: {"jobs": []}})[0] for _ in range(3)]
@@ -417,7 +420,7 @@ def test_show_prints_a_jobs_status_and_every_source(conn, data_dir):
 
 def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeypatch):
     monkeypatch.setattr(collect.db, "connect", lambda folder: pytest.fail("opened before the lock"))
-    with closing(collect._lock(data_dir)):
+    with closing(collect.lock(data_dir)):
         assert main([], settings(data_dir)) == (1, "Error: A collection is already running. Wait for it to finish.\n")
 
 

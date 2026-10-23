@@ -313,6 +313,7 @@ def test_unreadable_file_is_not_called_a_wrong_key(data_dir, file, action):
 
 def test_locked_app_db_says_locked(data_dir, monkeypatch):
     with closing(db.connect(data_dir)) as other_program:
+        other_program.execute("PRAGMA locking_mode = EXCLUSIVE")  # in WAL mode an ordinary write never blocks readers
         other_program.execute("BEGIN EXCLUSIVE")
         monkeypatch.setattr(db.sqlcipher3, "connect", functools.partial(sqlcipher3.connect, timeout=0.1))
         with pytest.raises(db.DatabaseError, match="app.db could not be read \\(database is locked\\)"):
@@ -627,6 +628,27 @@ def test_version_6_adds_the_dashboard_marks_and_keeps_jobs(tmp_path, monkeypatch
         assert "COVERING INDEX jobs_list" in str(plan)  # the list never reads the long descriptions
     with _open_as_is(path / f"{db.DB_FILE}.bak-v5") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+def test_version_7_lets_you_stop_reading_a_board(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_6:
+        version_6.setattr(db, "UPGRADES", db.UPGRADES[:6])
+        version_6.setattr(db, "SCHEMA_VERSION", 6)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute("INSERT INTO sources (name) VALUES ('greenhouse:acme')")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT name, stopped_on FROM sources").fetchall() == [("greenhouse:acme", None)]
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v6") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+
+
+def test_the_database_uses_wal_so_readers_never_wait(data_dir):
+    with closing(db.connect(data_dir)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    with _open_as_is(data_dir / db.DB_FILE) as conn:  # kept in the file itself
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_failed_upgrade_leaves_version_1_and_can_be_retried(v1_data_dir, monkeypatch):

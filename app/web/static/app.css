@@ -44,3 +44,5 @@ table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
 textarea { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
   color: var(--text); }
 .list-row { display: grid; grid-template-columns: 1fr max-content; gap: 0.5rem; }
+form.inline { display: inline; }
+.found { border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.75rem; margin: 0.5rem 0; }

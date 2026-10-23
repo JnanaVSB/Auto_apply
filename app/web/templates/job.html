@@ -63,7 +63,17 @@
 <h2>Where this job is listed</h2>
 <ul class="sources">
   {% for source in job.sources %}
-  <li>{{ source.label }}: {{ source.state }}{% if source.board %} <span class="muted">({{ source.board }})</span>{% endif %}</li>
+  <li>{{ source.label }}: {{ source.state }}{% if source.board %} <span class="muted">({{ source.board }})</span>{% endif %}
+    {%- if source.stoppable %}
+    <form method="post" action="/boards/stop" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="board" value="{{ source.name }}">
+      <input type="hidden" name="job" value="{{ job.id }}">
+      <input type="hidden" name="back" value="{{ back }}">
+      <input type="hidden" name="value" value="{{ '0' if source.stopped else '1' }}">
+      <button type="submit">{{ "Read this board again" if source.stopped else "Stop reading this board" }}</button>
+    </form>
+    {%- endif %}</li>
   {% endfor %}
 </ul>
 

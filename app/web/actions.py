@@ -1,12 +1,15 @@
-"""Dashboard actions that change data: not interested, fix location, add a job, add a company, save the settings.
+"""Dashboard actions: not interested, fix location, add a job, find and add a company, stop reading a board,
+save the settings.
 
 Nothing here ever deletes anything. The two "add" actions contact job sites, so they run beside the dashboard with
 their own database connection.
 """
 
 import re
+import threading
 import unicodedata
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 
 import sqlcipher3
@@ -23,8 +26,14 @@ from app.web import queries
 KINDS = ("greenhouse", "lever", "ashby")
 LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
-MAX_LISTS = 20  # Simplify list rows on the settings form
+ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
+LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
+BOARD_PAGES = {  # each board's own public page, for the user to check by hand
+    "greenhouse": "https://job-boards.greenhouse.io/{}",
+    "lever": "https://jobs.lever.co/{}",
+    "ashby": "https://jobs.ashbyhq.com/{}",
+}
 NOT_FOUND_TIP = (
     "Tip: open the company's careers page; if its address contains greenhouse.io, lever.co or ashbyhq.com, type the "
     "name from that address (for example greenhouse:acme), or paste one job's link into Add job."
@@ -51,10 +60,9 @@ def set_location(conn: sqlcipher3.Connection, job_id: int, choice: str) -> bool:
 
 def add_job(data_dir: Path, fetcher: Fetcher, link: str, company: str, title: str) -> tuple[str, int | None]:
     """`collect add` with its own rules; the message, and the job's number when it is saved."""
-    answers = {"Company: ": company, "Job title: ": title}  # what `collect add` asks for in the terminal
     try:
-        with closing(db.connect(data_dir)) as conn:
-            message = collect.add(conn, fetcher, link, answers.__getitem__)
+        with ADDING, closing(db.connect(data_dir)) as conn:
+            message = collect.add(conn, fetcher, link, details=(company, title))
             return message, queries.job_id_by_link(conn, link)
     except (ConfigError, KeychainError, db.DatabaseError, collect.CollectError) as error:
         return str(error), None
@@ -73,10 +81,24 @@ def board_names(company: str) -> list[str]:
     return [name for name in dict.fromkeys(names) if BOARD_NAME.fullmatch(name)]
 
 
-def add_company(data_dir: Path, fetcher: Fetcher, text: str) -> list[str]:
-    """Find a company's board on Greenhouse, Lever and Ashby; save its matching jobs and read it on every collection.
+@dataclass
+class FoundBoard:
+    """A board that may belong to the company the user typed; shown for confirmation, not saved yet."""
 
-    `text` is a company name, or one exact board such as greenhouse:acme. Returns what happened, one line each.
+    board: str  # e.g. greenhouse:acme
+    company: str | None  # the name the board reports; Lever and Ashby report none
+    listed: int  # jobs on the board
+    matching: int  # of those, jobs a collection would save (your roles, not clearly outside the US)
+    titles: list[str]  # its first few job titles
+    page: str  # the board's own public page, to check by hand
+    known: bool  # already read on every collection
+    stopped: bool  # stopped by you
+
+
+def find_company(data_dir: Path, fetcher: Fetcher, text: str) -> tuple[list[FoundBoard], list[str]]:
+    """Look for a company's board on Greenhouse, Lever and Ashby. Saves nothing; returns the boards and notes.
+
+    `text` is a company name, or one exact board such as greenhouse:acme.
     """
     text = text.strip()[:MAX_NAME]
     kind, _, name = text.lower().partition(":")
@@ -84,20 +106,21 @@ def add_company(data_dir: Path, fetcher: Fetcher, text: str) -> list[str]:
         (kind, name) for kind in KINDS for name in board_names(text)
     ]  # fmt: skip
     if not tries:
-        return ["Type a company name, for example Acme AI, or one board such as greenhouse:acme."]
+        return [], ["Type a company name, for example Acme AI, or one board such as greenhouse:acme."]
     try:
         config = load_config()
         with closing(db.connect(data_dir)) as conn:
             return _find_boards(conn, fetcher, config, tries, text)
     except (ConfigError, KeychainError, db.DatabaseError) as error:
-        return [str(error)]
+        return [], [str(error)]
 
 
 def _find_boards(
     conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, tries: list[tuple[str, str]], text: str
-) -> list[str]:
+) -> tuple[list[FoundBoard], list[str]]:
     roles = jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords)
-    lines, done, answered = [], set(), False  # done: sites with a board found, or that could not be read
+    boards, notes, done = [], [], set()  # done: sites with a board found, or that could not be read
+    answered = False
     for kind, name in tries:
         if kind in done:
             continue
@@ -108,27 +131,71 @@ def _find_boards(
         except NotFound:
             continue
         except (FetchError, SourceError) as error:
-            lines.append(f"{kind.title()} could not be read ({error}).")
+            notes.append(f"{kind.title()} could not be read ({error}).")
             done.add(kind)
             continue
         done.add(kind)
         answered = True
         if not found:  # a guessed name with no jobs may be another company's empty board
-            lines.append(f"{board} exists but lists no jobs right now, so it was not added.")
-        elif conn.execute("SELECT 1 FROM sources WHERE name = ? AND retired_on IS NULL", (board,)).fetchone():
-            lines.append(f"{board} is already read on every collection.")
-        else:
-            counts = jobs.save(conn, board, found, roles, collect._now())
-            with conn:  # remembered (and no longer retired), so every collection reads it from now on
-                conn.execute(collect.SAVE_SOURCE, (board, None, collect._now()))
-            lines.append(
-                f"Found and added: {board} ({len(found):,} jobs on the board, {counts.kept:,} match your roles "
-                "and are saved)."
-            )
+            notes.append(f"{board} exists but lists no jobs right now, so it cannot be added.")
+            continue
+        state = conn.execute("SELECT retired_on IS NULL, stopped_on IS NOT NULL FROM sources WHERE name = ?", (board,))
+        read, stopped = state.fetchone() or (False, False)
+        boards.append(
+            FoundBoard(
+                board,
+                found[0].company if kind == "greenhouse" else None,
+                len(found),
+                sum(jobs.wanted(job, roles) for job in found),
+                [job.title for job in found[:3]],
+                BOARD_PAGES[kind].format(name),
+                bool(read and not stopped),
+                bool(stopped),
+            )  # fmt: skip
+        )
     if not answered:
         tried = ", ".join(dict.fromkeys(name for _, name in tries))
-        lines.append(f"No Greenhouse, Lever or Ashby board found for '{text}' (tried {tried}). {NOT_FOUND_TIP}")
-    return lines
+        notes.append(f"No Greenhouse, Lever or Ashby board found for '{text}' (tried {tried}). {NOT_FOUND_TIP}")
+    return boards, notes
+
+
+def add_board(data_dir: Path, fetcher: Fetcher, board: str) -> str:
+    """After the user confirmed it: save one board's matching jobs and read it on every collection."""
+    kind, _, name = board.partition(":")
+    if kind not in KINDS or not BOARD_NAME.fullmatch(name):
+        return "That is not a board name such as greenhouse:acme."
+    try:
+        config = load_config()
+        roles = jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords)
+        with ADDING, closing(db.connect(data_dir)) as conn:
+            data, _ = fetcher.get_json(collect.BOARDS[kind].api_url(name))
+            found, _ = collect.BOARDS[kind].parse(data, name)
+            if not found:
+                return f"{board} lists no jobs right now, so it was not added."
+            counts = jobs.save(conn, board, found, roles, collect.now())
+            with conn:  # remembered (no longer retired or stopped), so every collection reads it from now on
+                conn.execute(collect.SAVE_SOURCE, (board, None, collect.now()))
+                conn.execute("UPDATE sources SET stopped_on = NULL WHERE name = ?", (board,))
+    except NotFound:
+        return f"{board} was not found; it may have closed."
+    except (FetchError, SourceError) as error:
+        return f"{kind.title()} could not be read ({error})."
+    except (ConfigError, KeychainError, db.DatabaseError) as error:
+        return str(error)
+    return (
+        f"Added: {board} ({len(found):,} jobs on the board, {counts.kept:,} match your roles and are saved). "
+        "It is read on every collection from now on."
+    )
+
+
+def set_board_stopped(conn: sqlcipher3.Connection, board: str, stopped: bool) -> bool:
+    """Stop reading a company board, or read it again. Deletes nothing; False when there is no such board."""
+    with conn:
+        rows = conn.execute(
+            "UPDATE sources SET stopped_on = ? WHERE name = ? AND name NOT LIKE 'simplify:%'",
+            (collect.now()[:10] if stopped else None, board),
+        )
+    return rows.rowcount == 1
 
 
 def _lines(text: str) -> list[str]:
@@ -158,6 +225,7 @@ def save_settings(form: dict[str, str]) -> str | None:
     The data folder is kept exactly as written in the file; it is changed by hand only.
     """
     path, hours = settings_file.CONFIG_PATH, form.get("collect_every_hours", "").strip()
+    rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
     new = path.with_name(f"{path.name}.new")
     try:
         settings = {
@@ -169,12 +237,12 @@ def save_settings(form: dict[str, str]) -> str | None:
             "sources": {
                 "simplify_lists": [
                     {"url": form[f"list_url_{number}"].strip(), "level": form.get(f"list_level_{number}", "")}
-                    for number in range(MAX_LISTS + 1)
-                    if form.get(f"list_url_{number}", "").strip()
+                    for number in rows
+                    if form[f"list_url_{number}"].strip()
                 ],
                 "extra_boards": _lines(form.get("extra_boards", "")),
             },
-            "collect_every_hours": int(hours) if hours.isdigit() else hours,
+            "collect_every_hours": int(hours) if re.fullmatch(r"[0-9]+", hours) else hours,  # "²" is not a number
         }
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)

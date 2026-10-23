@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
@@ -24,8 +25,10 @@ from app.web.collector import Collector
 HERE = Path(__file__).parent
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
 MAX_FORM_BYTES = 64 * 1024
+DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
+BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
 MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 SCHEDULE_CHECK_SECONDS = 60
@@ -39,6 +42,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         with closing(db.connect(data_dir)) as conn:  # opened here, so pages use it from the server's own thread
+            conn.execute(f"PRAGMA busy_timeout = {BUSY_WAIT_MS}")
             app.state.conn = conn
             schedule = asyncio.create_task(_schedule(app))
             try:
@@ -88,7 +92,8 @@ def create_app(
             row = request.app.state.conn.execute("SELECT password_hash FROM dashboard_login").fetchone()
             if row is None:
                 raise HTTPException(503, "No dashboard password is set. Run: python -m app.web reset-password")
-            token = logins.log_in(request.state.form.get("password", ""), row[0])
+            # the slow password check runs beside the server's own thread, so other pages keep answering
+            token = await run_in_threadpool(logins.log_in, request.state.form.get("password", ""), row[0])
             if token:
                 response = RedirectResponse("/", 303)
                 response.set_cookie(security.COOKIE, token, httponly=True, samesite="strict", path="/")
@@ -112,7 +117,7 @@ def create_app(
 
     @app.get("/jobs/{job_id:int}")
     async def job_page(request: Request, job_id: int) -> Response:
-        job = queries.job(request.app.state.conn, job_id) if job_id <= MAX_JOB_ID else None
+        job = queries.job(request.app.state.conn, _known(job_id))
         if job is None:
             raise HTTPException(404)
         return _page(request, "job.html", job=job, back=_back(request.query_params.get("back", "")))
@@ -120,7 +125,7 @@ def create_app(
     @app.post("/jobs/{job_id:int}/not-interested")
     async def not_interested(request: Request, job_id: int) -> Response:
         form = request.state.form
-        if not actions.set_not_interested(request.app.state.conn, job_id, form.get("value") == "1"):
+        if not actions.set_not_interested(request.app.state.conn, _known(job_id), form.get("value") == "1"):
             raise HTTPException(404)
         return _to_job(job_id, form)
 
@@ -129,7 +134,7 @@ def create_app(
         form = request.state.form
         if form.get("choice") not in ("yes", "no", "auto"):
             raise HTTPException(400, "Choose US, not US, or let collections decide again.")
-        if not actions.set_location(request.app.state.conn, job_id, form["choice"]):
+        if not actions.set_location(request.app.state.conn, _known(job_id), form["choice"]):
             raise HTTPException(404)
         return _to_job(job_id, form)
 
@@ -148,19 +153,36 @@ def create_app(
         return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
 
     @app.post("/add/company")
-    async def add_company(request: Request) -> Response:
+    async def find_company(request: Request) -> Response:
         form = request.state.form
+        with closing(new_fetcher()) as fetcher:  # finds only; nothing is saved until "Add" is pressed
+            boards, notes = await run_in_threadpool(actions.find_company, data_dir, fetcher, form.get("name", ""))
+        return _page(request, "add.html", form=form, found=boards, company_lines=notes)
+
+    @app.post("/add/board")
+    async def add_board(request: Request) -> Response:
         with closing(new_fetcher()) as fetcher:
-            lines = await run_in_threadpool(actions.add_company, data_dir, fetcher, form.get("name", ""))
-        return _page(request, "add.html", form=form, company_lines=lines)
+            line = await run_in_threadpool(actions.add_board, data_dir, fetcher, request.state.form.get("board", ""))
+        return _page(request, "add.html", form={}, company_lines=[line])
+
+    @app.post("/boards/stop")
+    async def stop_board(request: Request) -> Response:
+        form = request.state.form
+        if not actions.set_board_stopped(request.app.state.conn, form.get("board", ""), form.get("value") == "1"):
+            raise HTTPException(404)
+        job = form.get("job", "")
+        return _to_job(_known(int(job)), form) if DIGITS.fullmatch(job) else RedirectResponse("/settings", 303)
 
     @app.get("/collect")
     async def collect_page(request: Request) -> Response:
-        return _collect_page(request)
+        collector = request.app.state.collector
+        notice, collector.notice = collector.notice, None  # shown once
+        return _collect_page(request, refused=notice)
 
     @app.post("/collect")
     async def collect_now(request: Request) -> Response:
-        return _collect_page(request, refused=request.app.state.collector.start())
+        request.app.state.collector.notice = request.app.state.collector.start()
+        return RedirectResponse("/collect", 303)  # so reloading the page never starts another collection
 
     @app.get("/collect/progress")
     async def collect_progress(request: Request) -> Response:
@@ -207,10 +229,10 @@ def _settings_page(request: Request, problem: str | None = None, typed: dict[str
         form = actions.settings_form() | {name: value for name, value in (typed or {}).items() if name != "data_dir"}
     except ConfigError as error:
         return _page(request, "settings.html", file_problem=str(error))
-    rows = sum(1 for name in form if name.startswith("list_url_")) + 1  # one empty row to add a list
+    rows = sum(1 for name in form if actions.LIST_ROW.fullmatch(name)) + 1  # every list, plus one empty row
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
-        rows=min(rows, actions.MAX_LISTS + 1),
+        rows=rows, stopped=queries.stopped_boards(request.app.state.conn),
     )  # fmt: skip
 
 
@@ -239,16 +261,28 @@ async def _checked(request: Request, call_next) -> Response:
 
 async def _form(request: Request) -> dict[str, str]:
     """A small text form, read with Python's own parser; the last value wins for a repeated name."""
-    if int(request.headers.get("content-length") or 0) > MAX_FORM_BYTES:
+    size = request.headers.get("content-length", "0")
+    if not DIGITS.fullmatch(size):
+        raise HTTPException(400, "The form could not be read.")
+    if int(size) > MAX_FORM_BYTES:
         raise HTTPException(413, "Too much data.")
-    body = await request.body()
-    if len(body) > MAX_FORM_BYTES:
-        raise HTTPException(413, "Too much data.")
+    body = bytearray()
+    async for chunk in request.stream():  # piece by piece, so a huge upload is refused before it fills memory
+        body += chunk
+        if len(body) > MAX_FORM_BYTES:
+            raise HTTPException(413, "Too much data.")
     try:
         fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=500)
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "The form could not be read.") from None
     return {name: values[-1] for name, values in fields.items()}
+
+
+def _known(job_id: int) -> int:
+    """A job number the database can hold; anything larger is "Page not found"."""
+    if job_id > MAX_JOB_ID:
+        raise HTTPException(404)
+    return job_id
 
 
 def _back(address: str) -> str:

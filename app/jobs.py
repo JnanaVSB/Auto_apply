@@ -67,7 +67,8 @@ UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
     unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
 # Every source entry of the jobs `source` has. 'closed' is never set or changed here; it is left for a later phase.
 ENTRIES = """SELECT j.id, j.status, j.status_reason, s.listed, s.unlisted_on, s.unlisted_reason,
-        s.source NOT LIKE 'simplify:%', s.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL
+        s.source NOT LIKE 'simplify:%', s.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL,
+        r.stopped_on IS NOT NULL
     FROM jobs j JOIN job_sources s ON s.job_id = j.id LEFT JOIN sources r ON r.name = s.source
     WHERE j.status != 'closed' AND j.id IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY j.id"""
 
@@ -110,6 +111,7 @@ class _Entry(NamedTuple):
     reason: str | None
     board: bool  # a company board (or a job you added), not a Simplify list
     live_board: bool  # ... that is still read (not retired)
+    stopped: bool  # a board you stopped reading: it no longer decides
 
 
 def us_location(job: Job) -> str:
@@ -125,6 +127,11 @@ def _judge(place: str, country: str | None) -> str:
     if country and not places.REMOTE_ONLY.fullmatch(country):
         return "us" if places.US_WORDS.search(country) else "foreign"
     return places.classify(place)
+
+
+def wanted(job: Job, roles: Roles) -> bool:
+    """A job a collection adds: still listed, one of the user's roles, and not clearly outside the US."""
+    return job.listed and roles.match(job) and us_location(job) != "no"
 
 
 def level(job: Job) -> str:
@@ -157,6 +164,12 @@ def clean_link(job: Job) -> str | None:
     fragment = parts.fragment if parts.fragment.startswith(("/", "!/")) else ""  # "#/jobs/123" is the job's page
     host = parts.netloc.lower().removesuffix(".")  # "example.com." is the same site
     return urlunsplit(("https", host, parts.path.rstrip("/"), urlencode(query), fragment))
+
+
+def clean_url(link: str) -> str | None:
+    """A link typed or pasted by the user, cleaned the way saving cleans it."""
+    link = link.strip()
+    return clean_link(Job(source="manual", source_job_id=link, company="", title="", url=link, locations=[]))
 
 
 def match_key(job: Job) -> str:
@@ -224,7 +237,7 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     }
     new = job_id is None
     if new:
-        if not job.listed or (not chosen and (us == "no" or not roles.match(job))):  # foreign: never added
+        if not (job.listed and (chosen or wanted(job, roles))):
             return
         values = fields | {"apply_url": url, "match_key": match_key(job), "now": now, "chosen": chosen}
         values["manual"] = is_simplify_site(url)
@@ -289,8 +302,11 @@ def _status(entries: list[_Entry]) -> tuple[str, str | None]:
 
 def _refresh_status(conn: sqlcipher3.Connection, source: str, counts: Counts) -> None:
     rows = conn.execute(ENTRIES, (source,)).fetchall()
-    for (job_id, old_status, old_reason), entries in groupby(rows, key=itemgetter(0, 1, 2)):
-        status, reason = _status([_Entry(*row[3:]) for row in entries])
+    for (job_id, old_status, old_reason), rows_of_job in groupby(rows, key=itemgetter(0, 1, 2)):
+        entries = [entry for entry in (_Entry(*row[3:]) for row in rows_of_job) if not entry.stopped]
+        if not entries:  # only on boards you stopped: the job keeps its status
+            continue
+        status, reason = _status(entries)
         if (status, reason) != (old_status, old_reason):
             conn.execute("UPDATE jobs SET status = ?, status_reason = ? WHERE id = ?", (status, reason, job_id))
             if old_status == "open":

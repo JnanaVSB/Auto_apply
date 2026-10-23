@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import math
 import secrets
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,7 +15,7 @@ IDLE_SECONDS = 30 * 60
 MAX_SESSION_SECONDS = 12 * 60 * 60
 MAX_WRONG = 5  # wrong passwords in a row before login is locked
 LOCKOUT_SECONDS = 15 * 60
-COOKIE = "session"
+COOKIE = "auto_apply_session"  # not the common "session": cookies are shared by every web program on 127.0.0.1
 SAFETY_HEADERS = {
     # only the dashboard's own files; no inline scripts, nothing from the internet, never inside another site's page
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
@@ -60,22 +61,29 @@ class Logins:
     sessions: dict[str, Session] = field(default_factory=dict)
     wrong: int = 0
     locked_until: float = 0.0
+    _checking: threading.Lock = field(default_factory=threading.Lock, repr=False)  # one password check at a time
 
     def locked_minutes(self) -> int:
         """Minutes left of a lock-out; 0 when login is allowed."""
         return max(0, math.ceil((self.locked_until - self.clock()) / 60))
 
     def log_in(self, password: str, stored: str) -> str | None:
-        """A new session's cookie value for the right password, None for a wrong one. Not for use while locked."""
-        if not password_matches(password, stored):
-            self.wrong += 1
-            if self.wrong >= MAX_WRONG:
-                self.wrong, self.locked_until = 0, self.clock() + LOCKOUT_SECONDS
-            return None
-        self.wrong, now = 0, self.clock()
-        token = secrets.token_urlsafe(32)  # a fresh one at every login
-        self.sessions[token] = Session(secrets.token_urlsafe(32), now, now)
-        return token
+        """A new session's cookie value for the right password, None for a wrong one.
+
+        Checks run one at a time, so guesses sent all at once still lock login after MAX_WRONG.
+        """
+        with self._checking:
+            if self.locked_minutes():
+                return None
+            if not password_matches(password, stored):
+                self.wrong += 1
+                if self.wrong >= MAX_WRONG:
+                    self.wrong, self.locked_until = 0, self.clock() + LOCKOUT_SECONDS
+                return None
+            self.wrong, now = 0, self.clock()
+            token = secrets.token_urlsafe(32)  # a fresh one at every login
+            self.sessions[token] = Session(secrets.token_urlsafe(32), now, now)
+            return token
 
     def session(self, token: str | None) -> Session | None:
         """The live session for this cookie, marked as used now; an ended one is forgotten."""

@@ -40,11 +40,31 @@
   <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)
     <input name="collect_every_hours" type="number" min="0" max="168" step="1" value="{{ form.collect_every_hours }}"></label>
 
+  <h2>Boards you stopped</h2>
+  {% if stopped %}
+  <p class="hint">Never read by a collection until you read them again. Nothing was deleted.</p>
+  <ul>
+    {% for name, since in stopped %}
+    <li>{{ name }} <span class="muted">(since {{ since }})</span>
+      <button type="submit" form="read-{{ loop.index }}">Read again</button></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">None. To stop reading a board, open one of its jobs and use "Stop reading this board".</p>
+  {% endif %}
+
   <h2>Data folder</h2>
   <p><code>{{ form.data_dir }}</code> <span class="muted">(changed only by hand in data/config.yaml)</span></p>
 
   <p class="hint">Saving rewrites data/config.yaml with these settings; comments you wrote in that file are not kept.</p>
   <button type="submit">Save settings</button>
 </form>
+{% for name, since in stopped or [] %}
+<form method="post" action="/boards/stop" id="read-{{ loop.index }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="board" value="{{ name }}">
+  <input type="hidden" name="value" value="0">
+</form>
+{% endfor %}
 {% endif %}
 {% endblock %}

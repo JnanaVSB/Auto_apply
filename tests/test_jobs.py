@@ -370,3 +370,11 @@ def test_non_english_text_and_quotes_are_stored_as_is(conn):
     odd = job(title="Ingénieur ML « IA » 機械学習 O'Brien", description='He said "RL"; DROP TABLE jobs;--')
     jobs.save(conn, "greenhouse:acme", [odd], ROLES, NOW)
     assert rows(conn, "title, description") == [(odd.title, odd.description)]
+
+
+def test_a_job_only_on_a_board_you_stopped_keeps_its_status(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    with conn:
+        conn.execute("INSERT INTO sources (name, stopped_on) VALUES ('greenhouse:acme', '2026-10-20')")
+    jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)  # even if that board is read once more and lists nothing
+    assert rows(conn) == [("Machine Learning Engineer", "open")]

@@ -1,58 +1,16 @@
 """Dashboard login and safety checks, with a throwaway database, a fake clock and the fake keychain."""
 
+import hashlib
+import threading
 from contextlib import closing
 
 import pytest
-from fastapi.testclient import TestClient
+from web_helpers import PASSWORD, csrf, log_in
 
 from app import collect, db
 from app.config import Config
 from app.web import __main__ as web_command
 from app.web import main, security
-
-PASSWORD = "fake dashboard words here"  # noqa: S105 (fake value, tests only)
-ADDRESS = "http://127.0.0.1:8765"
-
-
-class Clock:
-    now = 1_000.0
-
-    def __call__(self):
-        return self.now
-
-
-@pytest.fixture(autouse=True)
-def quick_hash(monkeypatch):
-    monkeypatch.setattr(db, "RECOVERY_KDF_ITER", 1_000)
-    monkeypatch.setattr(security, "SCRYPT", {"n": 2**10, "r": 8, "p": 1})  # the app always uses the full cost
-
-
-@pytest.fixture
-def data_dir(tmp_path):
-    path = tmp_path / "data"
-    db.setup(path, "fake-master-password-1")
-    with closing(db.connect(path)) as conn, conn:
-        conn.execute(web_command.SAVE_LOGIN, (security.hash_password(PASSWORD), "now"))
-    return path
-
-
-@pytest.fixture
-def clock():
-    return Clock()
-
-
-@pytest.fixture
-def client(data_dir, clock):
-    with TestClient(main.create_app(data_dir, security.Logins(clock=clock)), base_url=ADDRESS) as client:
-        yield client
-
-
-def log_in(client, password=PASSWORD):
-    return client.post("/login", data={"password": password}, follow_redirects=False)
-
-
-def csrf(client):
-    return client.app.state.logins.sessions[client.cookies[security.COOKIE]].csrf
 
 
 def test_password_hash_is_salted_and_never_holds_the_password():
@@ -227,13 +185,13 @@ def test_reset_password_does_not_start_the_dashboard(command):
 
 
 def test_a_second_dashboard_is_refused(command, data_dir):
-    with closing(collect._lock(data_dir, web_command.DASHBOARD_LOCK)):
+    with closing(collect.lock(data_dir, web_command.DASHBOARD_LOCK)):
         code, output, served = command()
     assert (code, "already running in another window" in output.err, served) == (1, True, [])
 
 
 def test_dashboard_waits_for_a_running_collection(command, data_dir):
-    with closing(collect._lock(data_dir)):
+    with closing(collect.lock(data_dir)):
         code, output, _ = command()
     assert (code, "A collection is running" in output.err) == (1, True)
 
@@ -254,3 +212,31 @@ def test_start_with_the_keychain_entry_missing_says_how_to_recover(command, fake
     fake_keychain.store.clear()
     code, output, served = command()
     assert (code, "Run: python -m app.db recover" in output.err, served) == (1, True, [])
+
+
+@pytest.mark.parametrize("size", ["abc", "-5", "1e3", " 12"])
+def test_a_form_size_that_is_not_a_number_is_refused(client, size):
+    response = client.post("/login", content=b"password=x", headers={"Content-Length": size})
+    assert (response.status_code, "The form could not be read." in response.text) == (400, True)
+
+
+def test_a_huge_form_sent_in_pieces_is_refused_before_it_fills_memory(client):
+    pieces = (b"x" * 16384 for _ in range(1000))  # 16 MB, with no size given in advance
+    response = client.post("/login", content=pieces)
+    assert response.status_code == 413
+
+
+def test_guesses_sent_all_at_once_still_lock_login(clock):
+    logins, stored = security.Logins(clock=clock), security.hash_password(PASSWORD)
+    guesses = [threading.Thread(target=logins.log_in, args=("wrong guess", stored)) for _ in range(20)]
+    for guess in guesses:
+        guess.start()
+    for guess in guesses:
+        guess.join(10)
+    assert logins.locked_minutes() == 15 and logins.log_in(PASSWORD, stored) is None
+
+
+def test_the_local_htmx_file_is_the_recorded_release():
+    """README: htmx.org@2.0.11, dist/htmx.min.js. Any change to the file, by accident or not, fails here."""
+    content = (main.HERE / "static" / "htmx.min.js").read_bytes()
+    assert hashlib.sha256(content).hexdigest() == "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"

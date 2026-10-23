@@ -3,14 +3,13 @@
 from urllib.parse import quote
 
 import pytest
-from test_web_jobs import add_job, conn  # noqa: F401 (shared helper and fixture)
-from test_web_security import client, clock, data_dir, log_in, quick_hash  # noqa: F401 (shared fixtures)
+from web_helpers import add_job, log_in
 
 from app.web import queries
 
 
 @pytest.fixture
-def page(client, conn):  # noqa: F811
+def page(client, conn):
     """Log in, then open a job's page by its number."""
     log_in(client)
 
@@ -20,7 +19,7 @@ def page(client, conn):  # noqa: F811
     return open_job
 
 
-def test_every_detail_is_shown(conn, page):  # noqa: F811
+def test_every_detail_is_shown(conn, page):
     with conn:
         job_id = add_job(
             conn, "ML Intern", company="Acme", locations='["Austin, TX", "Remote", "Boston, MA"]',
@@ -35,7 +34,7 @@ def test_every_detail_is_shown(conn, page):  # noqa: F811
         assert shown in text
 
 
-def test_every_source_is_shown_with_its_own_state(conn, page):  # noqa: F811
+def test_every_source_is_shown_with_its_own_state(conn, page):
     with conn:
         job_id = add_job(conn, "ML Intern", sources=(), status="no longer available", status_reason="board shut down")
         conn.executemany(
@@ -55,19 +54,20 @@ def test_every_source_is_shown_with_its_own_state(conn, page):  # noqa: F811
     text = page(job_id).text
     assert "no longer available: board shut down" in text
     assert 'Greenhouse board &#39;acme&#39;: listed <span class="muted">(last read 2026-10-22)</span>' in text
+    assert text.count("Stop reading this board") == 2  # the two company boards; not Simplify, not "added by you"
     assert "Lever board &#39;gone&#39;: board shut down (since 2026-10-20)" in text
     assert "board no longer read since 2026-10-20" in text
     assert "Simplify Summer2027-Internships: reason not recorded (before 2026-10-21)</li>" in text
     assert "added by you: listed</li>" in text
 
 
-def test_a_missing_description_says_so(conn, page):  # noqa: F811
+def test_a_missing_description_says_so(conn, page):
     with conn:
         job_id = add_job(conn, "Data Scientist")
     assert "Description not fetched yet" in page(job_id).text
 
 
-def test_job_text_is_shown_as_plain_text_with_its_line_breaks(conn, page):  # noqa: F811
+def test_job_text_is_shown_as_plain_text_with_its_line_breaks(conn, page):
     with conn:
         job_id = add_job(conn, "<script>alert(1)</script>", description="Line one\n\n<b>Line</b> two")
     text = page(job_id).text
@@ -83,7 +83,7 @@ def test_job_text_is_shown_as_plain_text_with_its_line_breaks(conn, page):  # no
         ("javascript:alert(1)", 0, False),
     ],
 )
-def test_only_web_links_are_clickable_and_simplify_jobs_never(conn, page, url, manual, link):  # noqa: F811
+def test_only_web_links_are_clickable_and_simplify_jobs_never(conn, page, url, manual, link):
     with conn:
         job_id = add_job(conn, "ML Intern", apply_url=url, open_manually_only=manual)
     text = page(job_id).text
@@ -108,13 +108,13 @@ def test_a_job_that_does_not_exist_is_page_not_found(page, address):
         ("/settings", "/"),
     ],
 )
-def test_back_to_the_list_keeps_only_the_dashboards_own_addresses(conn, page, back, link):  # noqa: F811
+def test_back_to_the_list_keeps_only_the_dashboards_own_addresses(conn, page, back, link):
     with conn:
         job_id = add_job(conn, "ML Intern")
     assert f'<a href="{link}">Back to the list</a>' in page(job_id, f"?back={quote(back, safe='')}").text
 
 
-def test_the_list_links_each_job_with_the_way_back(conn, page, client):  # noqa: F811
+def test_the_list_links_each_job_with_the_way_back(conn, page, client):
     with conn:
         job_id = add_job(conn, "ML Intern", level="mid")
     text = client.get("/?f=1&level=mid").text
@@ -122,16 +122,24 @@ def test_the_list_links_each_job_with_the_way_back(conn, page, client):  # noqa:
     assert f'href="/jobs/{job_id}?back=/%3Ff%3D1%26level%3Dmid"' in text
 
 
-def test_the_job_page_needs_a_login(conn, client):  # noqa: F811
+def test_the_job_page_needs_a_login(conn, client):
     with conn:
         job_id = add_job(conn, "ML Intern")
     assert client.get(f"/jobs/{job_id}", follow_redirects=False).headers["location"] == "/login"
 
 
-def test_job_query_reads_one_job(conn):  # noqa: F811
+def test_job_query_reads_one_job(conn):
     with conn:
         job_id = add_job(conn, "ML Intern")
     assert queries.job(conn, job_id)["sources"] == [
-        {"label": "Greenhouse board 'acme'", "state": "listed", "board": ""}
-    ]
+        {"label": "Greenhouse board 'acme'", "state": "listed", "board": "", "name": "greenhouse:acme",
+         "stoppable": False, "stopped": False}  # no board record yet, so nothing to stop
+    ]  # fmt: skip
     assert queries.job(conn, job_id + 1) is None
+
+
+def test_a_simplify_jobs_link_saved_without_its_mark_is_still_never_a_link(conn, page):
+    with conn:
+        job_id = add_job(conn, "ML Intern", apply_url="https://simplify.jobs./p/9", open_manually_only=0)
+    text = page(job_id).text
+    assert 'href="https://simplify.jobs./p/9"' not in text and "the app never opens this site" in text

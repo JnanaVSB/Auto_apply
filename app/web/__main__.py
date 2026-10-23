@@ -15,7 +15,7 @@ import sqlcipher3
 import uvicorn
 
 from app import db
-from app.collect import CollectError, _lock
+from app.collect import CollectError, lock
 from app.config import ConfigError, load_config
 from app.keychain import KeychainError
 from app.web import security
@@ -31,7 +31,7 @@ def _set_password(conn: sqlcipher3.Connection) -> None:
     password = getpass.getpass(
         "New dashboard password (12+ characters; a 4-5 word passphrase, different from your master password): "
     )
-    db._check_password(password, "dashboard password")
+    db.check_password(password, "dashboard password")
     if password != getpass.getpass("Re-enter the password: "):
         raise db.DatabaseError("The two passwords do not match.")
     with conn:
@@ -55,9 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data_dir = load_config().data_dir
         busy = "The dashboard is already running in another window. Use that one, or close it first."
-        with closing(_lock(data_dir, DASHBOARD_LOCK, busy)):
+        with closing(lock(data_dir, DASHBOARD_LOCK, busy)):
             with (  # the collection lock only while opening, so an upgrade never runs during a collection
-                closing(_lock(data_dir, busy="A collection is running; start the dashboard when it finishes.")),
+                closing(lock(data_dir, busy="A collection is running; start the dashboard when it finishes.")),
                 closing(db.connect(data_dir)) as conn,
             ):
                 if args.command or not conn.execute("SELECT 1 FROM dashboard_login").fetchone():

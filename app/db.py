@@ -212,6 +212,11 @@ UPGRADES = (
     CREATE INDEX jobs_list ON jobs (not_interested, status, status_reason, us_location, check_location, level, remote,
         added_by_you, role_category, sponsorship, terms, date_posted, first_seen, company, title, locations);
     """,
+    """
+    -- A board you stopped is never read again (and no longer decides whether its jobs are open) until you say so;
+    -- nothing is deleted.
+    ALTER TABLE sources ADD COLUMN stopped_on TEXT;  -- the day you stopped it; NULL while it is read
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
@@ -237,7 +242,7 @@ def _passphrase(password: str) -> str:
     return "'" + password.replace("'", "''") + "'"
 
 
-def _check_password(password: str, name: str = "master password") -> None:
+def check_password(password: str, name: str = "master password") -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise DatabaseError(f"The {name} must be at least {MIN_PASSWORD_LENGTH} characters.")
     text = password.lower()
@@ -339,10 +344,19 @@ def _open_db(data_dir: Path, key_hex: str) -> sqlcipher3.Connection:
         if version < SCHEMA_VERSION:
             _backup(conn, data_dir, version)
             _upgrade(conn, version)
+        _use_wal(conn)  # only after the checks: a refused database is left untouched
     except BaseException:
         conn.close()
         raise
     return conn
+
+
+def _use_wal(conn: sqlcipher3.Connection) -> None:
+    """WAL: readers never wait for a writer, so the dashboard keeps working while a collection saves.
+
+    Kept in the file; while it is open SQLite adds app.db-wal and app.db-shm beside it (encrypted too).
+    """
+    conn.execute("PRAGMA journal_mode = WAL")
 
 
 def _refuse_if_set_up(data_dir: Path, replace_key: bool) -> None:
@@ -369,7 +383,7 @@ def _write_recovery(path: Path, master_password: str, key_hex: str) -> None:
 
 
 def setup(data_dir: Path, master_password: str, *, replace_key: bool = False) -> None:
-    _check_password(master_password)
+    check_password(master_password)
     _refuse_if_set_up(data_dir, replace_key)
     db_path, recovery_path = data_dir / DB_FILE, data_dir / RECOVERY_FILE
     data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -381,6 +395,7 @@ def setup(data_dir: Path, master_password: str, *, replace_key: bool = False) ->
         _write_recovery(recovery_path, master_password, key_hex)
         with closing(_connect(db_path, _raw_key(key_hex), create=True)) as conn:
             _upgrade(conn, 0)
+            _use_wal(conn)
         db_path.chmod(0o600)
         set_secret(KEY_NAME, key_hex)  # last, so a failed setup leaves nothing in the keychain
     except BaseException:
@@ -419,14 +434,14 @@ def recover(data_dir: Path, master_password: str) -> None:
 
 
 def change_master_password(data_dir: Path, old_password: str, new_password: str) -> None:
-    _check_password(new_password)
+    check_password(new_password)
     conn, _ = _open_recovery(data_dir, old_password)
     with closing(conn):
         conn.execute(f"PRAGMA rekey = {_passphrase(new_password)}")
 
 
 def new_recovery_key(data_dir: Path, master_password: str) -> None:
-    _check_password(master_password)
+    check_password(master_password)
     connect(data_dir).close()  # proves the keychain key opens app.db before it is copied
     key_hex = get_secret(KEY_NAME)
     new_path = data_dir / f"new-{RECOVERY_FILE}"

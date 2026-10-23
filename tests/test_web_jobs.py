@@ -1,41 +1,16 @@
 """The jobs list: filters, sorting, paging and safe display, on a throwaway database with made-up jobs."""
 
+import time
 from contextlib import closing
 from dataclasses import replace
-from itertools import count
 from urllib.parse import urlencode
 
 import pytest
 import sqlcipher3
-from test_web_security import client, clock, data_dir, log_in, quick_hash  # noqa: F401 (shared fixtures)
+from web_helpers import add_job, csrf, log_in
 
 from app import db
 from app.web import queries
-
-URLS = count()
-
-
-def add_job(conn, title, sources=("greenhouse:acme",), **values):
-    row = {
-        "apply_url": f"https://jobs.example/{next(URLS)}", "match_key": title, "company": "Acme", "title": title,
-        "locations": '["Austin, TX"]', "us_location": "yes", "remote": "unknown", "level": "intern",
-        "sponsorship": "unknown", "terms": "[]", "first_seen": "2026-10-01", "last_seen": "2026-10-01",
-        "status": "open",
-    } | values  # fmt: skip
-    job_id = conn.execute(
-        f"INSERT INTO jobs ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",  # noqa: S608 (test helper)
-        list(row.values()),
-    ).lastrowid
-    for source in sources:
-        conn.execute("INSERT INTO job_sources (source, source_job_id, job_id, listed) VALUES (?, ?, ?, 1)",
-                     (source, str(job_id), job_id))  # fmt: skip
-    return job_id
-
-
-@pytest.fixture
-def conn(data_dir):  # noqa: F811
-    with closing(db.connect(data_dir)) as connection:
-        yield connection
 
 
 @pytest.fixture
@@ -95,6 +70,7 @@ def test_each_filter(conn, four, address, expected):
 def test_values_the_dashboard_does_not_know_are_ignored(conn, four):
     odd = "f=1&level=wizard&posted_from=yesterday&sort=random&page=-3&source=evil.example&hidden=x&status=gone"
     assert queries.Filters.from_address(odd) == queries.Filters(status=())
+    assert queries.Filters.from_address("page=²").page == 1  # "²" counts as a digit for Python's isdigit()
     assert queries.Filters.from_address("&".join(["level=intern"] * 300)) == queries.Filters()  # absurd address
 
 
@@ -148,7 +124,7 @@ def test_the_list_reads_only_the_speed_index(conn, hidden):
     assert "COVERING INDEX jobs_list" in plan and "PRIMARY KEY" not in plan  # never a lookup in the jobs table
 
 
-def test_the_page_shows_job_text_as_plain_text(client, conn, four):  # noqa: F811
+def test_the_page_shows_job_text_as_plain_text(client, conn, four):
     with conn:
         add_job(conn, "<script>alert('job')</script>", company='Evil "Co" <img src=x onerror=alert(1)>')
     log_in(client)
@@ -160,7 +136,27 @@ def test_the_page_shows_job_text_as_plain_text(client, conn, four):  # noqa: F81
     assert "Simplify Summer2027-Internships" not in text  # no Simplify list was ever read in this database
 
 
-def test_a_busy_database_says_try_again(client, monkeypatch):  # noqa: F811
+def test_pages_keep_working_while_a_collection_saves(client, conn, data_dir):
+    with conn:
+        for number in range(3000):
+            add_job(conn, f"Job {number}")
+    log_in(client)
+    with closing(db.connect(data_dir)) as saving:  # a collection in the middle of saving a big list
+        saving.execute("PRAGMA cache_size = 10")  # a tiny memory cache, so the save spills to disk at once
+        saving.execute("BEGIN IMMEDIATE")
+        saving.execute("UPDATE jobs SET last_seen = 'now'")
+        started = time.monotonic()
+        assert "3,000 jobs" in client.get("/").text  # the list still loads, at once
+        assert client.get("/jobs/3000").status_code == 200
+        assert time.monotonic() - started < 1
+        started = time.monotonic()
+        response = client.post("/jobs/1/not-interested", data={"value": "1", "csrf_token": csrf(client)})
+        assert (response.status_code, "The database is busy" in response.text) == (503, True)  # changes wait
+        assert time.monotonic() - started < 3
+        saving.rollback()
+
+
+def test_a_busy_database_says_try_again(client, monkeypatch):
     def locked(*args):
         raise sqlcipher3.OperationalError("database is locked")
 

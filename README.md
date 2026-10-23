@@ -44,7 +44,9 @@ nothing personal is ever stored in this repository.
 
 ## Day to day
 - The database unlocks automatically from your OS keychain; you never type the master password.
-- Back up your `data/` folder regularly. It is encrypted, so a cloud or USB backup is fine.
+- Back up your `data/` folder regularly. It is encrypted, so a cloud or USB backup is fine. Close the dashboard and
+  any collection first: while they run, the latest changes are kept in `app.db-wal` and `app.db-shm` next to the
+  database (also encrypted); SQLite folds them back into `app.db` when the last one closes.
 - Lost keychain entry: `python -m app.db recover`
 - New laptop: copy your backed-up `data/` folder into the project first, then run `python -m app.db recover`
 - Change the master password: `python -m app.db change-password`
@@ -97,7 +99,8 @@ it asks you to choose a dashboard password in the terminal (12+ characters; use 
 password). Press Ctrl+C in the terminal to stop it.
 - **Jobs:** every saved job, 50 per page, with filters (source, level, US location, remote, date posted, role category,
   term, sponsorship, status and reason, added by you, not interested) and sorting. Filters stay in the page address, so
-  you can bookmark a view. Open a job to see its details, its description and every board or list it is on.
+  you can bookmark a view. Search ignores capital letters only for English letters (A–Z): "société" does not find
+  "SOCIÉTÉ". Open a job to see its details, its description and every board or list it is on.
 - **On a job's page:** mark it "not interested" (this only hides it; nothing is ever deleted), or set its location to
   US or not US. Later collections keep your choice until you click "Let collections decide again".
 - **Add:** save a job by its link (the same rules as `collect add`), or find a company's board on Greenhouse, Lever and
@@ -137,7 +140,8 @@ US and foreign place names (used to decide whether a job is in the US) come from
 They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.
 
 The dashboard uses [HTMX](https://htmx.org) (BSD Zero-Clause licence), stored in `app/web/static/` so nothing is loaded
-from the internet.
+from the internet: version 2.0.11, file `dist/htmx.min.js` from the npm package `htmx.org@2.0.11`, SHA-256
+`d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (a test checks it).
 
 ## Development
 - Run all tests: `python -m pytest`

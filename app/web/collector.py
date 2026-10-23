@@ -17,6 +17,7 @@ from app.fetch import Fetcher
 from app.keychain import KeychainError
 
 STOP_WAIT_SECONDS = 5  # how long closing the dashboard waits for a collection to stop at its next request
+START_WAIT_SECONDS = 10  # how long "Collect now" waits to hear whether the collection got its lock
 CANCELLED = "Stopped because the dashboard was closed. Sources finished before that are saved."
 log = logging.getLogger("app.web")
 
@@ -48,6 +49,7 @@ class Collector:
     new_fetcher: Callable[[], Fetcher] = Fetcher
     lines: list[str] = field(default_factory=list)  # what the command prints, line by line
     state: str = "idle"  # idle, running, done, cancelled or failed
+    notice: str | None = None  # why the last "Collect now" did not start; shown once on the Collect page
     _thread: threading.Thread | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
     _starting: threading.Lock = field(default_factory=threading.Lock)
@@ -63,24 +65,31 @@ class Collector:
                 return collect.BUSY
             try:
                 config = load_config()
-                collect._check_settings(config)
+                collect.check_settings(config)
             except (ConfigError, collect.CollectError) as error:
                 return str(error)
             answer = {"ready": threading.Event()}  # the collection says at once whether it got the lock
             self._thread = threading.Thread(target=self._run, args=(config, answer), daemon=True)
             self._thread.start()
-            answer["ready"].wait()
+            if not answer["ready"].wait(START_WAIT_SECONDS):  # a safety net: the collection always answers
+                return "The collection did not answer in time. Reload the Collect page in a moment."
             return answer.get("refused")
 
     def _run(self, config: Config, answer: dict) -> None:
+        lock = None
         try:  # taken here, since the lock must be released by the same thread that took it
-            lock = collect._lock(self.data_dir)  # the command's own lock: one collection at a time, anywhere
+            lock = collect.lock(self.data_dir)  # the command's own lock: one collection at a time, anywhere
         except collect.CollectError as error:
             answer["refused"] = str(error)
+        except Exception as error:  # e.g. a read-only data folder or a full disk
+            reason = getattr(error, "strerror", None) or error  # never a path: those include the user's name
+            answer["refused"] = f"The collection lock file could not be created ({reason})."
+        finally:  # whatever happened, "Collect now" is told at once
+            if lock is not None:
+                self.lines, self.state = [], "running"
             answer["ready"].set()
+        if lock is None:
             return
-        self.lines, self.state = [], "running"
-        answer["ready"].set()
         try:
             with closing(lock), closing(db.connect(self.data_dir)) as conn, closing(self.new_fetcher()) as fetcher:
                 collect.collect(conn, config, _Stoppable(fetcher, self._stop), self.lines.append)

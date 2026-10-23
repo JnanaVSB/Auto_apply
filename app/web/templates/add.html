@@ -27,10 +27,31 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>Company name, or one board <input name="name" required maxlength="100" value="{{ form.name or '' }}"
       placeholder="Acme AI, or greenhouse:acme"></label>
-    <p class="hint">Looks for the company's board on Greenhouse, Lever and Ashby (a few seconds). A board that is found
-      is read on every collection from now on.</p>
-    <button type="submit">Find and add</button>
+    <p class="hint">Looks for the company's board on Greenhouse, Lever and Ashby (a few seconds). Nothing is saved until
+      you check what was found and press Add.</p>
+    <button type="submit">Find</button>
   </form>
+  {% for found in found or [] %}
+  <div class="found">
+    <p><strong>{{ found.board }}</strong>:
+      {% if found.company %}the board says the company is <strong>{{ found.company }}</strong>{% else %}{{ found.board.partition(":")[0].title() }} boards do not report a company name{% endif %}.
+      {{ "{:,}".format(found.listed) }} jobs listed, {{ "{:,}".format(found.matching) }} match your roles.
+      <a href="{{ found.page }}" target="_blank" rel="noopener noreferrer">See the board's own page</a> <span class="muted">(new tab)</span></p>
+    <p class="muted">First jobs: {{ found.titles | join("; ") }}</p>
+    {% if found.known %}
+    <p>Already read on every collection.</p>
+    {% endif %}
+    <form method="post" action="{{ '/boards/stop' if found.known else '/add/board' }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="board" value="{{ found.board }}">
+      {% if found.known %}
+      <input type="hidden" name="value" value="1"><button type="submit">Stop reading this board</button>
+      {% else %}
+      <button type="submit">Add{% if found.stopped %} and read it again{% endif %}</button> <a href="/add">Cancel</a>
+      {% endif %}
+    </form>
+  </div>
+  {% endfor %}
   {% if company_lines %}
   <ul class="result" role="status">{% for line in company_lines %}<li>{{ line }}</li>{% endfor %}</ul>
   {% endif %}

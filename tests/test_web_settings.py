@@ -1,12 +1,13 @@
 """The Settings page, on a temporary settings file (never the real data/config.yaml)."""
 
 import stat
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
-from test_web_security import ADDRESS, clock, csrf, data_dir, log_in, quick_hash  # noqa: F401 (shared fixtures)
+from web_helpers import ADDRESS, csrf, log_in
 
-from app import config
+from app import config, db
 from app.config import load_config
 from app.web import actions, main, security
 
@@ -25,7 +26,7 @@ sources:
 
 
 @pytest.fixture
-def settings_file(tmp_path, data_dir, monkeypatch):  # noqa: F811
+def settings_file(tmp_path, data_dir, monkeypatch):
     path = tmp_path / "config.yaml"
     path.write_text(ORIGINAL.format(data_dir=data_dir, list=LIST), encoding="utf-8")
     monkeypatch.setattr(config, "CONFIG_PATH", path)  # the whole app reads this file
@@ -33,7 +34,7 @@ def settings_file(tmp_path, data_dir, monkeypatch):  # noqa: F811
 
 
 @pytest.fixture
-def client(data_dir, clock, settings_file):  # noqa: F811
+def client(data_dir, clock, settings_file):
     app = main.create_app(data_dir, security.Logins(clock=clock))
     with TestClient(app, base_url=ADDRESS) as client:
         log_in(client)
@@ -53,7 +54,7 @@ def save(client, **changes):
     return client.post("/settings", data=form(**changes) | {"csrf_token": csrf(client)})
 
 
-def test_the_page_shows_the_current_settings(client, data_dir):  # noqa: F811
+def test_the_page_shows_the_current_settings(client, data_dir):
     text = client.get("/settings").text
     assert ">ML\ndeep learning</textarea>" in text and ">greenhouse:acme</textarea>" in text
     assert f'name="list_url_0" type="url" maxlength="500" value="{LIST}"' in text
@@ -61,7 +62,7 @@ def test_the_page_shows_the_current_settings(client, data_dir):  # noqa: F811
     assert f"<code>{data_dir}</code>" in text
 
 
-def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_dir):  # noqa: F811
+def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_dir):
     text = save(client, keywords="ML\n\n  reinforcement learning \nML", collect_every_hours="6",
                 extra_boards="greenhouse:acme\nashby:anthropic").text  # fmt: skip
     assert "Saved. Used from the next collection or action." in text
@@ -84,6 +85,7 @@ def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_
         ({"extra_boards": "acme"}, "sources.extra_boards", ">acme</textarea>"),
         ({"collect_every_hours": "200"}, "collect_every_hours", 'value="200"'),
         ({"collect_every_hours": "soon"}, "collect_every_hours", 'value="soon"'),
+        ({"collect_every_hours": "²"}, "collect_every_hours", 'value="²"'),
     ],
 )  # fmt: skip
 def test_a_refused_save_changes_nothing_and_keeps_what_was_typed(client, settings_file, changes, problem, shown):
@@ -135,3 +137,29 @@ def test_a_broken_settings_file_is_shown_as_a_problem(client, settings_file):
     text = client.get("/settings").text
     assert "data/config.yaml is not valid YAML" in text and "Fix <code>data/config.yaml</code> by hand" in text
     assert "Save settings" not in text
+
+
+def test_every_simplify_list_is_shown_and_kept(client, settings_file):
+    many = [LIST.replace("Summer2027", f"Summer{year}") for year in range(2000, 2030)]  # 30 lists
+    settings_file.write_text(
+        ORIGINAL.split("sources:")[0].format(data_dir=load_config(settings_file).data_dir, list=LIST)
+        + "sources:\n  simplify_lists:\n"
+        + "".join(f"    - url: {url}\n      level: intern\n" for url in many),
+        encoding="utf-8",
+    )
+    page = client.get("/settings").text
+    assert 'name="list_url_29"' in page and 'name="list_url_30"' in page  # all 30, plus one empty row
+    typed = {f"list_url_{number}": url for number, url in enumerate(many)} | {"list_url_1": "", "list_url_0": ""}
+    assert "Saved." in save(client, **typed, **{f"list_level_{number}": "intern" for number in range(30)}).text
+    assert [listing.url for listing in load_config(settings_file).sources.simplify_lists] == many[2:]
+
+
+def test_settings_lists_stopped_boards_with_read_again(client, data_dir):
+    with closing(db.connect(data_dir)) as conn, conn:
+        conn.execute("INSERT INTO sources (name, stopped_on) VALUES ('greenhouse:wrongco', '2026-10-22')")
+    text = client.get("/settings").text
+    assert "greenhouse:wrongco" in text and "(since 2026-10-22)" in text and "Read again" in text
+    form = {"board": "greenhouse:wrongco", "value": "0", "csrf_token": csrf(client)}
+    response = client.post("/boards/stop", data=form, follow_redirects=False)
+    assert response.headers["location"] == "/settings"
+    assert "greenhouse:wrongco" not in client.get("/settings").text
