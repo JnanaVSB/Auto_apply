@@ -5,9 +5,10 @@ from contextlib import closing
 
 import httpx
 import pytest
-from helpers import FakeWeb, ashby_job, board_job, one, settings
+from helpers import ACME_JOB, LIST, FakeWeb, ashby_job, board_job, entry, one, settings
 
-from app import collect, fetch, jobs, phonebook
+from app import collect, fetch, phonebook
+from app.config import SimplifyList, SourceSettings
 from app.sources import BOARD_HOSTS
 
 pytestmark = pytest.mark.usefixtures("no_waiting")  # downloads never really wait
@@ -54,11 +55,15 @@ def one_crawl(monkeypatch):
     monkeypatch.setattr(phonebook, "CRAWLS_TO_READ", 1)
 
 
-def refresh(conn, data_dir, pages, **web_options):
-    """One refresh against a fake web; returns the printed lines and the web."""
+NO_LISTS = SourceSettings()
+
+
+def refresh(conn, data_dir, pages, sources=NO_LISTS, **web_options):
+    """One refresh against a fake web, by default with no lists to read; returns the printed lines and the web."""
     web, lines = FakeWeb(pages, **web_options), []
+    config = settings(data_dir).model_copy(update={"sources": sources})
     with closing(fetch.Fetcher(httpx.MockTransport(web))) as fetcher:
-        phonebook.refresh(conn, jobs.Roles.from_settings(settings(data_dir).roles), fetcher, lines.append)
+        phonebook.refresh(conn, config, fetcher, lines.append)
     return lines, web
 
 
@@ -179,6 +184,34 @@ def test_a_collection_never_contacts_common_crawl(conn, data_dir):
         collect.collect(conn, settings(data_dir), fetcher, [].append)
     assert web.requests
     assert all(request.url.host != fetch.COMMON_CRAWL for request in web.requests)
+
+
+OTHER_LIST = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
+LISTS = SourceSettings(simplify_lists=[SimplifyList(url=LIST, level="intern")], phonebook_lists=[OTHER_LIST])
+
+
+def test_lists_give_names_including_simplifys_closed_jobs(conn, data_dir):
+    with conn:
+        conn.execute("INSERT INTO sources (name, found_by) VALUES ('greenhouse:acme', 'simplify')")  # already read
+    closed = entry(id="s-2", url="https://jobs.lever.co/closedco/1", active=False)
+    other = httpx.Response(200, text="| Acme | [Apply](https://jobs.ashbyhq.com/MdCo/123) | https://acme.example |")
+    pages = crawl_pages() | {LIST: [entry(url=ACME_JOB), closed], OTHER_LIST: other}
+    lines, _ = refresh(conn, data_dir, pages, LISTS)
+    assert lines[:2] == [
+        "Simplify Summer2027-Internships: 2 boards linked, 1 new names",
+        "someone/jobs: 1 boards linked, 1 new names",
+    ]
+    found = conn.execute("SELECT board, found_by FROM phonebook ORDER BY board").fetchall()
+    assert found == [("ashby:mdco", "list:someone/jobs"), ("lever:closedco", "simplify")]  # acme is already read
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("done",)
+
+
+def test_a_list_that_cannot_be_read_is_named_and_the_rest_goes_on(conn, data_dir):
+    pages = crawl_pages(LEVER_URLS) | BOARDS_PAGES | {LIST: [entry()], OTHER_LIST: 404}
+    lines, _ = refresh(conn, data_dir, pages, LISTS)
+    assert "someone/jobs could not be read (not found (404)); try again later." in lines
+    assert results(conn)["lever:acme"] == "added"  # Common Crawl and the checks still ran
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
 
 
 def test_the_cross_check_compares_job_titles(conn, data_dir):

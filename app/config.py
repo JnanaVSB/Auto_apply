@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.sources import BOARD_NAME
 from app.sources.boards import BOARDS
@@ -18,19 +18,21 @@ class ConfigError(Exception):
     """Settings are missing or invalid. Messages name the setting but never include its value."""
 
 
+def _github_file(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.hostname != "raw.githubusercontent.com" or parts.path.count("/") < 3:
+        raise ValueError("must be an https://raw.githubusercontent.com/<owner>/<repo>/... address")
+    return url
+
+
+GitHubFile = Annotated[str, AfterValidator(_github_file)]  # a file in a public GitHub repository
+
+
 class SimplifyList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    url: str
+    url: GitHubFile
     level: Literal["intern", "new grad"]
-
-    @field_validator("url")
-    @classmethod
-    def _github_file(cls, url: str) -> str:
-        parts = urlsplit(url)
-        if parts.scheme != "https" or parts.hostname != "raw.githubusercontent.com" or parts.path.count("/") < 3:
-            raise ValueError("must be an https://raw.githubusercontent.com/<owner>/<repo>/... address")
-        return url
 
 
 class RoleSettings(BaseModel):
@@ -45,6 +47,7 @@ class SourceSettings(BaseModel):
 
     simplify_lists: list[SimplifyList] = []
     extra_boards: list[str] = []
+    phonebook_lists: list[GitHubFile] = []  # other public GitHub job lists the phone book reads; you approve each
 
     @field_validator("extra_boards")
     @classmethod

@@ -43,11 +43,13 @@ LINK_BOARD = """INSERT INTO sources (name, found_by) VALUES (?, 'simplify') ON C
 LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
 COUNT_MISS = """INSERT INTO sources (name, misses, found_by) VALUES (?, 1, 'you') ON CONFLICT (name)
     DO UPDATE SET misses = misses + 1 RETURNING misses"""  # only one of your extra_boards is new here
-# Every board read on a collection (not retired, not stopped by you), and whether it is "discovered": found by the
-# phone book with no job saved from it yet. Those are read after the others on their site.
-BOARDS_TO_READ = """SELECT name, found_by NOT IN ('simplify', 'you')
-        AND NOT EXISTS (SELECT 1 FROM job_sources WHERE source = sources.name)
-    FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"""
+# A "discovered" board: found by the phone book, with no job saved from it yet (0 or 1, never NULL).
+DISCOVERED = """ifnull(found_by, 'simplify') NOT IN ('simplify', 'you')
+        AND NOT EXISTS (SELECT 1 FROM job_sources WHERE source = sources.name)"""
+# Every board read on a collection (not retired, not stopped by you), and whether it is discovered: those are read
+# after the others on their site.
+BOARDS_TO_READ = f"""SELECT name, {DISCOVERED}
+    FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"""  # noqa: S608
 COUNT_EMPTY = """INSERT INTO sources (name, empty_runs) VALUES (?, 1) ON CONFLICT (name)
     DO UPDATE SET empty_runs = empty_runs + 1 RETURNING empty_runs"""
 

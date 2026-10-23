@@ -36,6 +36,12 @@
   <label>One per line, for example greenhouse:acme (read on every collection, never retired)
     <textarea name="extra_boards" rows="4">{{ form.extra_boards }}</textarea></label>
 
+  <h2>Phone-book lists</h2>
+  <p class="hint">Other public GitHub job lists the phone book takes company boards from (Simplify's lists are always
+    used). Add only lists whose licence allows it.</p>
+  <label>One address per line, https://raw.githubusercontent.com/...
+    <textarea name="phonebook_lists" rows="3">{{ form.phonebook_lists }}</textarea></label>
+
   <h2>Automatic collection</h2>
   <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)
     <input name="collect_every_hours" type="number" min="0" max="168" step="1" value="{{ form.collect_every_hours }}"></label>

@@ -172,8 +172,27 @@ def create_app(
         form = request.state.form
         if not actions.set_board_stopped(request.app.state.conn, form.get("board", ""), form.get("value") == "1"):
             raise HTTPException(404)
-        job = form.get("job", "")
-        return _to_job(_known(int(job)), form) if DIGITS.fullmatch(job) else RedirectResponse("/settings", 303)
+        job, back = form.get("job", ""), form.get("back", "")
+        if DIGITS.fullmatch(job):
+            return _to_job(_known(int(job)), form)
+        return RedirectResponse(_boards_back(back) if back.startswith("/boards") else "/settings", 303)
+
+    @app.get("/boards")
+    async def boards_page(request: Request) -> Response:
+        return _boards_page(request)
+
+    @app.post("/boards/confirm")
+    async def confirm_board(request: Request) -> Response:
+        with closing(new_fetcher()) as fetcher:  # the same as Add: its jobs are read and saved now
+            line = await run_in_threadpool(actions.add_board, data_dir, fetcher, request.state.form.get("board", ""))
+        return _boards_page(request, line=line)
+
+    @app.post("/boards/decline")
+    async def decline_board(request: Request) -> Response:
+        form = request.state.form
+        if not actions.decline_board(request.app.state.conn, form.get("board", "")):
+            raise HTTPException(404)
+        return RedirectResponse(_boards_back(form.get("back", "")), 303)
 
     @app.get("/collect")
     async def collect_page(request: Request) -> Response:
@@ -223,6 +242,20 @@ def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:
         request, "collect.html", collector=request.app.state.collector, refused=refused, runs=runs, every=every,
         settings_error=settings_error,
     )  # fmt: skip
+
+
+def _boards_page(request: Request, line: str | None = None) -> HTMLResponse:
+    conn, view = request.app.state.conn, queries.BoardView.from_address(dict(request.query_params))
+    boards, total, number, pages = queries.list_boards(conn, view)
+    return _page(
+        request, "boards.html", view=view, boards=boards, total=total, number=number, pages=pages,
+        counts=queries.board_counts(conn), waiting=queries.waiting_boards(conn), line=line,
+    )  # fmt: skip
+
+
+def _boards_back(address: str) -> str:
+    """The Boards view to go back to: only the page's own addresses, else its first view."""
+    return address if address.startswith("/boards?") and len(address) <= 1000 else "/boards"
 
 
 def _settings_page(request: Request, problem: str | None = None, typed: dict[str, str] | None = None) -> HTMLResponse:

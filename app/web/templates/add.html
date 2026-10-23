@@ -27,8 +27,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>Company name, or one board <input name="name" required maxlength="100" value="{{ form.name or '' }}"
       placeholder="Acme AI, or greenhouse:acme"></label>
-    <p class="hint">Looks for the company's board on Greenhouse, Lever and Ashby (a few seconds). Nothing is saved until
-      you check what was found and press Add.</p>
+    <p class="hint">Tries the likely board names on Greenhouse, Lever and Ashby (a few seconds) and shows every board
+      found. Nothing is saved until you check each one and press Add.</p>
     <button type="submit">Find</button>
   </form>
   {% for found in found or [] %}

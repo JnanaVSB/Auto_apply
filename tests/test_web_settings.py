@@ -41,7 +41,7 @@ def form(**changes):
     values = {
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",
         "collect_every_hours": "0", "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
-        "list_level_1": "intern",
+        "list_level_1": "intern", "phonebook_lists": "",
     }  # fmt: skip
     return values | changes
 
@@ -90,6 +90,13 @@ def test_a_refused_save_changes_nothing_and_keeps_what_was_typed(client, setting
     assert "Not saved: Invalid settings in data/config.yaml" in text and problem in text and shown in text
     assert settings_file.read_bytes() == before
     assert not settings_file.with_name("config.yaml.new").exists()
+
+
+def test_phone_book_lists_are_saved_and_shown(client, settings_file):
+    other = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
+    save(client, phonebook_lists=f" {other} \n\n{other}")
+    assert load_config(settings_file).sources.phonebook_lists == [other]  # spaces, blank lines and repeats cleaned
+    assert f">{other}</textarea>" in client.get("/settings").text
 
 
 def test_adding_and_removing_simplify_lists(client, settings_file):

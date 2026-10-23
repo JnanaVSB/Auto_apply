@@ -59,6 +59,7 @@ sources:
     - url: https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/listings.json
       level: intern
   extra_boards: [" Greenhouse:Acme ", "ashby:globex"]
+  phonebook_lists: ["https://raw.githubusercontent.com/someone/jobs/main/README.md"]
 """
 
 
@@ -67,6 +68,7 @@ def test_roles_and_sources_are_read(tmp_path):
     assert config.roles.keywords == ["machine learning", "RL"]
     assert config.sources.simplify_lists[0].level == "intern"
     assert config.sources.extra_boards == ["greenhouse:acme", "ashby:globex"]
+    assert config.sources.phonebook_lists == ["https://raw.githubusercontent.com/someone/jobs/main/README.md"]
 
 
 def test_roles_and_sources_are_optional(tmp_path):
@@ -82,6 +84,7 @@ def test_roles_and_sources_are_optional(tmp_path):
         ("level: intern", "level: senior", "simplify_lists.0.level"),
         ('"ashby:globex"', f'"workday:{FAKE_VALUE}"', "extra_boards"),
         ('"ashby:globex"', '"lever:../admin"', "extra_boards"),
+        ("https://raw.githubusercontent.com/someone", f"https://{FAKE_VALUE}.example/someone", "phonebook_lists.0"),
     ],
 )
 def test_bad_source_settings_are_named_without_their_value(tmp_path, old, new, where):

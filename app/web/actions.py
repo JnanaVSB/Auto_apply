@@ -91,7 +91,7 @@ class FoundBoard:
 
 
 def find_company(data_dir: Path, fetcher: Fetcher, text: str) -> tuple[list[FoundBoard], list[str]]:
-    """Look for a company's board on Greenhouse, Lever and Ashby. Saves nothing; returns the boards and notes.
+    """Look for a company's boards on Greenhouse, Lever and Ashby. Saves nothing; returns every board found and notes.
 
     `text` is a company name, or one exact board such as greenhouse:acme.
     """
@@ -113,22 +113,26 @@ def find_company(data_dir: Path, fetcher: Fetcher, text: str) -> tuple[list[Foun
 def _find_boards(
     conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, tries: list[tuple[str, str]], text: str
 ) -> tuple[list[FoundBoard], list[str]]:
+    """Every name tried on its site, all sites at the same time; every board that exists is offered."""
     roles = jobs.Roles.from_settings(config.roles)
-    boards, notes, done = [], [], set()  # done: sites with a board found, or that could not be read
+    names = [f"{kind}:{name}" for kind, name in tries]
+    with closing(collect.download_boards(fetcher, names, set())) as downloads:  # a few names per site: none skipped
+        replies = {board: download for _, board, download in downloads}
+    boards, notes, failed = [], [], set()  # failed: sites that could not be read
     answered = False
-    for kind, name in tries:
-        if kind in done:
+    for board in names:  # in the order tried, so the page always lists them the same way
+        kind, _, name = board.partition(":")
+        download = replies[board]
+        if isinstance(download, NotFound):
             continue
-        board = f"{kind}:{name}"
-        try:
-            found, _ = collect.read_board(fetcher, kind, name)
-        except NotFound:
+        if isinstance(download, FetchError | SourceError):
+            if kind not in failed:  # one note per site
+                notes.append(f"{kind.title()} could not be read ({download}).")
+                failed.add(kind)
             continue
-        except (FetchError, SourceError) as error:
-            notes.append(f"{kind.title()} could not be read ({error}).")
-            done.add(kind)
-            continue
-        done.add(kind)
+        if isinstance(download, BaseException):
+            raise download  # a fault in the app
+        found = download[0]
         answered = True
         if not found:  # a guessed name with no jobs may be another company's empty board
             notes.append(f"{board} exists but lists no jobs right now, so it cannot be added.")
@@ -169,6 +173,7 @@ def add_board(data_dir: Path, fetcher: Fetcher, board: str) -> str:
             with conn:  # remembered (no longer retired or stopped), so every collection reads it from now on
                 conn.execute(collect.SAVE_SOURCE, (board, None, collect.now()))
                 conn.execute("UPDATE sources SET stopped_on = NULL WHERE name = ?", (board,))
+                conn.execute("UPDATE phonebook SET result = 'added' WHERE board = ? AND result != 'added'", (board,))
     except NotFound:
         return f"{board} was not found; it may have closed."
     except (FetchError, SourceError) as error:
@@ -191,6 +196,15 @@ def set_board_stopped(conn: sqlcipher3.Connection, board: str, stopped: bool) ->
     return rows.rowcount == 1
 
 
+def decline_board(conn: sqlcipher3.Connection, board: str) -> bool:
+    """A board the cross-check found is not the company you want: it is never offered again. Deletes nothing."""
+    with conn:
+        rows = conn.execute(
+            "UPDATE phonebook SET result = 'declined' WHERE board = ? AND result = 'to confirm'", (board,)
+        )
+    return rows.rowcount == 1
+
+
 def _lines(text: str) -> list[str]:
     """One entry per line: spaces trimmed, empty lines left out, repeats kept once."""
     return list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
@@ -205,6 +219,7 @@ def settings_form() -> dict[str, str]:
         "simplify_categories": "\n".join(roles.get("simplify_categories") or []),
         "keywords": "\n".join(roles.get("keywords") or []),
         "extra_boards": "\n".join(sources.get("extra_boards") or []),
+        "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
         "collect_every_hours": str(raw.get("collect_every_hours", 0)),
     }
     for number, listing in enumerate(sources.get("simplify_lists") or []):
@@ -234,6 +249,7 @@ def save_settings(form: dict[str, str]) -> str | None:
                     if form[f"list_url_{number}"].strip()
                 ],
                 "extra_boards": _lines(form.get("extra_boards", "")),
+                "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             },
             "collect_every_hours": int(hours) if re.fullmatch(r"[0-9]+", hours) else hours,  # "²" is not a number
         }

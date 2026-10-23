@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Boards{% endblock %}
+{% block content %}
+<h1>Boards</h1>
+<p>Every company board the app knows. {{ "{:,}".format(counts.active + counts.discovered) }} are read on every
+  collection: {{ "{:,}".format(counts.active) }} active, then {{ "{:,}".format(counts.discovered) }} discovered
+  (found by the phone book, no matching job yet). {{ "{:,}".format(counts.stopped) }} stopped by you,
+  {{ "{:,}".format(counts.retired) }} retired (not found 3 collections in a row). Nothing here is ever deleted.</p>
+{% if line %}<p class="result" role="status">{{ line }}</p>{% endif %}
+
+{% if waiting %}
+<section>
+  <h2>Waiting for you ({{ waiting | length }})</h2>
+  <p class="hint">The phone book found these by trying a company's board name on another site, but could not tell
+    whether they are the same company. Nothing is read from them until you add them.</p>
+  {% for board in waiting %}
+  <div class="found">
+    <p><strong>{{ board.name }}</strong>:
+      {% if board.company %}the board says the company is <strong>{{ board.company }}</strong>{% else %}{{ board.name.partition(":")[0].title() }} boards do not report a company name{% endif %};
+      same name as <strong>{{ board.cross_of }}</strong>.
+      {% if board.page %}<a href="{{ board.page }}" target="_blank" rel="noopener noreferrer">See the board's own page</a> <span class="muted">(new tab)</span>{% endif %}</p>
+    <form method="post" action="/boards/confirm" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="board" value="{{ board.name }}">
+      <button type="submit">Add</button>
+    </form>
+    <form method="post" action="/boards/decline" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input type="hidden" name="board" value="{{ board.name }}">
+      <input type="hidden" name="back" value="{{ view.address() }}">
+      <button type="submit">Not this company</button>
+    </form>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <h2>All boards</h2>
+  <form method="get" action="/boards" class="filters">
+    <label>Name or company <input name="q" maxlength="200" value="{{ view.q }}"></label>
+    <label>Show
+      <select name="show">
+        {% for show in ["all", "active", "discovered", "stopped", "retired"] %}
+        <option value="{{ show }}"{% if view.show == show %} selected{% endif %}>{{ show }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Show</button>
+  </form>
+  <p>{% if total %}{{ "{:,}".format(total) }} boards.{% else %}No boards match.{% endif %}</p>
+  {% if boards %}
+  <table class="jobs">
+    <thead><tr><th>Board</th><th>Company</th><th>Found by</th><th>Kind</th><th>Last read</th><th>Open jobs saved</th><th></th></tr></thead>
+    <tbody>
+    {% for board in boards %}
+    <tr>
+      <td>{% if board.page %}<a href="{{ board.page }}" target="_blank" rel="noopener noreferrer">{{ board.name }}</a>{% else %}{{ board.name }}{% endif %}</td>
+      <td>{{ board.company or "" }}</td>
+      <td>{{ board.found_by }}</td>
+      <td>{% if board.stopped_on %}stopped by you on {{ board.stopped_on }}{% elif board.retired_on %}retired on {{ board.retired_on }}{% elif board.discovered %}discovered{% else %}active{% endif %}</td>
+      <td>{{ board.last_read or "never" }}</td>
+      <td>{{ "{:,}".format(board.jobs) }}</td>
+      <td>
+        {% if not board.retired_on %}
+        <form method="post" action="/boards/stop" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="board" value="{{ board.name }}">
+          <input type="hidden" name="value" value="{{ '0' if board.stopped_on else '1' }}">
+          <input type="hidden" name="back" value="{{ view.address(page=number) }}">
+          <button type="submit">{{ "Read again" if board.stopped_on else "Stop reading" }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% if number > 1 %}<a href="{{ view.address(page=number - 1) }}">Previous</a>{% endif %}
+    <span>Page {{ number }} of {{ "{:,}".format(pages) }}</span>
+    {% if number < pages %}<a href="{{ view.address(page=number + 1) }}">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

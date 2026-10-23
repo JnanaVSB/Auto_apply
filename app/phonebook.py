@@ -1,4 +1,7 @@
-"""The phone book of company boards: `python -m app.phonebook refresh` finds more boards in Common Crawl's index.
+"""The phone book of company boards: `python -m app.phonebook refresh` finds more boards in public lists.
+
+The lists: every job-board link in Simplify's lists (closed jobs too), in the other GitHub job lists you approved
+(phonebook_lists in data/config.yaml), and in Common Crawl's index of the web.
 
 Every name found waits in the phonebook table until its site's own API confirms it; a confirmed board is read on every
 collection from then on. A new name is also tried once on the other sites (the cross-check). Nothing is deleted, and an
@@ -13,15 +16,16 @@ import sys
 from collections import Counter
 from contextlib import closing, suppress
 from typing import Any
+from urllib.parse import urlsplit
 
 import sqlcipher3
 
 from app import collect, db, jobs
 from app.collect import CollectError, Download, Output, now
-from app.config import ConfigError, load_config
+from app.config import Config, ConfigError, load_config
 from app.fetch import COMMON_CRAWL, Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
-from app.sources import BOARD_HOSTS, Job, SourceError, board_of
+from app.sources import BOARD_HOSTS, Job, SourceError, board_of, simplify
 from app.sources.boards import BOARDS
 
 CRAWLS = f"https://{COMMON_CRAWL}/collinfo.json"
@@ -33,6 +37,14 @@ PROGRESS_EVERY = 100
 ADD_NAME = """INSERT INTO phonebook (board, found_by, found_on, cross_of) SELECT :board, :found_by, :on, :cross_of
     WHERE NOT EXISTS (SELECT 1 FROM sources WHERE name = :board) ON CONFLICT (board) DO NOTHING"""
 DONE = "INSERT INTO phonebook_done (part, done_on) VALUES (?, ?) ON CONFLICT (part) DO NOTHING"
+LINK = re.compile(r"https?://[^\s\"'<>()\[\]|\\]+")  # any web address in a list file, JSON or Markdown
+
+
+def _add_names(conn: sqlcipher3.Connection, names: set[str], found_by: str) -> int:
+    """Add names to the phone book (inside the caller's transaction); returns how many were new."""
+    found_on = now()
+    values = [{"board": board, "found_by": found_by, "on": found_on, "cross_of": None} for board in sorted(names)]
+    return sum(conn.execute(ADD_NAME, value).rowcount for value in values)
 
 
 def _done(conn: sqlcipher3.Connection, part: str) -> bool:
@@ -81,17 +93,36 @@ def read_common_crawl(conn: sqlcipher3.Connection, fetcher: Fetcher, out: Output
                 if _done(conn, f"{part}:{page}"):
                     continue
                 names, bad = _names(fetcher.get_text(f"{query}&page={page}"))
-                found_on = now()
                 with conn:  # the page's names and "page done" are saved together
-                    for board in sorted(names):
-                        values = {"board": board, "found_by": "commoncrawl", "on": found_on, "cross_of": None}
-                        new += conn.execute(ADD_NAME, values).rowcount
-                    conn.execute(DONE, (f"{part}:{page}", found_on))
+                    new += _add_names(conn, names, "commoncrawl")
+                    conn.execute(DONE, (f"{part}:{page}", now()))
                 damaged += bad
             with conn:
                 conn.execute(DONE, (part, now()))
             out(f"Common Crawl {crawl}, {host}: read ({new:,} new names so far)")
     return new, damaged
+
+
+def read_lists(conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, out: Output) -> list[str]:
+    """Take board names from every job-board link in Simplify's lists and in your phone-book lists.
+
+    Returns a line for each list that could not be read.
+    """
+    lists = [(listing.url, "simplify") for listing in config.sources.simplify_lists]
+    lists += [(url, "list:" + "/".join(urlsplit(url).path.split("/")[1:3])) for url in config.sources.phonebook_lists]
+    failed = []
+    for url, found_by in lists:  # found_by names the list, e.g. list:vanshb03/New-Grad-2027
+        label = collect.source_label(simplify.source_name(url)) if found_by == "simplify" else found_by[5:]
+        try:
+            text = fetcher.get_text(url)
+        except FetchError as error:
+            failed.append(f"{label} could not be read ({error}); try again later.")
+            continue
+        names = {board for board in map(board_of, LINK.findall(text)) if board}
+        with conn:
+            found = _add_names(conn, names, found_by)
+        out(f"{label}: {len(names):,} boards linked, {found:,} new names")
+    return failed
 
 
 def _titles(found: list[Job]) -> set[str]:
@@ -158,7 +189,7 @@ def check_names(conn: sqlcipher3.Connection, fetcher: Fetcher, roles: jobs.Roles
     return results
 
 
-def refresh(conn: sqlcipher3.Connection, roles: jobs.Roles, fetcher: Fetcher, out: Output = print) -> None:
+def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
     """Find new board names, check them, and record the refresh; what is done is kept if it stops midway."""
     if not any(fetcher.reachable(site) for site in sorted({collect.site_of(f"{kind}:x") for kind in BOARDS})):
         raise CollectError("No internet connection: none of the job sites could be reached. Check it and try again.")
@@ -172,14 +203,17 @@ def refresh(conn: sqlcipher3.Connection, roles: jobs.Roles, fetcher: Fetcher, ou
         out(line)
 
     try:
-        complete = True
+        failed = read_lists(conn, fetcher, config, say)
+        for line in failed:
+            say(line)
+        complete = not failed
         try:
             new, damaged = read_common_crawl(conn, fetcher, say)
             say(f"Common Crawl: {new:,} new names" + (f" ({damaged:,} damaged index lines skipped)" if damaged else ""))
         except (FetchError, SourceError) as error:
             complete = False
             say(f"Common Crawl's index could not be read ({error}). Names found so far are kept; try again later.")
-        results = check_names(conn, fetcher, roles, say)
+        results = check_names(conn, fetcher, jobs.Roles.from_settings(config.roles), say)
         say(
             f"Checked {results.total():,} names: {results['added']:,} added (read on every collection from now on), "
             f"{results['not found']:,} not found, {results['to confirm']:,} to confirm on the Boards page, "
@@ -209,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             closing(db.connect(config.data_dir)) as conn,
             closing(Fetcher()) as fetcher,
         ):
-            refresh(conn, jobs.Roles.from_settings(config.roles), fetcher)
+            refresh(conn, config, fetcher)
     except (
         ConfigError,
         KeychainError,

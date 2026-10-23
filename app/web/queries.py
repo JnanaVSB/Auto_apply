@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlencode
 import sqlcipher3
 
 from app import jobs
-from app.collect import source_label, source_state
+from app.collect import DISCOVERED, source_label, source_state
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
 
@@ -258,6 +258,100 @@ def job_id_by_link(conn: sqlcipher3.Connection, link: str) -> int | None:
     """The saved job with this link, cleaned the way saving cleans it."""
     row = conn.execute("SELECT id FROM jobs WHERE apply_url = ?", (jobs.clean_url(link),)).fetchone()
     return row[0] if row else None
+
+
+BOARD_SHOWS = {  # the Boards page's choices: which boards to list
+    "all": "1",
+    "active": f"stopped_on IS NULL AND retired_on IS NULL AND NOT ({DISCOVERED})",
+    "discovered": f"stopped_on IS NULL AND retired_on IS NULL AND {DISCOVERED}",
+    "stopped": "stopped_on IS NOT NULL",
+    "retired": "retired_on IS NOT NULL",
+}
+BOARD_ROWS = f"""SELECT name, found_by, company, last_ok, stopped_on, retired_on, {DISCOVERED},
+        (SELECT count(*) FROM job_sources WHERE source = sources.name AND listed = 1)
+    FROM sources"""  # noqa: S608 (fixed text)
+BOARDS_PAGE_SIZE = 100
+
+
+@dataclass(frozen=True)
+class BoardView:
+    """One view of the Boards page, as kept in the page address."""
+
+    q: str = ""  # text in the board's name or company name
+    show: str = "all"
+    page: int = 1
+
+    @classmethod
+    def from_address(cls, params: dict[str, str]) -> "BoardView":
+        show, page = params.get("show", ""), params.get("page", "")
+        return cls(
+            q=params.get("q", "").strip()[:MAX_TEXT],
+            show=show if show in BOARD_SHOWS else cls.show,
+            page=max(1, int(page)) if PAGE_NUMBER.fullmatch(page) else 1,
+        )
+
+    def address(self, **changes) -> str:
+        view = replace(self, **changes)
+        pairs = {
+            "q": view.q,
+            "show": view.show if view.show != "all" else "",
+            "page": view.page if view.page > 1 else "",
+        }
+        return "/boards?" + urlencode({name: value for name, value in pairs.items() if value})
+
+
+def found_by_label(found_by: str | None) -> str:
+    """Who found a board, in the page's words."""
+    labels = {None: "before the phone book", "simplify": "Simplify", "you": "you", "commoncrawl": "Common Crawl"}
+    return labels.get(found_by) or (f"list {found_by[5:]}" if found_by.startswith("list:") else found_by)
+
+
+def list_boards(conn: sqlcipher3.Connection, view: BoardView) -> tuple[list[dict], int, int, int]:
+    """One page of the company boards matching `view` (never Simplify's lists).
+
+    Returns the boards, how many match, this page's number and the number of pages; past the end is the last page.
+    """
+    where = f"name NOT LIKE 'simplify:%' AND {BOARD_SHOWS[view.show]}"
+    values: list = []
+    if view.q:
+        where += " AND (instr(lower(name), ?) OR instr(lower(ifnull(company, '')), ?))"
+        values += [view.q.lower()] * 2
+    total = conn.execute(f"SELECT count(*) FROM sources WHERE {where}", values).fetchone()[0]  # noqa: S608
+    pages = max(1, math.ceil(total / BOARDS_PAGE_SIZE))
+    number = min(view.page, pages)
+    rows = conn.execute(
+        f"{BOARD_ROWS} WHERE {where} ORDER BY name LIMIT ? OFFSET ?",  # noqa: S608 (fixed rules)
+        [*values, BOARDS_PAGE_SIZE, (number - 1) * BOARDS_PAGE_SIZE],
+    )
+    boards = []
+    for name, found_by, company, last_ok, stopped_on, retired_on, discovered, jobs_listed in rows:
+        kind, _, short = name.partition(":")
+        boards.append({
+            "name": name, "company": company, "found_by": found_by_label(found_by), "last_read": (last_ok or "")[:10],
+            "stopped_on": stopped_on, "retired_on": retired_on, "discovered": bool(discovered), "jobs": jobs_listed,
+            "page": BOARDS[kind].BOARD_PAGE.format(short) if kind in BOARDS else None,
+        })  # fmt: skip
+    return boards, total, number, pages
+
+
+def board_counts(conn: sqlcipher3.Connection) -> dict[str, int]:
+    """How many company boards each choice of the Boards page lists."""
+    sums = ", ".join(f"sum({rule})" for rule in BOARD_SHOWS.values())
+    row = conn.execute(f"SELECT {sums} FROM sources WHERE name NOT LIKE 'simplify:%'").fetchone()  # noqa: S608
+    return {show: count or 0 for show, count in zip(BOARD_SHOWS, row, strict=True)}
+
+
+def waiting_boards(conn: sqlcipher3.Connection) -> list[dict]:
+    """Boards the cross-check found that wait for you to add or decline them."""
+    rows = conn.execute(
+        "SELECT board, company, cross_of FROM phonebook WHERE result = 'to confirm' ORDER BY board"
+    ).fetchall()
+    found = []
+    for board, company, cross_of in rows:
+        kind, _, short = board.partition(":")
+        page = BOARDS[kind].BOARD_PAGE.format(short) if kind in BOARDS else None
+        found.append({"name": board, "company": company, "cross_of": cross_of, "page": page})
+    return found
 
 
 def last_runs(conn: sqlcipher3.Connection, count: int = 5) -> list[dict]:

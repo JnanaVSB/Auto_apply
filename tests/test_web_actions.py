@@ -1,5 +1,6 @@
 """Dashboard actions: not interested, fix location, add job, add company. Fake web and made-up jobs only."""
 
+import re
 import threading
 from contextlib import closing
 
@@ -138,6 +139,17 @@ def test_find_company_shows_each_board_and_saves_nothing_until_add(client, conn,
     assert one(conn, "SELECT count(*) FROM jobs") == (1,)
     again = post(client, "/add/company", name="greenhouse:acme-ai").text
     assert "Already read on every collection." in again and "Stop reading this board" in again
+
+
+def test_add_company_offers_every_board_on_every_site(client, pages):
+    pages[greenhouse.api_url("acmeai")] = {"jobs": [board_job(company_name="Acme AI")]}
+    pages[greenhouse.api_url("acme-ai")] = {"jobs": [board_job(company_name="Acme Analytics")]}  # same site, too
+    pages[ashby.api_url("acme-ai")] = {"jobs": []}
+    text = post(client, "/add/company", name="Acme AI").text
+    offered = re.findall(r"<strong>([a-z]+:[a-z-]+)</strong>", text)
+    assert offered == ["greenhouse:acmeai", "greenhouse:acme-ai"]  # in the order tried
+    assert "<strong>Acme Analytics</strong>" in text  # each with the name its board reports
+    assert "ashby:acme-ai exists but lists no jobs right now, so it cannot be added." in text
 
 
 def test_add_company_with_one_exact_board_tries_only_that(client, pages):

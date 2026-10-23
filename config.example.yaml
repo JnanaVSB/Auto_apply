@@ -20,6 +20,12 @@ sources:
     - url: https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/.github/scripts/listings.json
       level: new grad
   extra_boards: []
+  # Other public GitHub job lists the phone book (python -m app.phonebook refresh) takes company boards from,
+  # besides Simplify's lists. Add only lists whose licence allows it; these are MIT-licensed (checked 2026-10-23).
+  phonebook_lists:
+    - https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/.github/scripts/listings.json
+    - https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/.github/scripts/listings.json
+    - https://raw.githubusercontent.com/poteto/hiring-without-whiteboards/main/README.md
 
 # While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
 collect_every_hours: 0
