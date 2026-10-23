@@ -30,7 +30,7 @@ PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
 SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
-IN_FLIGHT = 3  # downloads open at once per site, for slow replies; new ones still start at most 1 per second
+IN_FLIGHT = 3  # downloads open at once per site for each request per second allowed, as replies often take 2-3 s
 Output = Callable[[str], None]
 Download = tuple[list[Job], int] | BaseException  # a board's jobs and skipped entries, or why it failed
 # A source first saved here is one you set or added: a Simplify list, extra_boards, Add job or Add company.
@@ -321,7 +321,7 @@ def download_boards(fetcher: Fetcher, boards: list[str], unreachable: set[str]) 
             results.put((site, board, result))
 
     for site, todo in queues.items():
-        for _ in range(IN_FLIGHT):
+        for _ in range(IN_FLIGHT * fetcher.per_second):
             threading.Thread(target=download, args=(site, todo), daemon=True).start()
     try:
         for _ in boards:
@@ -449,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         with (
             closing(lock(config.data_dir)),  # first, so two copies can never both upgrade the database
             closing(db.connect(config.data_dir)) as conn,
-            closing(Fetcher()) as fetcher,
+            closing(Fetcher(per_second=config.requests_per_second)) as fetcher,
         ):
             if args.command == "add":
                 print(add(conn, fetcher, args.link))

@@ -40,7 +40,8 @@ def client(client, settings_file):
 def form(**changes):
     values = {
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",
-        "collect_every_hours": "0", "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
+        "collect_every_hours": "0", "phonebook_every_days": "30", "requests_per_second": "1",
+        "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
         "list_level_1": "intern", "phonebook_lists": "",
     }  # fmt: skip
     return values | changes
@@ -82,6 +83,9 @@ def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_
         ({"collect_every_hours": "200"}, "collect_every_hours", 'value="200"'),
         ({"collect_every_hours": "soon"}, "collect_every_hours", 'value="soon"'),
         ({"collect_every_hours": "²"}, "collect_every_hours", 'value="²"'),
+        ({"phonebook_every_days": "366"}, "phonebook_every_days", 'value="366"'),
+        ({"requests_per_second": "0"}, "requests_per_second", 'value="0"'),
+        ({"requests_per_second": "6"}, "requests_per_second", 'value="6"'),
     ],
 )  # fmt: skip
 def test_a_refused_save_changes_nothing_and_keeps_what_was_typed(client, settings_file, changes, problem, shown):
@@ -90,6 +94,17 @@ def test_a_refused_save_changes_nothing_and_keeps_what_was_typed(client, setting
     assert "Not saved: Invalid settings in data/config.yaml" in text and problem in text and shown in text
     assert settings_file.read_bytes() == before
     assert not settings_file.with_name("config.yaml.new").exists()
+
+
+def test_the_phone_book_schedule_and_requests_per_second_are_saved_and_shown(client, settings_file):
+    assert (
+        'name="phonebook_every_days" type="number" min="0" max="365" step="1" value="30"'
+        in client.get("/settings").text
+    )  # not in the file yet: the default, monthly
+    save(client, phonebook_every_days="7", requests_per_second="2")
+    config = load_config(settings_file)
+    assert (config.phonebook_every_days, config.requests_per_second) == (7, 2)
+    assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="2"' in client.get("/settings").text
 
 
 def test_phone_book_lists_are_saved_and_shown(client, settings_file):

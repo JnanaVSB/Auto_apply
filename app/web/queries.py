@@ -368,6 +368,16 @@ def last_runs(conn: sqlcipher3.Connection, count: int = 5) -> list[dict]:
     ]  # fmt: skip
 
 
+def last_refreshes(conn: sqlcipher3.Connection, count: int = 3) -> list[dict]:
+    """The latest phone-book refreshes, newest first, each with the last line of its summary."""
+    rows = conn.execute("SELECT started_at, outcome, summary FROM phonebook_runs ORDER BY id DESC LIMIT ?", (count,))
+    return [
+        {"started": started[:16].replace("T", " "), "outcome": outcome or "not finished (running, or interrupted)",
+         "summary": summary.splitlines()[-1] if summary else ""}
+        for started, outcome, summary in rows
+    ]  # fmt: skip
+
+
 def stopped_boards(conn: sqlcipher3.Connection) -> list[tuple[str, str]]:
     """Boards you stopped reading, with the day you stopped them."""
     return conn.execute("SELECT name, stopped_on FROM sources WHERE stopped_on IS NOT NULL ORDER BY name").fetchall()

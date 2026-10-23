@@ -422,6 +422,27 @@ def run_with(conn, data_dir, pages, answer, extra_boards):
         collect.collect(conn, settings(data_dir, extra_boards), fetcher, [].append)
 
 
+def test_more_requests_per_second_means_more_downloads_open_per_site(conn, data_dir):
+    boards = [f"greenhouse:board{number}" for number in range(collect.IN_FLIGHT * 2)]
+    together = threading.Barrier(collect.IN_FLIGHT * 2, timeout=5)  # passes only when all are open at once
+
+    def answer(request):
+        if request.method == "GET" and request.url.host == "boards-api.greenhouse.io":
+            together.wait()
+        return FakeWeb({LIST: 404})(request)
+
+    with closing(fetch.Fetcher(httpx.MockTransport(answer), per_second=2)) as fetcher:
+        collect.collect(conn, settings(data_dir, boards), fetcher, [].append)
+    assert not together.broken
+
+
+def test_the_command_uses_your_requests_per_second(main, data_dir, monkeypatch):
+    used = []
+    monkeypatch.setattr(collect, "collect", lambda conn, config, fetcher: used.append(fetcher.per_second))
+    assert main([], settings(data_dir).model_copy(update={"requests_per_second": 3}))[0] == 0
+    assert used == [3]
+
+
 def test_all_sites_are_read_at_the_same_time(conn, data_dir):
     lever_asked = threading.Event()
 

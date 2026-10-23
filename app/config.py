@@ -68,6 +68,8 @@ class Config(BaseModel):
     roles: RoleSettings = RoleSettings()  # optional, so older settings files still work for app.db
     sources: SourceSettings = SourceSettings()
     collect_every_hours: Annotated[int, Field(ge=0, le=168, strict=True)] = 0  # dashboard schedule; 0 = off
+    phonebook_every_days: Annotated[int, Field(ge=0, le=365, strict=True)] = 30  # dashboard schedule; 0 = off
+    requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
 
 
 def load_config(path: Path | None = None) -> Config:

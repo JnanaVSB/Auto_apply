@@ -5,7 +5,14 @@
 <form method="post" action="/collect">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <button type="submit"{% if collector.running %} disabled{% endif %}>Collect now</button>
-  <span class="muted">Reads every job list and board, the same as <code>python -m app.collect</code> (about 15–25 minutes).</span>
+  <span class="muted">Reads every job list and board, the same as <code>python -m app.collect</code>. All sites are
+    read at the same time; its first line says about how long it takes.</span>
+</form>
+<form method="post" action="/phonebook/refresh">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <button type="submit"{% if collector.running %} disabled{% endif %}>Refresh phone book</button>
+  <span class="muted">Finds more company boards, the same as <code>python -m app.phonebook refresh</code>. Slow on
+    purpose (often an hour or more); safe to stop, and the next one continues. See them on the <a href="/boards">Boards</a> page.</span>
 </form>
 {% if refused %}<p class="error" role="alert">{{ refused }}</p>{% endif %}
 
@@ -19,6 +26,28 @@
   Change it on the <a href="/settings">Settings</a> page.</p>
 {% else %}
 <p>Off. Turn it on on the <a href="/settings">Settings</a> page.</p>
+{% endif %}
+
+<h2>Automatic phone-book refresh</h2>
+{% if settings_error %}
+<p class="error">{{ settings_error }}</p>
+{% elif refresh_every %}
+<p>Every {{ refresh_every }} day{{ "s" if refresh_every != 1 }} while the dashboard is open; one that did not finish is
+  tried again the next day. Change it on the <a href="/settings">Settings</a> page.</p>
+{% else %}
+<p>Off. Turn it on on the <a href="/settings">Settings</a> page.</p>
+{% endif %}
+{% if refreshes %}
+<table class="jobs">
+  <thead><tr><th>Started (UTC)</th><th>Result</th><th>Summary</th></tr></thead>
+  <tbody>
+    {% for refresh in refreshes %}
+    <tr><td>{{ refresh.started }}</td><td>{{ refresh.outcome }}</td><td>{{ refresh.summary }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No phone-book refresh yet.</p>
 {% endif %}
 
 <h2>Last collections</h2>

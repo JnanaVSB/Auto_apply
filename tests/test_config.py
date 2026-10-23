@@ -108,3 +108,27 @@ def test_the_dashboard_schedule_is_0_to_168_hours(tmp_path, value, ok):
     else:
         with pytest.raises(ConfigError, match="collect_every_hours"):
             load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "ok"),
+    [
+        ("phonebook_every_days", "0", True), ("phonebook_every_days", "365", True),
+        ("phonebook_every_days", "366", False), ("phonebook_every_days", "-1", False),
+        ("requests_per_second", "1", True), ("requests_per_second", "5", True),
+        ("requests_per_second", "0", False), ("requests_per_second", "6", False),
+        ("requests_per_second", "0.5", False), ("requests_per_second", '"2"', False),
+    ],
+)  # fmt: skip
+def test_the_phone_book_schedule_and_requests_per_second_have_limits(tmp_path, setting, value, ok):
+    path = write(tmp_path, f"data_dir: data\n{setting}: {value}\n")
+    if ok:
+        assert getattr(load_config(path), setting) == int(value)
+    else:
+        with pytest.raises(ConfigError, match=setting):
+            load_config(path)
+
+
+def test_without_them_the_phone_book_is_monthly_at_one_request_per_second(tmp_path):
+    config = load_config(write(tmp_path, "data_dir: data\n"))
+    assert (config.phonebook_every_days, config.requests_per_second) == (30, 1)

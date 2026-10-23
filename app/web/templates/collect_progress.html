@@ -1,5 +1,5 @@
-{# The progress box; while a collection runs, HTMX reloads just this box every 2 seconds. #}
+{# The progress box; while a collection or refresh runs, HTMX reloads just this box every 2 seconds. #}
 <div id="progress"{% if collector.running %} hx-get="/collect/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
-  <p class="state">{{ {"idle": "No collection has run since the dashboard opened.", "running": "Collecting… (you can leave this page; it keeps going)", "done": "Finished.", "cancelled": "Cancelled.", "failed": "Could not finish."}[collector.state] }}</p>
+  <p class="state">{{ {"idle": "Nothing has run since the dashboard opened.", "running": ("Refreshing the phone book…" if collector.task == "refresh" else "Collecting…") ~ " (you can leave this page; it keeps going)", "done": "Finished.", "cancelled": "Cancelled.", "failed": "Could not finish."}[collector.state] }}</p>
   {% if collector.lines %}<pre class="lines">{{ collector.lines | join("\n") }}</pre>{% endif %}
 </div>

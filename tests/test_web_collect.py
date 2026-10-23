@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ACME, ADDRESS, LIST, FakeWeb, board_job, csrf, entry, log_in, settings
+from helpers import ACME, ADDRESS, LIST, FakeWeb, board_job, csrf, entry, log_in, one, settings
 
 from app import collect, fetch
 from app.fetch import Fetcher
@@ -23,7 +23,7 @@ NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 @pytest.fixture
 def config(data_dir):
     """The settings every part of the dashboard reads; tests may replace them."""
-    return {"config": settings(data_dir).model_copy(update={"collect_every_hours": 6})}
+    return {"config": settings(data_dir).model_copy(update={"collect_every_hours": 6, "phonebook_every_days": 0})}
 
 
 @pytest.fixture
@@ -167,6 +167,60 @@ def test_the_schedule_is_due_only_when_on_idle_and_old_enough(data_dir, conn, ev
         worker._thread = threading.Thread(target=threading.Event().wait, args=(5,), daemon=True)
         worker._thread.start()
     assert worker.due(conn, every, NOW) is due
+
+
+@pytest.mark.parametrize(
+    ("every", "done", "last", "running", "due"),
+    [
+        (0, None, None, False, False),  # off
+        (30, None, None, False, True),  # never refreshed
+        (30, NOW - timedelta(days=29), NOW - timedelta(days=29), False, False),
+        (30, NOW - timedelta(days=30), NOW - timedelta(days=30), False, True),
+        (30, NOW - timedelta(days=40), NOW - timedelta(hours=20), False, False),  # an unfinished one today: wait a day
+        (30, NOW - timedelta(days=40), NOW - timedelta(hours=25), False, True),  # then try again
+        (30, None, None, True, False),  # something is running
+    ],
+)
+def test_the_phone_book_is_due_monthly_and_an_unfinished_refresh_daily(data_dir, conn, every, done, last, running, due):
+    with conn:
+        for started, outcome in ((done, "done"), (last, "partial")):
+            if started:
+                conn.execute(
+                    "INSERT INTO phonebook_runs (started_at, outcome) VALUES (?, ?)", (started.isoformat(), outcome)
+                )
+    worker = collector.Collector(data_dir)
+    if running:
+        worker._thread = threading.Thread(target=threading.Event().wait, args=(5,), daemon=True)
+        worker._thread.start()
+    assert worker.refresh_due(conn, every, NOW) is due
+
+
+def test_refresh_phone_book_runs_beside_the_dashboard_and_shows_its_summary(client, conn, web):
+    response = client.post("/phonebook/refresh", data={"csrf_token": csrf(client)}, follow_redirects=False)
+    assert response.headers["location"] == "/collect"
+    worker = finish(client)
+    assert (worker.task, worker.state) == ("refresh", "done")
+    assert worker.lines[0] == "Simplify Summer2027-Internships: 1 boards linked, 1 new names"
+    assert worker.lines[-1].startswith("Checked 3 names: 1 added")  # acme, then the same name on Lever and Ashby
+    page = client.get("/collect").text
+    assert "<td>partial</td>" in page  # Common Crawl is not in the fake web: tried again tomorrow
+    assert one(conn, "SELECT result FROM phonebook WHERE board = 'greenhouse:acme'") == ("added",)
+
+
+def test_a_refresh_waits_for_a_collection_from_a_terminal(client, data_dir):
+    with closing(collect.lock(data_dir)):
+        assert collect.BUSY in client.post("/phonebook/refresh", data={"csrf_token": csrf(client)}).text
+
+
+def test_the_schedule_refreshes_the_phone_book_after_collecting(client, conn, config):
+    config["config"] = config["config"].model_copy(update={"phonebook_every_days": 30})
+    worker = client.app.state.collector
+    worker.tick(conn)  # both due: the collection goes first
+    assert (finish(client).task, worker.state) == ("collect", "done")
+    worker.tick(conn)
+    assert (finish(client).task, worker.state) == ("refresh", "done")
+    worker.tick(conn)  # both just ran
+    assert not worker.running
 
 
 def test_the_schedule_starts_a_collection_when_due(client, conn, config):

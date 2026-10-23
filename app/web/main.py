@@ -205,6 +205,11 @@ def create_app(
         request.app.state.collector.notice = request.app.state.collector.start()
         return RedirectResponse("/collect", 303)  # so reloading the page never starts another collection
 
+    @app.post("/phonebook/refresh")
+    async def refresh_now(request: Request) -> Response:
+        request.app.state.collector.notice = request.app.state.collector.start("refresh")
+        return RedirectResponse("/collect", 303)  # so reloading the page never starts another refresh
+
     @app.get("/collect/progress")
     async def collect_progress(request: Request) -> Response:
         return _page(request, "collect_progress.html", collector=request.app.state.collector)
@@ -234,13 +239,14 @@ async def _schedule(app: FastAPI) -> None:
 
 def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:
     try:
-        every, settings_error = load_config().collect_every_hours, None
+        config, settings_error = load_config(), None
+        every, refresh_every = config.collect_every_hours, config.phonebook_every_days
     except ConfigError as error:
-        every, settings_error = 0, str(error)
-    runs = queries.last_runs(request.app.state.conn)
+        every, refresh_every, settings_error = 0, 0, str(error)
+    conn = request.app.state.conn
     return _page(
-        request, "collect.html", collector=request.app.state.collector, refused=refused, runs=runs, every=every,
-        settings_error=settings_error,
+        request, "collect.html", collector=request.app.state.collector, refused=refused, runs=queries.last_runs(conn),
+        every=every, refresh_every=refresh_every, refreshes=queries.last_refreshes(conn), settings_error=settings_error,
     )  # fmt: skip
 
 

@@ -13,7 +13,7 @@ COLLECT_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.i
 ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL}
 USER_AGENT = "auto_apply personal job search"
 TIMEOUT_SECONDS = 20
-MIN_GAP_SECONDS = 1.0  # between the starts of two requests to the same website
+MIN_GAP_SECONDS = 1.0  # between the starts of two requests to the same website, at one request per second
 RETRY_WAITS = (2, 4, 8)
 MAX_RETRY_AFTER = 60
 # Common Crawl's index asks for pauses between calls and is often overloaded: slower, with longer retry waits.
@@ -39,12 +39,13 @@ class Unreachable(FetchError):
 class Fetcher:
     """Downloads JSON politely. Keeps one connection pool and each website's next free start time."""
 
-    def __init__(self, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(self, transport: httpx.BaseTransport | None = None, per_second: int = 1) -> None:
         self._client = httpx.Client(
             transport=transport, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS, follow_redirects=False
         )
         self._next_start: dict[str, float] = {}  # per website: the earliest time its next request may start
         self._spacing = threading.Lock()  # several downloads share one Fetcher at once
+        self.per_second = per_second  # new requests per second to one job site (requests_per_second in the settings)
 
     def close(self) -> None:
         self._client.close()
@@ -99,7 +100,7 @@ class Fetcher:
 
     def _space_out(self, host: str) -> None:
         """Wait for this website's turn: request starts are a gap apart, however many downloads ask."""
-        gap = COMMON_CRAWL_GAP_SECONDS if host == COMMON_CRAWL else MIN_GAP_SECONDS
+        gap = COMMON_CRAWL_GAP_SECONDS if host == COMMON_CRAWL else MIN_GAP_SECONDS / self.per_second
         with self._spacing:
             start = max(time.monotonic(), self._next_start.get(host, 0.0))
             self._next_start[host] = start + gap

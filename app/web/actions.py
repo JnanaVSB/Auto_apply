@@ -28,6 +28,7 @@ LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
+NUMBERS = ("collect_every_hours", "phonebook_every_days", "requests_per_second")  # whole numbers on the settings form
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
 NOT_FOUND_TIP = (
     "Tip: open the company's careers page; if its address contains greenhouse.io, lever.co or ashbyhq.com, type the "
@@ -205,6 +206,12 @@ def decline_board(conn: sqlcipher3.Connection, board: str) -> bool:
     return rows.rowcount == 1
 
 
+def _whole(text: str) -> int | str:
+    """A whole number typed in the form; anything else is kept as typed, so the settings check names it."""
+    text = text.strip()
+    return int(text) if re.fullmatch(r"[0-9]{1,9}", text) else text  # "²" is not a number
+
+
 def _lines(text: str) -> list[str]:
     """One entry per line: spaces trimmed, empty lines left out, repeats kept once."""
     return list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
@@ -221,6 +228,10 @@ def settings_form() -> dict[str, str]:
         "extra_boards": "\n".join(sources.get("extra_boards") or []),
         "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
         "collect_every_hours": str(raw.get("collect_every_hours", 0)),
+        "phonebook_every_days": str(
+            raw.get("phonebook_every_days", Config.model_fields["phonebook_every_days"].default)
+        ),
+        "requests_per_second": str(raw.get("requests_per_second", 1)),
     }
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
@@ -232,7 +243,7 @@ def save_settings(form: dict[str, str]) -> str | None:
 
     The data folder is kept exactly as written in the file; it is changed by hand only.
     """
-    path, hours = settings_file.CONFIG_PATH, form.get("collect_every_hours", "").strip()
+    path = settings_file.CONFIG_PATH
     rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
     new = path.with_name(f"{path.name}.new")
     try:
@@ -251,7 +262,7 @@ def save_settings(form: dict[str, str]) -> str | None:
                 "extra_boards": _lines(form.get("extra_boards", "")),
                 "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             },
-            "collect_every_hours": int(hours) if re.fullmatch(r"[0-9]+", hours) else hours,  # "²" is not a number
+            **{name: _whole(form.get(name, "")) for name in NUMBERS},
         }
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)

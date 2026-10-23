@@ -162,6 +162,14 @@ def test_downloads_running_at_the_same_time_still_start_a_gap_apart(monkeypatch)
     assert min(gaps) >= 0.045  # a little slack for coarse system clocks
 
 
+def test_more_requests_per_second_means_a_shorter_gap(clock):
+    fetcher, _ = fake_web(*[httpx.Response(200, json=[])] * 2)
+    fetcher.per_second = 4
+    fetcher.get_json(LEVER)
+    fetcher.get_json(LEVER)
+    assert clock.waits == [0.25]
+
+
 def test_common_crawl_is_asked_slowly_and_its_lines_are_read_as_text(clock):
     index = "https://index.commoncrawl.org/CC-MAIN-2026-40-index?url=jobs.lever.co/*&output=json&fl=url"
     fetcher, _ = fake_web(*[httpx.Response(200, text='{"url": "a"}\n{"url": "b"}\n')] * 2)

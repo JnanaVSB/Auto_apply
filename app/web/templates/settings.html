@@ -42,9 +42,17 @@
   <label>One address per line, https://raw.githubusercontent.com/...
     <textarea name="phonebook_lists" rows="3">{{ form.phonebook_lists }}</textarea></label>
 
-  <h2>Automatic collection</h2>
+  <h2>Automatic collection and phone book</h2>
   <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)
     <input name="collect_every_hours" type="number" min="0" max="168" step="1" value="{{ form.collect_every_hours }}"></label>
+  <label>Refresh the phone book every this many days while the dashboard is open (0 = off, up to 365)
+    <input name="phonebook_every_days" type="number" min="0" max="365" step="1" value="{{ form.phonebook_every_days }}"></label>
+
+  <h2>Politeness</h2>
+  <label>Requests per second to each job site (1 to 5; 1 is polite and the default)
+    <input name="requests_per_second" type="number" min="1" max="5" step="1" value="{{ form.requests_per_second }}"></label>
+  <p class="hint">Each site is read on its own, all at the same time. A higher number makes collections faster but asks
+    more of each site. Common Crawl is always read slowly.</p>
 
   <h2>Boards you stopped</h2>
   {% if stopped %}

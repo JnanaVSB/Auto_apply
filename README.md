@@ -57,12 +57,15 @@ nothing personal is ever stored in this repository.
 ```bash
 python -m app.collect
 ```
-Reads Simplify's two public job lists on GitHub and every Greenhouse, Lever and Ashby board they link
-to (plus your `extra_boards`), one request per second per site. It keeps only US jobs matching your
+Reads Simplify's two public job lists on GitHub, then every Greenhouse, Lever and Ashby board the app knows (the
+"phone book", below, plus your `extra_boards`). Each site has its own queue and all sites are read at the same time,
+at most `requests_per_second` new requests to each site (1 by default). It keeps only US jobs matching your
 `roles` and stores each job once. Jobs are never deleted or hidden: a job its board or list drops becomes
 "no longer available" with the reason ("removed from its board", "board shut down", "company stopped hiring",
 "removed from Simplify" or "inactive on Simplify"), and a saved job later judged to be outside the US keeps its
-label and gets a "please check location" mark. A full run takes about 15–25 minutes; running it again is safe.
+label and gets a "please check location" mark. A run takes about one second per board on the site with the most
+boards (about 5 minutes for 700 boards, 1–1.5 hours for 10,000); its first line says how long. Running it again is
+safe.
 
 At the end it prints a summary:
 - **failed**: sources that could not be downloaded. They change nothing. If a site does not answer at all, the
@@ -90,6 +93,23 @@ To see one saved job's status and every board or list it appears on (changes not
 python -m app.collect show "<job link>"
 ```
 
+## Phone book of company boards
+```bash
+python -m app.phonebook refresh
+```
+Greenhouse, Lever and Ashby publish no list of the companies that use them, so the app keeps its own "phone book".
+A refresh takes company board names from every job-board link in Simplify's lists (closed jobs too), from the other
+public GitHub job lists in your `phonebook_lists` setting (add only lists whose licence allows it), and from
+[Common Crawl](https://commoncrawl.org)'s public index of the web. Each new name is checked once with its site's own
+public API: a board that exists is read on every collection from then on (after the boards that already had jobs for
+you), and its matching jobs are saved at once; one that does not exist is remembered and never asked again. Each new
+name is also tried once on the other sites; a board found that way is added only if it shares at least 3 job titles
+with the first one, otherwise it waits for you on the dashboard's Boards page.
+
+It is slow on purpose (Common Crawl asks for pauses between requests and is often overloaded): often an hour or more.
+It is safe to stop with Ctrl+C; the next refresh continues where it stopped. It does not run while a collection runs,
+and the other way round. Nothing is ever deleted.
+
 ## Dashboard
 ```bash
 python -m app.web
@@ -103,13 +123,19 @@ password). Press Ctrl+C in the terminal to stop it.
   "SOCIÉTÉ". Open a job to see its details, its description and every board or list it is on.
 - **On a job's page:** mark it "not interested" (this only hides it; nothing is ever deleted), or set its location to
   US or not US. Later collections keep your choice until you click "Let collections decide again".
-- **Add:** save a job by its link (the same rules as `collect add`), or find a company's board on Greenhouse, Lever and
-  Ashby by typing its name.
-- **Collect:** "Collect now" runs the same collection as `python -m app.collect`, with live progress. Only one
-  collection runs at a time, including one started from a terminal. You can also collect automatically every few hours
-  while the dashboard is open (see Settings).
-- **Settings:** roles, Simplify lists, extra boards and the automatic collection. Saving checks them with the same rules
-  as the file and rewrites `data/config.yaml` (comments in that file are not kept).
+- **Add:** save a job by its link (the same rules as `collect add`), or find a company's boards on Greenhouse, Lever and
+  Ashby by typing its name: every likely board name is tried on every site, and every board found is shown for you to
+  check and add.
+- **Boards:** every company board the app knows, with who found it, whether it is active or discovered (found by the
+  phone book, no matching job yet), the company name it reports and when it was last read. Search, stop reading a
+  board or read it again, and add or decline the boards the phone book could not confirm on its own.
+- **Collect:** "Collect now" runs the same collection as `python -m app.collect`, and "Refresh phone book" the same
+  refresh as `python -m app.phonebook refresh`, with live progress. Only one of them runs at a time, including one
+  started from a terminal. While the dashboard is open, it can collect every few hours and refresh the phone book every
+  few days (monthly unless you change it; see Settings).
+- **Settings:** roles, Simplify lists, extra boards, phone-book lists, the automatic collection and phone-book refresh,
+  and requests per second to each job site. Saving checks them with the same rules as the file and rewrites
+  `data/config.yaml` (comments in that file are not kept).
 
 Forgot the dashboard password? Stop the dashboard and run:
 ```bash
@@ -124,7 +150,8 @@ token, pages load nothing from the internet, and job text is always shown as pla
 ## Adding companies and board types
 - **Another company** on Greenhouse, Lever or Ashby: add one line to `extra_boards` in `data/config.yaml`, using the
   name from the board's web address, e.g. `greenhouse:openai` for `job-boards.greenhouse.io/openai`. Boards linked
-  from Simplify's lists are found automatically. Or use **Add company** in the dashboard.
+  from Simplify's lists, other approved job lists and Common Crawl are found automatically by the phone book. Or use
+  **Add company** in the dashboard.
 - **Another kind of job board** (for example Workable): one small translator file in `app/sources/` plus its tests.
   See [docs/adding-a-board-type.md](docs/adding-a-board-type.md) for the template and the test checklist.
 

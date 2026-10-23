@@ -29,3 +29,7 @@ sources:
 
 # While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
 collect_every_hours: 0
+# While the dashboard is open, refresh the phone book every this many days (1 to 365; 30 = monthly). 0 = off.
+phonebook_every_days: 30
+# New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
+requests_per_second: 1

@@ -241,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         with (
             closing(collect.lock(config.data_dir)),  # one collection or refresh at a time
             closing(db.connect(config.data_dir)) as conn,
-            closing(Fetcher()) as fetcher,
+            closing(Fetcher(per_second=config.requests_per_second)) as fetcher,
         ):
             refresh(conn, config, fetcher)
     except (
