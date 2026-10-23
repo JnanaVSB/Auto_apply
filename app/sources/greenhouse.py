@@ -4,7 +4,10 @@ import html
 import re
 from typing import Any
 
-from app.sources import Job, SourceError, day_from_iso, html_to_text, parse_each, required_text, workplace
+from app.sources import Job, day_from_iso, html_to_text, parse_each, required_text, workplace
+
+BOARD_PAGE = "https://job-boards.greenhouse.io/{}"  # the board's public page, to check by hand
+JOB_LINK = "https://job-boards.greenhouse.io/{}/jobs/{}"  # one standard link per job: board, then job id
 
 
 def api_url(board: str) -> str:
@@ -13,9 +16,7 @@ def api_url(board: str) -> str:
 
 def parse(data: Any, board: str) -> tuple[list[Job], int]:
     """Turn one board's reply into jobs; also return how many broken entries were skipped."""
-    if not isinstance(data, dict):
-        raise SourceError("unexpected format (no list of jobs)")
-    return parse_each(data.get("jobs"), lambda entry: _job(entry, board))
+    return parse_each(data.get("jobs") if isinstance(data, dict) else None, lambda entry: _job(entry, board))
 
 
 def _job(entry: dict, board: str) -> Job:

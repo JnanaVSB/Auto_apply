@@ -1,60 +1,14 @@
 """Greenhouse, Lever and Ashby replies, as small made-up samples in each API's real shape (fake companies)."""
 
+from urllib.parse import urlsplit
+
 import pytest
+from helpers import ashby_job, greenhouse_job, lever_job
 
 from app import jobs as rules
-from app.sources import SourceError, ashby, greenhouse, lever
-
-
-def greenhouse_job(**changes):
-    job = {
-        "id": 123,
-        "title": "Research Scientist, RL",
-        "company_name": "Acme",
-        "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/123",
-        "location": {"name": "San Francisco, CA | New York, NY"},
-        "offices": [{"location": "San Francisco, California, United States"}, {"location": None}],
-        "metadata": [{"name": "Team", "value": ["Research"]}, {"name": "Location Type", "value": "On-Site"}],
-        "content": "&lt;p&gt;Train &amp;amp; evaluate agents.&lt;/p&gt;&lt;script&gt;alert(1)&lt;/script&gt;",
-        "first_published": "2026-10-19T11:17:24-04:00",
-    }
-    return job | changes
-
-
-def lever_job(**changes):
-    job = {
-        "id": "0a1b-2c3d",
-        "text": "Machine Learning Intern",
-        "hostedUrl": "https://jobs.lever.co/globex/0a1b-2c3d",
-        "categories": {"commitment": "Internship", "location": "Austin, TX", "allLocations": ["Austin, TX", "Remote"]},
-        "country": "US",
-        "workplaceType": "hybrid",
-        "description": "<div>About Globex</div>",
-        "lists": [{"text": "What you'll do", "content": "<li>Build models</li><li>Ship them</li>"}],
-        "additional": "<p>Equal opportunity employer.</p>",
-        "salaryRange": {"min": 50000, "max": 60000, "currency": "USD", "interval": "per-year-salary"},
-        "createdAt": 1792506468000,
-    }
-    return job | changes
-
-
-def ashby_job(**changes):
-    job = {
-        "id": "9f8e-7d6c",
-        "title": "Applied AI Engineer",
-        "jobUrl": "https://jobs.ashbyhq.com/initech/9f8e-7d6c",
-        "location": "Seattle",
-        "secondaryLocations": [{"location": "London", "address": {"postalAddress": {"addressCountry": "UK"}}}],
-        "address": {"postalAddress": {"addressCountry": "United States"}},
-        "workplaceType": "OnSite",
-        "isRemote": False,
-        "isListed": True,
-        "employmentType": "FullTime",
-        "descriptionHtml": "<p>Build <b>LLM</b> tools.</p>",
-        "compensation": {"scrapeableCompensationSalarySummary": "$150K - $200K"},
-        "publishedAt": "2026-07-30T21:04:56.462+00:00",
-    }
-    return job | changes
+from app.fetch import ALLOWED_HOSTS
+from app.sources import SourceError, ashby, greenhouse, lever, posting_of
+from app.sources.boards import BOARDS
 
 
 def test_api_addresses():
@@ -177,3 +131,13 @@ def test_ashby_us_job_with_a_foreign_second_office_is_us():
 def test_a_board_with_only_unreadable_entries_fails_instead_of_looking_empty(module, data):
     with pytest.raises(SourceError, match="none of its 2 entries could be read"):
         module.parse(data, "acme")
+
+
+@pytest.mark.parametrize("kind", BOARDS)
+def test_every_board_kind_is_connected(kind):
+    """Its standard job link is recognised as that kind, its page is that link's board, and its API may be read."""
+    reader = BOARDS[kind]
+    link = reader.JOB_LINK.format("acme", "123")
+    assert posting_of(link) == (kind, "acme", "123")
+    assert link.startswith(reader.BOARD_PAGE.format("acme") + "/")
+    assert urlsplit(reader.api_url("acme")).hostname in ALLOWED_HOSTS

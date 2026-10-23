@@ -9,26 +9,9 @@ LEVER = "https://api.lever.co/v0/postings/acme?mode=json"
 GREENHOUSE = "https://boards-api.greenhouse.io/v1/boards/acme/jobs"
 
 
-class FakeClock:
-    """Stands in for the time module: records waits instead of sleeping."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.waits: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.waits.append(seconds)
-        self.now += seconds
-
-
 @pytest.fixture(autouse=True)
-def clock(monkeypatch) -> FakeClock:
-    fake = FakeClock()
-    monkeypatch.setattr(fetch, "time", fake)
-    return fake
+def clock(no_waiting):
+    return no_waiting
 
 
 def fake_web(*replies):

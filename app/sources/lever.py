@@ -5,6 +5,9 @@ from typing import Any
 
 from app.sources import Job, day_from_timestamp, html_to_text, parse_each, required_text, workplace
 
+BOARD_PAGE = "https://jobs.lever.co/{}"  # the board's public page, to check by hand
+JOB_LINK = "https://jobs.lever.co/{}/{}"  # one standard link per job: board, then job id
+
 
 def api_url(board: str) -> str:
     return f"https://api.lever.co/v0/postings/{board}?mode=json"

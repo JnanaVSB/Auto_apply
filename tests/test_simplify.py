@@ -1,10 +1,10 @@
 """Simplify lists, tested with small made-up entries in the real file's shape (fake companies only)."""
 
 import pytest
+from helpers import LIST
 
 from app.sources import SourceError, simplify
 
-LIST_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
 SOURCE = "simplify:Summer2027-Internships"
 
 
@@ -26,7 +26,7 @@ def entry(**changes):
 
 
 def test_source_name_comes_from_the_repository():
-    assert simplify.source_name(LIST_URL) == SOURCE
+    assert simplify.source_name(LIST) == SOURCE
 
 
 def test_entry_becomes_a_job():

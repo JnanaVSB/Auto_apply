@@ -8,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.sources import BOARD_NAME
+from app.sources.boards import BOARDS
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
@@ -51,8 +52,9 @@ class SourceSettings(BaseModel):
         cleaned = [board.strip().lower() for board in boards]
         for board in cleaned:
             kind, _, name = board.partition(":")
-            if kind not in ("greenhouse", "lever", "ashby") or not BOARD_NAME.fullmatch(name):
-                raise ValueError("each must look like greenhouse:<name>, lever:<name> or ashby:<name>")
+            if kind not in BOARDS or not BOARD_NAME.fullmatch(name):
+                *others, last = (f"{kind}:<name>" for kind in BOARDS)
+                raise ValueError(f"each must look like {', '.join(others)} or {last}")
         return cleaned
 
 

@@ -7,77 +7,14 @@ from contextlib import closing
 import httpx
 import pytest
 import sqlcipher3
+from helpers import ACME, ACME_JOB, LIST, FakeWeb, board_job, entry, one, settings
 
-from app import collect, db, fetch, jobs
-from app.config import Config, RoleSettings, SimplifyList, SourceSettings
+from app import collect, fetch, jobs
+from app.config import Config
 
 pytestmark = pytest.mark.usefixtures("no_waiting")  # downloads never really wait
 
-LIST = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
-ACME = "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"
 GLOBEX = "https://api.lever.co/v0/postings/globex?mode=json"
-ACME_JOB = "https://job-boards.greenhouse.io/acme/jobs/123"
-PASSWORD = "fake-master-password-1"  # noqa: S105 (fake value, tests only)
-
-
-def entry(**changes):
-    job = {"id": "s-1", "title": "ML Intern", "company_name": "Acme", "url": ACME_JOB, "locations": ["SF"]}
-    return job | {"category": "AI/ML/Data", "terms": ["Summer 2027"], "active": True} | changes
-
-
-def board_job(**changes):
-    job = {"id": 123, "title": "ML Intern", "company_name": "Acme", "absolute_url": ACME_JOB}
-    job["location"] = {"name": "San Francisco, CA"}
-    return job | {"content": "&lt;p&gt;Train models.&lt;/p&gt;"} | changes
-
-
-class FakeWeb:
-    """Answers each address from `pages`: JSON, (JSON, version tag), a status code or an error to raise.
-
-    Sites in `down` never answer at all; sites in `silent` answer the quick reachability check, then go quiet.
-    """
-
-    def __init__(self, pages, down=(), silent=()):
-        self.pages, self.down, self.silent = pages, set(down), set(silent)
-        self.requests = []
-
-    def __call__(self, request):
-        self.requests.append(request)
-        host = request.url.host
-        if host in self.down or (host in self.silent and request.method == "GET"):
-            raise httpx.ConnectError("no route to host")
-        page = self.pages.get(str(request.url), 404)
-        if isinstance(page, BaseException):
-            raise page
-        if isinstance(page, int):
-            return httpx.Response(page)
-        data, etag = page if isinstance(page, tuple) else (page, None)
-        if etag and request.headers.get("If-None-Match") == etag:
-            return httpx.Response(304)
-        return httpx.Response(200, json=data, headers={"ETag": etag} if etag else {})
-
-
-@pytest.fixture
-def data_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "RECOVERY_KDF_ITER", 1_000)
-    db.setup(tmp_path / "data", PASSWORD)
-    return tmp_path / "data"
-
-
-@pytest.fixture
-def conn(data_dir):
-    with closing(db.connect(data_dir)) as connection:
-        yield connection
-
-
-def settings(data_dir, extra_boards=()):
-    return Config(
-        data_dir=data_dir,
-        roles=RoleSettings(simplify_categories=["AI/ML/Data"], keywords=["ML"]),
-        sources=SourceSettings(
-            simplify_lists=[SimplifyList(url=LIST, level="intern")], extra_boards=list(extra_boards)
-        ),
-    )
 
 
 def run(conn, data_dir, pages, extra_boards=(), **web_options):
@@ -94,10 +31,6 @@ def requested(web):
 
 def list_request(web):
     return next(request for request in web.requests if str(request.url) == LIST)
-
-
-def one(conn, sql, *values):
-    return conn.execute(sql, values).fetchone()
 
 
 PAGES = {
@@ -424,12 +357,9 @@ def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeyp
         assert main([], settings(data_dir)) == (1, "Error: A collection is already running. Wait for it to finish.\n")
 
 
-ALL_SITES = ("raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com")
-
-
 def test_no_internet_stops_at_once(conn, data_dir):
     with pytest.raises(collect.CollectError, match="No internet connection"):
-        run(conn, data_dir, PAGES, down=ALL_SITES)
+        run(conn, data_dir, PAGES, down=fetch.ALLOWED_HOSTS)
     assert one(conn, "SELECT count(*) FROM collect_runs") == (0,)
 
 

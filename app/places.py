@@ -2,7 +2,6 @@
 
 import json
 import re
-from collections.abc import Iterable
 from pathlib import Path
 
 STATES = {
@@ -42,8 +41,9 @@ def _cities(entries: dict[str, list]) -> dict[str, tuple[int, set[str]]]:
     """Name -> (largest population, states or countries with a city of that name), keyed by _key."""
     cities: dict[str, tuple[int, set[str]]] = {}
     for name, (population, areas) in entries.items():
-        people, known = cities.get(_key(name), (0, set()))
-        cities[_key(name)] = (max(people, population), known | set(areas))
+        key = _key(name)
+        people, known = cities.get(key, (0, set()))
+        cities[key] = (max(people, population), known | set(areas))
     return cities
 
 
@@ -54,8 +54,9 @@ COUNTRIES: dict[str, str] = _PLACES["countries"] | COUNTRY_ALIASES  # lower-case
 COUNTRY_CODES = {*COUNTRIES.values(), "UK"}
 
 
-def _any_of(names: Iterable[str]) -> re.Pattern:
-    return re.compile(rf"(?<!\w)(?:{'|'.join(map(re.escape, names))})(?!\w)", re.IGNORECASE)
+def whole_words(alternatives: str) -> re.Pattern:
+    """A pattern for any of `alternatives` (a regex like "a|b") as whole words, ignoring capitals."""
+    return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)", re.IGNORECASE)
 
 
 US_WORDS = re.compile(
@@ -63,8 +64,8 @@ US_WORDS = re.compile(
     r"|(?-i:(?<![A-Za-z])(?:USA|U\.S\.A?|US|SF|NYC|LA|South SF|Bay Area)(?![A-Za-z]))",
     re.IGNORECASE,
 )
-STATE_NAMES = _any_of(STATES.values())
-FOREIGN_NAMES = _any_of([*COUNTRIES, *PROVINCES.values(), *FOREIGN_REGIONS])
+STATE_NAMES = whole_words("|".join(map(re.escape, STATES.values())))
+FOREIGN_NAMES = whole_words("|".join(map(re.escape, [*COUNTRIES, *PROVINCES.values(), *FOREIGN_REGIONS])))
 FOREIGN_NAME_KEYS = {_key(name) for name in [*COUNTRIES, *PROVINCES.values(), *FOREIGN_REGIONS]}
 REMOTE_ONLY = re.compile(r"(?:remote|anywhere|worldwide|global|[\s,;:/()–-])*", re.IGNORECASE)
 CODE = re.compile(r"[A-Z]{2}")

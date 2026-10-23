@@ -19,11 +19,12 @@ from starlette.exceptions import HTTPException
 from app import db
 from app.config import ConfigError, load_config
 from app.fetch import Fetcher
+from app.sources.boards import BOARDS
 from app.web import actions, queries, security
 from app.web.collector import Collector
 
 HERE = Path(__file__).parent
-ALLOWED_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
+LOCAL_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
 MAX_FORM_BYTES = 64 * 1024
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
@@ -34,6 +35,7 @@ MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 SCHEDULE_CHECK_SECONDS = 60
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
 templates.env.globals["US_LABELS"] = queries.US_LABELS
+templates.env.globals["BOARD_KINDS"] = [(kind, kind.title()) for kind in BOARDS]  # Source choices on the jobs page
 
 
 def create_app(
@@ -69,7 +71,7 @@ def create_app(
             response = _error(request, refusal.status_code, refusal.detail)
         except Exception as error:  # never a crash report in the browser, nor job data in the terminal
             if isinstance(error, sqlcipher3.OperationalError) and "locked" in str(error):
-                response = _error(request, 503, BUSY)  # a collection is saving; waited 5 seconds already
+                response = _error(request, 503, BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
             else:
                 log.error("Unexpected error: %s", type(error).__name__)
                 response = _error(
@@ -238,7 +240,7 @@ def _settings_page(request: Request, problem: str | None = None, typed: dict[str
 
 async def _checked(request: Request, call_next) -> Response:
     host = request.headers.get("host", "")
-    if urlsplit(f"//{host}").hostname not in ALLOWED_HOSTS:  # stops "DNS rebinding" by other websites
+    if urlsplit(f"//{host}").hostname not in LOCAL_HOSTS:  # stops "DNS rebinding" by other websites
         raise HTTPException(
             400, "This address is not allowed. Open the dashboard at the address shown in the terminal."
         )

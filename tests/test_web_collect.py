@@ -9,10 +9,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from test_collect import ACME, LIST, FakeWeb, board_job, entry, settings
-from web_helpers import ADDRESS, csrf, log_in
+from helpers import ACME, ADDRESS, LIST, FakeWeb, board_job, csrf, entry, log_in, settings
 
-from app import collect
+from app import collect, fetch
 from app.fetch import Fetcher
 from app.web import collector, main, security
 
@@ -24,8 +23,7 @@ NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 @pytest.fixture
 def config(data_dir):
     """The settings every part of the dashboard reads; tests may replace them."""
-    current = {"config": settings(data_dir).model_copy(update={"collect_every_hours": 6})}
-    return current
+    return {"config": settings(data_dir).model_copy(update={"collect_every_hours": 6})}
 
 
 @pytest.fixture
@@ -34,13 +32,12 @@ def web():
 
 
 @pytest.fixture
-def client(data_dir, clock, config, web, monkeypatch):
+def client(client, config, monkeypatch):
+    """Logged in, reading `config` as its settings."""
     for module in (collector, main):
         monkeypatch.setattr(module, "load_config", lambda: config["config"])
-    app = main.create_app(data_dir, security.Logins(clock=clock), lambda: Fetcher(httpx.MockTransport(web)))
-    with TestClient(app, base_url=ADDRESS) as client:
-        log_in(client)
-        yield client
+    log_in(client)
+    return client
 
 
 def collect_now(client):
@@ -111,7 +108,7 @@ def test_missing_settings_give_the_commands_message(client, config, data_dir):
 
 
 def test_no_internet_shows_one_line(client, web):
-    web.down = {"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"}
+    web.down = set(fetch.ALLOWED_HOSTS)
     collect_now(client)
     worker = finish(client)
     assert worker.state == "failed"

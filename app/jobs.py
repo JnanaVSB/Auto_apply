@@ -3,7 +3,6 @@
 import json
 import re
 from collections import Counter
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import groupby
 from operator import itemgetter
@@ -13,7 +12,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import sqlcipher3
 
 from app import places
+from app.config import RoleSettings
 from app.sources import Job, is_simplify_site, posting_of
+from app.sources.boards import BOARDS
 
 LEVELS = (  # first match wins, so "Associate Director" is staff+ and "Engineer II" is mid
     ("intern", r"intern|internship|co-?op"),
@@ -23,12 +24,7 @@ LEVELS = (  # first match wins, so "Associate Director" is staff+ and "Engineer 
     ("mid", r"(?-i:II|III)"),
     ("entry", r"junior|jr\.?|entry level|associate|engineer (?-i:I)"),
 )
-LEVEL_PATTERNS = [(level, re.compile(rf"(?<!\w)(?:{words})(?!\w)", re.IGNORECASE)) for level, words in LEVELS]
-STANDARD_LINKS = {
-    "greenhouse": "https://job-boards.greenhouse.io/{}/jobs/{}",
-    "lever": "https://jobs.lever.co/{}/{}",
-    "ashby": "https://jobs.ashbyhq.com/{}/{}",
-}
+LEVEL_PATTERNS = [(level, places.whole_words(words)) for level, words in LEVELS]
 TRACKING = {"ref", "src", "source", "gh_src", "lever-source", "lever-origin", "trk"}
 NOT_KNOWN = (None, "", "[]", "unknown", "unclear")  # never replace a known value when merging
 SIMPLIFY_OWNS = {"company", "level", "role_category", "sponsorship", "terms"}  # company boards own the rest
@@ -81,10 +77,10 @@ class Roles:
     keywords: re.Pattern | None
 
     @classmethod
-    def from_settings(cls, categories: Iterable[str], keywords: Iterable[str]) -> "Roles":
-        words = [re.escape(word.strip()) for word in keywords if word.strip()]
-        pattern = re.compile(rf"(?<!\w)(?:{'|'.join(words)})(?!\w)", re.IGNORECASE) if words else None
-        return cls(frozenset(categories), pattern)
+    def from_settings(cls, roles: RoleSettings) -> "Roles":
+        words = [re.escape(word.strip()) for word in roles.keywords if word.strip()]
+        pattern = places.whole_words("|".join(words)) if words else None
+        return cls(frozenset(roles.simplify_categories), pattern)
 
     def match(self, job: Job) -> bool:
         if job.category in self.categories:
@@ -150,9 +146,9 @@ def remote(job: Job) -> str:
 def clean_link(job: Job) -> str | None:
     """One standard link per job, without tracking parts; None for anything but a web address."""
     kind, _, board = job.source.partition(":")
-    posting = (kind, board, job.source_job_id) if kind in STANDARD_LINKS else posting_of(job.url)
+    posting = (kind, board, job.source_job_id) if kind in BOARDS else posting_of(job.url)
     if posting:
-        return STANDARD_LINKS[posting[0]].format(posting[1], posting[2])
+        return BOARDS[posting[0]].JOB_LINK.format(posting[1], posting[2])
     parts = urlsplit(job.url)
     if parts.scheme not in ("http", "https") or not parts.hostname or "@" in parts.netloc:
         return None

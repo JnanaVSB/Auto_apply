@@ -5,7 +5,7 @@ import threading
 from contextlib import closing
 
 import pytest
-from web_helpers import PASSWORD, csrf, log_in
+from helpers import PASSWORD, csrf, log_in
 
 from app import collect, db
 from app.config import Config
@@ -144,7 +144,7 @@ def command(data_dir, monkeypatch, capsys):
 
     def run(argv=(), answers=()):
         replies = iter(answers)
-        monkeypatch.setattr(web_command.getpass, "getpass", lambda prompt: next(replies))
+        monkeypatch.setattr(db.getpass, "getpass", lambda prompt: next(replies))
         return web_command.main(list(argv)), capsys.readouterr(), served
 
     return run

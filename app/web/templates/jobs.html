@@ -19,7 +19,7 @@
     <label>Source
       <select name="source">
         <option value="">any</option>
-        {% for value, label in [("simplify", "Simplify lists"), ("greenhouse", "Greenhouse"), ("lever", "Lever"), ("ashby", "Ashby"), ("manual", "Added by link")] %}
+        {% for value, label in [("simplify", "Simplify lists")] + BOARD_KINDS + [("manual", "Added by link")] %}
         <option value="{{ value }}"{% if value == view.source %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
         {% for name in choices.simplify %}

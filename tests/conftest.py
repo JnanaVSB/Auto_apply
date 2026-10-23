@@ -1,15 +1,19 @@
-"""Shared test setup: a fake in-memory keychain (never the real OS keychain), quick password hashing, and the
-dashboard's throwaway database, clock and test client."""
+"""Shared test setup: a fake in-memory keychain (never the real OS keychain), quick password hashing, a test
+database built once and copied for each test, and the dashboard's clock, fake web and test client."""
 
+import shutil
 from contextlib import closing
+from pathlib import Path
 
+import httpx
 import keyring
 import pytest
 from fastapi.testclient import TestClient
+from helpers import ADDRESS, MASTER_PASSWORD, PASSWORD, Clock, FakeWeb
 from keyring.backend import KeyringBackend
-from web_helpers import ADDRESS, PASSWORD, Clock
 
 from app import db, fetch, keychain
+from app.fetch import Fetcher
 from app.web import __main__ as web_command
 from app.web import main, security
 
@@ -28,44 +32,65 @@ class MemoryKeychain(KeyringBackend):
         self.store[(service, username)] = password
 
 
-@pytest.fixture(autouse=True)
-def fake_keychain(monkeypatch) -> MemoryKeychain:
-    monkeypatch.setattr(keychain, "SAFE_BACKENDS", (*keychain.SAFE_BACKENDS, MemoryKeychain.__module__))
+class FakeTime:
+    """Stands in for the time module in downloads: records waits instead of sleeping."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.waits: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.now += seconds
+
+
+def _fake_secrets(patch: pytest.MonkeyPatch) -> MemoryKeychain:
+    """An empty in-memory keychain, and quick password hashing (the app always uses the full cost)."""
+    patch.setattr(keychain, "SAFE_BACKENDS", (*keychain.SAFE_BACKENDS, MemoryKeychain.__module__))
+    patch.setattr(db, "RECOVERY_KDF_ITER", 1_000)
+    patch.setattr(security, "SCRYPT", {"n": 2**10, "r": 8, "p": 1})
     fake = MemoryKeychain()
     keyring.set_keyring(fake)
     return fake
 
 
 @pytest.fixture(autouse=True)
-def quick_hash(monkeypatch):
-    monkeypatch.setattr(db, "RECOVERY_KDF_ITER", 1_000)
-    monkeypatch.setattr(security, "SCRYPT", {"n": 2**10, "r": 8, "p": 1})  # the app always uses the full cost
+def fake_keychain(monkeypatch) -> MemoryKeychain:
+    return _fake_secrets(monkeypatch)
 
 
 @pytest.fixture
-def no_waiting(monkeypatch):
-    """Downloads never really wait (politeness gaps and retry pauses pass at once)."""
+def no_waiting(monkeypatch) -> FakeTime:
+    """Downloads never really wait (politeness gaps and retry pauses pass at once); returns the clock."""
+    fake = FakeTime()
+    monkeypatch.setattr(fetch, "time", fake)
+    return fake
 
-    class FakeTime:
-        now = 0.0
 
-        def monotonic(self):
-            return self.now
+@pytest.fixture(scope="session")
+def built_database(tmp_path_factory) -> tuple[Path, dict]:
+    """A database with a dashboard password, built once per test run (each build takes about 0.2 s).
 
-        def sleep(self, seconds):
-            self.now += seconds
-
-    monkeypatch.setattr(fetch, "time", FakeTime())
+    Returns its folder and its keychain entries; data_dir gives each test its own copy.
+    """
+    path = tmp_path_factory.mktemp("built") / "data"
+    with pytest.MonkeyPatch.context() as patch:
+        keys = _fake_secrets(patch)
+        db.setup(path, MASTER_PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute(web_command.SAVE_LOGIN, (security.hash_password(PASSWORD), "now"))
+    return path, keys.store
 
 
 @pytest.fixture
-def data_dir(tmp_path):
-    """A throwaway database with a dashboard password (test modules may define their own)."""
-    path = tmp_path / "data"
-    db.setup(path, "fake-master-password-1")
-    with closing(db.connect(path)) as conn, conn:
-        conn.execute(web_command.SAVE_LOGIN, (security.hash_password(PASSWORD), "now"))
-    return path
+def data_dir(tmp_path, built_database, fake_keychain):
+    """A throwaway copy of the test database, with its key in this test's fake keychain."""
+    built, keys = built_database
+    fake_keychain.store.update(keys)
+    return shutil.copytree(built, tmp_path / "data")
 
 
 @pytest.fixture
@@ -80,7 +105,14 @@ def clock():
 
 
 @pytest.fixture
-def client(data_dir, clock):
-    """The dashboard, not logged in, with a clock the test controls."""
-    with TestClient(main.create_app(data_dir, security.Logins(clock=clock)), base_url=ADDRESS) as client:
+def web():
+    """The fake web the dashboard's downloads reach: every address "not found" unless a test file gives its own."""
+    return FakeWeb({})
+
+
+@pytest.fixture
+def client(data_dir, clock, web):
+    """The dashboard, not logged in, with a clock and a fake web the test controls."""
+    app = main.create_app(data_dir, security.Logins(clock=clock), lambda: Fetcher(httpx.MockTransport(web)))
+    with TestClient(app, base_url=ADDRESS) as client:
         yield client

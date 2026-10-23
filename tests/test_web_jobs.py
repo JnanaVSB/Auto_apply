@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 import pytest
 import sqlcipher3
-from web_helpers import add_job, csrf, log_in
+from helpers import add_job, csrf, log_in
 
 from app import db
 from app.web import queries
@@ -67,7 +67,7 @@ def test_each_filter(conn, four, address, expected):
     assert titles(conn, address) == expected
 
 
-def test_values_the_dashboard_does_not_know_are_ignored(conn, four):
+def test_values_the_dashboard_does_not_know_are_ignored():
     odd = "f=1&level=wizard&posted_from=yesterday&sort=random&page=-3&source=evil.example&hidden=x&status=gone"
     assert queries.Filters.from_address(odd) == queries.Filters(status=())
     assert queries.Filters.from_address("page=²").page == 1  # "²" counts as a digit for Python's isdigit()

@@ -21,19 +21,14 @@ from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import BOARD_NAME, SourceError
+from app.sources.boards import BOARDS
 from app.web import queries
 
-KINDS = ("greenhouse", "lever", "ashby")
 LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
-BOARD_PAGES = {  # each board's own public page, for the user to check by hand
-    "greenhouse": "https://job-boards.greenhouse.io/{}",
-    "lever": "https://jobs.lever.co/{}",
-    "ashby": "https://jobs.ashbyhq.com/{}",
-}
 NOT_FOUND_TIP = (
     "Tip: open the company's careers page; if its address contains greenhouse.io, lever.co or ashbyhq.com, type the "
     "name from that address (for example greenhouse:acme), or paste one job's link into Add job."
@@ -102,8 +97,8 @@ def find_company(data_dir: Path, fetcher: Fetcher, text: str) -> tuple[list[Foun
     """
     text = text.strip()[:MAX_NAME]
     kind, _, name = text.lower().partition(":")
-    tries = [(kind, name)] if kind in KINDS and BOARD_NAME.fullmatch(name) else [
-        (kind, name) for kind in KINDS for name in board_names(text)
+    tries = [(kind, name)] if kind in BOARDS and BOARD_NAME.fullmatch(name) else [
+        (kind, name) for kind in BOARDS for name in board_names(text)
     ]  # fmt: skip
     if not tries:
         return [], ["Type a company name, for example Acme AI, or one board such as greenhouse:acme."]
@@ -118,7 +113,7 @@ def find_company(data_dir: Path, fetcher: Fetcher, text: str) -> tuple[list[Foun
 def _find_boards(
     conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, tries: list[tuple[str, str]], text: str
 ) -> tuple[list[FoundBoard], list[str]]:
-    roles = jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords)
+    roles = jobs.Roles.from_settings(config.roles)
     boards, notes, done = [], [], set()  # done: sites with a board found, or that could not be read
     answered = False
     for kind, name in tries:
@@ -126,8 +121,7 @@ def _find_boards(
             continue
         board = f"{kind}:{name}"
         try:
-            data, _ = fetcher.get_json(collect.BOARDS[kind].api_url(name))
-            found, _ = collect.BOARDS[kind].parse(data, name)
+            found, _ = collect.read_board(fetcher, kind, name)
         except NotFound:
             continue
         except (FetchError, SourceError) as error:
@@ -148,10 +142,10 @@ def _find_boards(
                 len(found),
                 sum(jobs.wanted(job, roles) for job in found),
                 [job.title for job in found[:3]],
-                BOARD_PAGES[kind].format(name),
+                BOARDS[kind].BOARD_PAGE.format(name),
                 bool(read and not stopped),
                 bool(stopped),
-            )  # fmt: skip
+            )
         )
     if not answered:
         tried = ", ".join(dict.fromkeys(name for _, name in tries))
@@ -162,14 +156,13 @@ def _find_boards(
 def add_board(data_dir: Path, fetcher: Fetcher, board: str) -> str:
     """After the user confirmed it: save one board's matching jobs and read it on every collection."""
     kind, _, name = board.partition(":")
-    if kind not in KINDS or not BOARD_NAME.fullmatch(name):
+    if kind not in BOARDS or not BOARD_NAME.fullmatch(name):
         return "That is not a board name such as greenhouse:acme."
     try:
         config = load_config()
-        roles = jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords)
+        roles = jobs.Roles.from_settings(config.roles)
         with ADDING, closing(db.connect(data_dir)) as conn:
-            data, _ = fetcher.get_json(collect.BOARDS[kind].api_url(name))
-            found, _ = collect.BOARDS[kind].parse(data, name)
+            found, _ = collect.read_board(fetcher, kind, name)
             if not found:
                 return f"{board} lists no jobs right now, so it was not added."
             counts = jobs.save(conn, board, found, roles, collect.now())

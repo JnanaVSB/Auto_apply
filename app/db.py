@@ -9,6 +9,7 @@ import argparse
 import getpass
 import re
 import secrets
+import sqlite3
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -454,13 +455,30 @@ def new_recovery_key(data_dir: Path, master_password: str) -> None:
         raise
 
 
-def _ask_new_password() -> str:
-    password = getpass.getpass(
+def ask_new_password(
+    prompt: str = (
         f"New master password ({MIN_PASSWORD_LENGTH}+ characters; a 4-5 word passphrase is easiest to remember): "
-    )
+    ),
+    name: str = "master password",
+) -> str:
+    """Ask for a new password twice; a weak one is refused before it is typed again."""
+    password = getpass.getpass(prompt)
+    check_password(password, name)
     if password != getpass.getpass("Re-enter the password: "):
         raise DatabaseError("The two passwords do not match.")
     return password
+
+
+def error_line(error: BaseException) -> str:
+    """A terminal command's one-line message for an error: never a traceback, never a full path."""
+    if isinstance(error, sqlcipher3.Error | sqlite3.Error):  # anything unexpected from the database library
+        return f"Error: the database could not be read or written ({error})."
+    if isinstance(error, OSError):  # only the file name, since full paths include the user's name
+        where = f": {Path(error.filename).name}" if error.filename else ""
+        return f"Error: {error.strerror or error}{where}"
+    if isinstance(error, EOFError | KeyboardInterrupt):
+        return "\nCancelled."
+    return f"Error: {error}"  # our own errors, whose messages are written for the user
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -475,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         data_dir = load_config().data_dir
         if command == "setup":
             _refuse_if_set_up(data_dir, args.replace_key)  # before asking for a password that could not be used
-            setup(data_dir, _ask_new_password(), replace_key=args.replace_key)
+            setup(data_dir, ask_new_password(), replace_key=args.replace_key)
             print(
                 "Database created. Store your master password somewhere safe (e.g. a password manager): "
                 "if both it and the keychain entry are lost, the data cannot be recovered."
@@ -485,22 +503,23 @@ def main(argv: list[str] | None = None) -> int:
             print("Database key restored to the keychain.")
         elif command == "new-recovery-key":
             connect(data_dir).close()  # check the keychain key before asking for a password
-            new_recovery_key(data_dir, _ask_new_password())
+            new_recovery_key(data_dir, ask_new_password())
             print("New recovery.key written. Store the new master password safely; any old one no longer works.")
         elif command == "change-password":
             old_password = getpass.getpass("Current master password: ")
             _open_recovery(data_dir, old_password)[0].close()  # check it before asking for the new one
-            change_master_password(data_dir, old_password, _ask_new_password())
+            change_master_password(data_dir, old_password, ask_new_password())
             print("Master password changed.")
-    except (ConfigError, KeychainError, DatabaseError) as error:
-        print(f"Error: {error}", file=sys.stderr)
-    except sqlcipher3.DatabaseError as error:  # anything unexpected from the database library, without a traceback
-        print(f"Error: the database could not be read or written ({error}).", file=sys.stderr)
-    except OSError as error:  # only the file name, since full paths include the user's name
-        where = f": {Path(error.filename).name}" if error.filename else ""
-        print(f"Error: {error.strerror or error}{where}", file=sys.stderr)
-    except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.", file=sys.stderr)
+    except (
+        ConfigError,
+        KeychainError,
+        DatabaseError,
+        sqlcipher3.DatabaseError,
+        OSError,
+        EOFError,
+        KeyboardInterrupt,
+    ) as error:
+        print(error_line(error), file=sys.stderr)
     else:
         return 0
     return 1

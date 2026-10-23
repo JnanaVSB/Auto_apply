@@ -3,7 +3,7 @@
 import json
 import math
 import re
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from urllib.parse import parse_qs, urlencode
 
@@ -12,6 +12,7 @@ import sqlcipher3
 from app import jobs
 from app.collect import source_label, source_state
 from app.sources import is_simplify_site
+from app.sources.boards import BOARDS
 
 PAGE_SIZE = 50
 MAX_TEXT = 200
@@ -28,8 +29,8 @@ OPTIONS = {  # every value a list filter accepts; anything else in the address i
     "hidden": ("hide", "show", "only"),
     "sort": ("posted", "found", "company", "title"),
 }  # fmt: skip
-DIGITS = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
-SOURCE = re.compile(r"(simplify|greenhouse|lever|ashby)(:[\w.-]+)?|manual")  # a kind, or one list or board
+PAGE_NUMBER = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
+SOURCE = re.compile(rf"(simplify|{'|'.join(BOARDS)})(:[\w.-]+)?|manual")  # a kind, or one list or board
 SORTS = {
     "posted": "date_posted IS NULL, date_posted DESC, id DESC",  # jobs with no date go last
     "found": "first_seen DESC, id DESC",
@@ -109,7 +110,7 @@ class Filters:
             added=one("added") == "1",
             hidden=one("hidden") or cls.hidden,
             sort=one("sort") or cls.sort,
-            page=max(1, int(page)) if DIGITS.fullmatch(page) else 1,
+            page=max(1, int(page)) if PAGE_NUMBER.fullmatch(page) else 1,
         )
 
     def address(self, **changes) -> str:
@@ -130,10 +131,11 @@ class Page:
     number: int
     pages: int
     other_statuses: int = 0  # jobs left out only by the status filter
-    first: int = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.first = (self.number - 1) * PAGE_SIZE + 1
+    @property
+    def first(self) -> int:
+        """The number of the first job on this page, counting from 1."""
+        return (self.number - 1) * PAGE_SIZE + 1
 
 
 def _where(view: Filters, *, status: bool = True) -> tuple[str, list]:

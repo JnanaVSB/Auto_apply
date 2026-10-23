@@ -22,7 +22,10 @@ database, no settings in this file.
 
 from typing import Any
 
-from app.sources import Job, SourceError, day_from_iso, html_to_text, parse_each, required_text, workplace
+from app.sources import Job, day_from_iso, html_to_text, parse_each, required_text, workplace
+
+BOARD_PAGE = "https://<public host>/{}"  # the board's public page, to check by hand
+JOB_LINK = "https://<public host>/{}/{}"  # one standard link per job: board, then job id
 
 
 def api_url(board: str) -> str:
@@ -31,9 +34,8 @@ def api_url(board: str) -> str:
 
 def parse(data: Any, board: str) -> tuple[list[Job], int]:
     """Turn one board's reply into jobs; also return how many broken entries were skipped."""
-    if not isinstance(data, dict):  # check the shape the site really sends
-        raise SourceError("unexpected format (no list of jobs)")
-    return parse_each(data.get("jobs"), lambda entry: _job(entry, board))
+    # parse_each refuses anything but a list of jobs; pick the list out of the shape the site really sends
+    return parse_each(data.get("jobs") if isinstance(data, dict) else None, lambda entry: _job(entry, board))
 
 
 def _job(entry: dict, board: str) -> Job | None:
@@ -55,8 +57,22 @@ def _job(entry: dict, board: str) -> Job | None:
     )
 ```
 
-Then connect it in `app/sources/__init__.py` (`BOARD_HOSTS`: the board's public web host, so job links are
-recognised) and in `app/collect.py` (`BOARDS`: the new file).
+Then connect it. These are all the places a new kind needs:
+1. **In the new file, next to `api_url`:** `BOARD_PAGE` (the board's public page, `{}` = board name) and `JOB_LINK`
+   (one job's public page: board name, then job id). The app uses them to show the board to the user and to store
+   one standard link per job.
+2. **`app/sources/boards.py` (`BOARDS`):** add the new file under its kind name, for example `"workable": workable`.
+   Every other part of the app takes its list of kinds from here: the settings check for `extra_boards`,
+   collection, Add job, Add company, and the jobs-list Source filter.
+3. **`app/sources/__init__.py` (`BOARD_HOSTS`):** the board's public web host, so job links in Simplify's lists or
+   pasted into Add job are recognised. `posting_of` reads such a link as `https://<host>/<board>/<job id>`; a site
+   whose links look different needs its own case there, as Greenhouse has.
+4. **`app/fetch.py` (`ALLOWED_HOSTS`):** the API host from `api_url`. This list is separate on purpose: it is the
+   security list of sites the app may contact, so adding to it is the owner's decision.
+5. **Hand-written wording that names the kinds:** the Add company tip and its "not found" message in
+   `app/web/actions.py`, and the first paragraph of this guide.
+
+The test `test_every_board_kind_is_connected` fails until items 1, 3 and 4 are done.
 
 ## Tests: `tests/test_boards.py`
 Use a small made-up reply in the site's real shape, with fake companies only; tests never use the internet.

@@ -3,13 +3,13 @@
 from urllib.parse import quote
 
 import pytest
-from web_helpers import add_job, log_in
+from helpers import add_job, log_in
 
 from app.web import queries
 
 
 @pytest.fixture
-def page(client, conn):
+def page(client):
     """Log in, then open a job's page by its number."""
     log_in(client)
 

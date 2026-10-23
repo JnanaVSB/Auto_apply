@@ -1,21 +1,18 @@
 """Open the dashboard: `python -m app.web [--port N]`; `python -m app.web reset-password` sets a new password."""
 
 import argparse
-import getpass
 import socket
 import sqlite3
 import sys
 import threading
 import webbrowser
 from contextlib import closing
-from datetime import UTC, datetime
-from pathlib import Path
 
 import sqlcipher3
 import uvicorn
 
 from app import db
-from app.collect import CollectError, lock
+from app.collect import CollectError, lock, now
 from app.config import ConfigError, load_config
 from app.keychain import KeychainError
 from app.web import security
@@ -28,14 +25,12 @@ SAVE_LOGIN = """INSERT INTO dashboard_login (id, password_hash, set_on) VALUES (
 
 
 def _set_password(conn: sqlcipher3.Connection) -> None:
-    password = getpass.getpass(
-        "New dashboard password (12+ characters; a 4-5 word passphrase, different from your master password): "
+    password = db.ask_new_password(
+        "New dashboard password (12+ characters; a 4-5 word passphrase, different from your master password): ",
+        "dashboard password",
     )
-    db.check_password(password, "dashboard password")
-    if password != getpass.getpass("Re-enter the password: "):
-        raise db.DatabaseError("The two passwords do not match.")
     with conn:
-        conn.execute(SAVE_LOGIN, (security.hash_password(password), datetime.now(UTC).isoformat(timespec="seconds")))
+        conn.execute(SAVE_LOGIN, (security.hash_password(password), now()))
 
 
 def _port_free(port: int) -> bool:
@@ -84,15 +79,11 @@ def main(argv: list[str] | None = None) -> int:
                 proxy_headers=False,
                 server_header=False,
             )
-    except (ConfigError, KeychainError, db.DatabaseError, CollectError) as error:
-        print(f"Error: {error}", file=sys.stderr)
-    except (sqlcipher3.Error, sqlite3.Error) as error:
-        print(f"Error: the database could not be read or written ({error}).", file=sys.stderr)
-    except OSError as error:  # only the file name, since full paths include the user's name
-        where = f": {Path(error.filename).name}" if error.filename else ""
-        print(f"Error: {error.strerror or error}{where}", file=sys.stderr)
-    except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.", file=sys.stderr)
+    except (
+        ConfigError, KeychainError, db.DatabaseError, CollectError, sqlcipher3.Error, sqlite3.Error, OSError,
+        EOFError, KeyboardInterrupt,
+    ) as error:  # fmt: skip
+        print(db.error_line(error), file=sys.stderr)
     else:
         return 0
     return 1

@@ -4,14 +4,12 @@ import stat
 from contextlib import closing
 
 import pytest
-from fastapi.testclient import TestClient
-from web_helpers import ADDRESS, csrf, log_in
+from helpers import LIST, csrf, log_in
 
 from app import config, db
 from app.config import load_config
-from app.web import actions, main, security
+from app.web import actions
 
-LIST = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
 ORIGINAL = """# my own comment
 data_dir: {data_dir}
 roles:
@@ -34,11 +32,9 @@ def settings_file(tmp_path, data_dir, monkeypatch):
 
 
 @pytest.fixture
-def client(data_dir, clock, settings_file):
-    app = main.create_app(data_dir, security.Logins(clock=clock))
-    with TestClient(app, base_url=ADDRESS) as client:
-        log_in(client)
-        yield client
+def client(client, settings_file):
+    log_in(client)
+    return client
 
 
 def form(**changes):

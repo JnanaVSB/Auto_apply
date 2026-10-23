@@ -1,15 +1,17 @@
 """Shared job rules and saving, on a throwaway encrypted database with made-up jobs."""
 
-from contextlib import closing
 from dataclasses import replace
 
 import pytest
 import sqlcipher3
 
-from app import db, jobs
+from app import jobs
+from app.config import RoleSettings
 from app.sources import Job
 
-ROLES = jobs.Roles.from_settings(["AI/ML/Data"], ["machine learning", "AI", "RL"])
+ROLES = jobs.Roles.from_settings(
+    RoleSettings(simplify_categories=["AI/ML/Data"], keywords=["machine learning", "AI", "RL"])
+)
 NOW, LATER = "2026-10-20T10:00:00+00:00", "2026-10-21T10:00:00+00:00"
 SIMPLIFY = "simplify:Summer2027-Internships"
 
@@ -30,14 +32,6 @@ def simplify_job(**changes) -> Job:
     return job(**{"source": SIMPLIFY, "source_job_id": "s-1", "category": "AI/ML/Data", "level": "intern"} | changes)
 
 
-@pytest.fixture
-def conn(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "RECOVERY_KDF_ITER", 1_000)
-    db.setup(tmp_path / "data", "fake-master-password-1")
-    with closing(db.connect(tmp_path / "data")) as connection:
-        yield connection
-
-
 def rows(conn, columns="title, status"):
     return conn.execute(f"SELECT {columns} FROM jobs ORDER BY id").fetchall()  # noqa: S608 (test helper)
 
@@ -55,7 +49,7 @@ def rows(conn, columns="title, status"):
 )
 def test_role_matching(changes, matches):
     assert ROLES.match(job(**changes)) is matches
-    assert not jobs.Roles.from_settings([], []).match(job())
+    assert not jobs.Roles.from_settings(RoleSettings()).match(job())
 
 
 @pytest.mark.parametrize(

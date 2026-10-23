@@ -129,8 +129,8 @@ def day_from_iso(text: Any) -> str | None:
 
 
 class _TextOnly(HTMLParser):
-    BLOCKS = {"p", "div", "br", "li", "ul", "ol", "tr", "section", "h1", "h2", "h3", "h4", "h5", "h6"}
-    HIDDEN = {"script", "style"}
+    BLOCKS = frozenset({"p", "div", "br", "li", "ul", "ol", "tr", "section", "h1", "h2", "h3", "h4", "h5", "h6"})
+    HIDDEN = frozenset({"script", "style"})
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

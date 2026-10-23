@@ -8,25 +8,13 @@ from contextlib import closing
 
 import pytest
 import sqlcipher3
+from helpers import MASTER_PASSWORD as PASSWORD
 
 from app import db
 from app.config import Config
 from app.keychain import KeychainError, get_secret, set_secret
 
-PASSWORD = "fake-master-password-1"  # noqa: S105 (fake value, tests only)
 NEW_PASSWORD = "fake-master-password-2"  # noqa: S105 (fake value, tests only)
-
-
-@pytest.fixture(autouse=True)
-def fast_kdf(monkeypatch):
-    monkeypatch.setattr(db, "RECOVERY_KDF_ITER", 1_000)  # keeps tests quick; the app always uses the full count
-
-
-@pytest.fixture
-def data_dir(tmp_path):
-    path = tmp_path / "data"
-    db.setup(path, PASSWORD)
-    return path
 
 
 @pytest.fixture
@@ -190,7 +178,8 @@ def test_recovery_file_uses_the_custom_kdf_rounds(data_dir):
     db._connect(recovery, key, db.RECOVERY_KDF_ITER).close()
 
 
-def test_setup_never_replaces_an_existing_keychain_key(data_dir, tmp_path):
+@pytest.mark.usefixtures("data_dir")
+def test_setup_never_replaces_an_existing_keychain_key(tmp_path):
     key_hex = get_secret(db.KEY_NAME)
     with pytest.raises(db.DatabaseError, match="setup won't replace it"):
         db.setup(tmp_path / "other", PASSWORD)
@@ -200,7 +189,8 @@ def test_setup_never_replaces_an_existing_keychain_key(data_dir, tmp_path):
     assert get_secret(db.KEY_NAME) != key_hex
 
 
-def test_setup_command_with_replace_key(data_dir, tmp_path, monkeypatch):
+@pytest.mark.usefixtures("data_dir")
+def test_setup_command_with_replace_key(tmp_path, monkeypatch):
     key_hex = get_secret(db.KEY_NAME)
     monkeypatch.setattr(db.getpass, "getpass", lambda prompt: PASSWORD)
     monkeypatch.setattr(db, "load_config", lambda: Config(data_dir=tmp_path / "other"))
@@ -330,7 +320,8 @@ def test_interrupted_setup_can_be_retried_and_keeps_the_leftover(tmp_path):
     db.connect(data_dir).close()
 
 
-def test_failed_setup_leaves_the_keychain_unchanged(data_dir, tmp_path, monkeypatch):
+@pytest.mark.usefixtures("data_dir")
+def test_failed_setup_leaves_the_keychain_unchanged(tmp_path, monkeypatch):
     key_hex = get_secret(db.KEY_NAME)
 
     def disk_full(*args):
@@ -682,3 +673,27 @@ def test_database_from_a_newer_app_is_refused_untouched(data_dir):
     with pytest.raises(db.DatabaseError, match="newer version of auto_apply"):
         db.connect(data_dir)
     assert (data_dir / db.DB_FILE).read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("error", "line"),
+    [
+        (PermissionError(13, "Permission denied", "/home/someone/data/app.db"), "Error: Permission denied: app.db"),
+        (
+            sqlcipher3.OperationalError("disk I/O error"),
+            "Error: the database could not be read or written (disk I/O error).",
+        ),
+        (KeyboardInterrupt(), "\nCancelled."),
+        (db.DatabaseError("Database key not found."), "Error: Database key not found."),
+    ],
+)
+def test_error_line_never_shows_a_full_path(error, line):
+    assert db.error_line(error) == line
+
+
+def test_a_short_new_password_is_refused_before_typing_it_again(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(db.getpass, "getpass", lambda prompt: prompts.append(prompt) or "short")
+    with pytest.raises(db.DatabaseError, match="at least"):
+        db.ask_new_password()
+    assert len(prompts) == 1

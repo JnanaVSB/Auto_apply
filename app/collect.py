@@ -16,12 +16,12 @@ from urllib.parse import urlsplit
 import sqlcipher3
 
 from app import db, jobs
-from app.config import Config, ConfigError, SimplifyList, load_config
+from app.config import Config, ConfigError, RoleSettings, SimplifyList, load_config
 from app.fetch import ALLOWED_HOSTS, BLOCKED_HINT, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import Job, SourceError, ashby, greenhouse, is_simplify_site, lever, posting_of, simplify
+from app.sources import Job, SourceError, is_simplify_site, posting_of, simplify
+from app.sources.boards import BOARDS
 
-BOARDS = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 LOCK_FILE = "collect-lock.db"
 BUSY = "A collection is already running. Wait for it to finish."
 PROGRESS_EVERY = 50
@@ -48,6 +48,12 @@ class CollectError(Exception):
 
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def read_board(fetcher: Fetcher, kind: str, name: str) -> tuple[list[Job], int]:
+    """Download one company board and read its jobs; also return how many broken entries were skipped."""
+    data, _ = fetcher.get_json(BOARDS[kind].api_url(name))
+    return BOARDS[kind].parse(data, name)
 
 
 def _add_up(total: jobs.Counts, counts: jobs.Counts) -> None:
@@ -158,7 +164,7 @@ class _Run:
             "SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"
         )  # boards you stopped are left out; extra_boards are always read
         boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
-        minutes = _plural(len(boards) * 2 // 60 + 1, "minute")
+        minutes = _plural(len(boards) * 2 // 60 + 1, "minute")  # about 2 s per board: the 1-second gap plus the reply
         self.out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
         counts, read, silent = jobs.Counts(), 0, Counter()  # silent: no answer at all, in a row, per site
         for number, board in enumerate(boards, 1):
@@ -168,7 +174,7 @@ class _Run:
             if host in self.unreachable:
                 self.skipped[host] += 1
             else:
-                outcome = self._read_board(board, url, board in extra_boards, counts)
+                outcome = self._read_board(board, board in extra_boards, counts)
                 read += outcome == "read"
                 silent[host] = silent[host] + 1 if outcome == "unreachable" else 0
                 if silent[host] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
@@ -178,13 +184,12 @@ class _Run:
         _add_up(self.total, counts)
         self.out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(counts)}")
 
-    def _read_board(self, board: str, url: str, extra: bool, counts: jobs.Counts) -> str:
+    def _read_board(self, board: str, extra: bool, counts: jobs.Counts) -> str:
         """Read and save one board; return "read", "missing", "unreachable", "failed" or "investigate"."""
         kind, _, name = board.partition(":")
         label = source_label(board)
         try:
-            data, _ = self.fetcher.get_json(url)
-            found, skipped = BOARDS[kind].parse(data, name)
+            found, skipped = read_board(self.fetcher, kind, name)
             reason = self._stopped_hiring(board, label) if not found and not skipped else None
             board_counts = jobs.save(self.conn, board, found, self.roles, now(), reason=reason)
         except NotFound as error:
@@ -239,36 +244,37 @@ class _Run:
     def summary(self) -> None:
         total, problems = self.total, self.problems()
         self.out(f"Total: {total.new:,} new, {total.updated:,} updated, {_unavailable(total)}.")
-        self.out(f"{_plural(len(problems), 'source')} failed:" if problems else "No sources failed.")
-        for line in problems:
-            self.out(f"  - {line}")
-        if self.investigate:
-            self.out(
+        if not problems:
+            self.out("No sources failed.")
+        sections = (
+            (problems, f"{_plural(len(problems), 'source')} failed:"),
+            (
+                self.investigate,
                 f"Needs investigation ({_plural(len(self.investigate), 'source')}; the data looks different from "
-                "usual, so nothing was changed for them):"
-            )
-            for line in self.investigate:
-                self.out(f"  - {line}")
-        if self.retired:
-            self.out(
+                "usual, so nothing was changed for them):",
+            ),
+            (
+                self.retired,
                 f"Stopped reading {_plural(len(self.retired), 'board')} not found {RETIRE_AFTER} runs in a row; "
                 f"their jobs are marked '{jobs.BOARD_SHUT_DOWN}' and Simplify now decides for any it also lists "
-                "(read again if Simplify links a newer job there, or if you add them to extra_boards):"
-            )
-            for line in self.retired:
-                self.out(f"  - {line}")
-        if self.stopped_hiring:
-            self.out(
+                "(read again if Simplify links a newer job there, or if you add them to extra_boards):",
+            ),
+            (
+                self.stopped_hiring,
                 f"Company stopped hiring ({_plural(len(self.stopped_hiring), 'board')} empty "
-                f"{STOPPED_HIRING_AFTER} runs in a row; their jobs are kept and marked '{jobs.STOPPED_HIRING}'):"
-            )
-            for line in self.stopped_hiring:
-                self.out(f"  - {line}")
+                f"{STOPPED_HIRING_AFTER} runs in a row; their jobs are kept and marked '{jobs.STOPPED_HIRING}'):",
+            ),
+        )
+        for lines, heading in sections:
+            if lines:
+                self.out(heading)
+                for line in lines:
+                    self.out(f"  - {line}")
 
 
 def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
     """Read every source one at a time, saving each all-or-nothing, then print a summary."""
-    run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles.simplify_categories, config.roles.keywords), out)
+    run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles), out)
     run.check_internet()
     with conn:
         run_id = conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (now(),)).lastrowid
@@ -317,8 +323,7 @@ def add(
     if posting:
         kind, board, job_id = posting
         source = f"{kind}:{board}"
-        data, _ = fetcher.get_json(BOARDS[kind].api_url(board))
-        job = next((job for job in BOARDS[kind].parse(data, board)[0] if job.source_job_id == job_id), None)
+        job = next((job for job in read_board(fetcher, kind, board)[0] if job.source_job_id == job_id), None)
         if job is None:
             raise CollectError(f"That job is no longer on the {kind.title()} board '{board}'; it may be closed.")
     else:  # another site: stored with its link only; the description is read in a later phase
@@ -331,7 +336,9 @@ def add(
         job.company, job.title = company.strip(), title.strip()
         if not job.company or not job.title:
             raise CollectError("Both the company and the job title are needed.")
-    counts = jobs.save(conn, source, [job], jobs.Roles.from_settings([], []), now(), complete=False, chosen=True)
+    counts = jobs.save(
+        conn, source, [job], jobs.Roles.from_settings(RoleSettings()), now(), complete=False, chosen=True
+    )
     if counts.skipped:
         raise CollectError("That link cannot be used; copy the job's address straight from the browser.")
     if posting:
@@ -385,15 +392,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(show(conn, args.link))
             else:
                 collect(conn, config, fetcher)
-    except (ConfigError, KeychainError, db.DatabaseError, CollectError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+    except (
+        ConfigError,
+        KeychainError,
+        db.DatabaseError,
+        CollectError,
+        sqlcipher3.Error,
+        sqlite3.Error,
+        OSError,
+    ) as error:
+        print(db.error_line(error), file=sys.stderr)
     except (FetchError, SourceError) as error:  # only `add` lets these through; `collect` lists them per source
         print(f"Error: the job's board could not be read ({error}).", file=sys.stderr)
-    except (sqlcipher3.Error, sqlite3.Error) as error:
-        print(f"Error: the database could not be read or written ({error}).", file=sys.stderr)
-    except OSError as error:  # only the file name, since full paths include the user's name
-        where = f": {Path(error.filename).name}" if error.filename else ""
-        print(f"Error: {error.strerror or error}{where}", file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
         saved = " Sources finished before you stopped are saved; run it again to continue." if not args.command else ""
         print(f"\nCancelled.{saved}", file=sys.stderr)
