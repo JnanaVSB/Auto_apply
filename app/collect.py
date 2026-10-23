@@ -32,15 +32,21 @@ STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none be
 SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
 IN_FLIGHT = 3  # downloads open at once per site, for slow replies; new ones still start at most 1 per second
 Output = Callable[[str], None]
-SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON CONFLICT (name)
+# A source first saved here is one you set or added: a Simplify list, extra_boards, Add job or Add company.
+SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok, found_by) VALUES (?, ?, ?, 'you') ON CONFLICT (name)
     DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, empty_runs = 0, retired_on = NULL"""
 # A board Simplify links to is remembered; a retired one is read again once Simplify links a job posted after
 # the day it was retired.
-LINK_BOARD = """INSERT INTO sources (name) VALUES (?) ON CONFLICT (name)
+LINK_BOARD = """INSERT INTO sources (name, found_by) VALUES (?, 'simplify') ON CONFLICT (name)
     DO UPDATE SET misses = 0, retired_on = NULL WHERE retired_on IS NOT NULL AND ? > retired_on"""
 LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
-COUNT_MISS = """INSERT INTO sources (name, misses) VALUES (?, 1) ON CONFLICT (name)
-    DO UPDATE SET misses = misses + 1 RETURNING misses"""
+COUNT_MISS = """INSERT INTO sources (name, misses, found_by) VALUES (?, 1, 'you') ON CONFLICT (name)
+    DO UPDATE SET misses = misses + 1 RETURNING misses"""  # only one of your extra_boards is new here
+# Every board read on a collection (not retired, not stopped by you), and whether it is "discovered": found by the
+# phone book with no job saved from it yet. Those are read after the others on their site.
+BOARDS_TO_READ = """SELECT name, found_by NOT IN ('simplify', 'you')
+        AND NOT EXISTS (SELECT 1 FROM job_sources WHERE source = sources.name)
+    FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"""
 COUNT_EMPTY = """INSERT INTO sources (name, empty_runs) VALUES (?, 1) ON CONFLICT (name)
     DO UPDATE SET empty_runs = empty_runs + 1 RETURNING empty_runs"""
 
@@ -168,10 +174,9 @@ class _Run:
 
         Downloads run in the background, IN_FLIGHT per site; saving stays here, one board at a time, all-or-nothing.
         """
-        known = self.conn.execute(
-            "SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"
-        )  # boards you stopped are left out; extra_boards are always read
-        boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
+        rows = self.conn.execute(BOARDS_TO_READ).fetchall()  # boards you stopped are left out
+        later = {name for name, discovered in rows if discovered} - set(extra_boards)  # yours are never "discovered"
+        boards = sorted({name for name, _ in rows} | set(extra_boards), key=lambda board: (board in later, board))
         queues: dict[str, Queue] = {}
         for board in boards:
             kind, _, name = board.partition(":")

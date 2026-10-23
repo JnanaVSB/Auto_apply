@@ -8,7 +8,7 @@ from contextlib import closing
 import httpx
 import pytest
 import sqlcipher3
-from helpers import ACME, ACME_JOB, LIST, FakeWeb, board_job, entry, one, settings
+from helpers import ACME, ACME_JOB, LIST, FakeWeb, add_job, board_job, entry, one, settings
 
 from app import collect, fetch, jobs
 from app.config import Config
@@ -389,6 +389,30 @@ def test_a_site_that_stops_answering_mid_run_is_skipped_after_five_boards(conn, 
         f"  - boards-api.greenhouse.io: could not be reached; {9 - tried} sources skipped this run, closing nothing "
         f"{hint}"
     )
+
+
+def test_each_board_remembers_who_found_it_first(conn, data_dir):
+    run(conn, data_dir, PAGES | {GLOBEX: []}, extra_boards=["lever:globex", "ashby:gone"])  # ashby:gone: not found
+    run(conn, data_dir, PAGES, extra_boards=["greenhouse:acme"])  # listing it yourself later changes nothing
+    assert dict(conn.execute("SELECT name, found_by FROM sources").fetchall()) == {
+        "simplify:Summer2027-Internships": "you",  # your settings
+        "greenhouse:acme": "simplify",
+        "lever:globex": "you",
+        "ashby:gone": "you",
+    }
+
+
+def test_boards_the_phone_book_found_are_read_after_the_others_on_their_site(conn, data_dir, monkeypatch):
+    monkeypatch.setattr(collect, "IN_FLIGHT", 1)  # one download per site, so the order is exact
+    with conn:
+        conn.executemany(
+            "INSERT INTO sources (name, found_by) VALUES (?, ?)",
+            [("greenhouse:aaa", "commoncrawl"), ("greenhouse:bbb", "commoncrawl"), ("greenhouse:zzz", "simplify")],
+        )
+        add_job(conn, "ML Intern", sources=["greenhouse:bbb"])  # a job saved from it: no longer "discovered"
+    _, web = run(conn, data_dir, {LIST: 404})
+    names = [url.split("/")[-2] for url in requested(web) if "boards-api.greenhouse.io" in url]
+    assert names == ["bbb", "zzz", "aaa"]
 
 
 def run_with(conn, data_dir, pages, answer, extra_boards):

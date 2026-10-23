@@ -635,6 +635,24 @@ def test_version_7_lets_you_stop_reading_a_board(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
+def test_version_8_adds_the_phone_book_and_keeps_every_board(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_7:
+        version_7.setattr(db, "UPGRADES", db.UPGRADES[:7])
+        version_7.setattr(db, "SCHEMA_VERSION", 7)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute("INSERT INTO sources (name) VALUES ('greenhouse:acme')")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT name, found_by, company FROM sources").fetchall() == [
+            ("greenhouse:acme", None, None)
+        ]
+        for table in ("phonebook", "phonebook_done", "phonebook_runs"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 (fixed names)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v7") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+
+
 def test_the_database_uses_wal_so_readers_never_wait(data_dir):
     with closing(db.connect(data_dir)) as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

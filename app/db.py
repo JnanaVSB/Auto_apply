@@ -218,6 +218,33 @@ UPGRADES = (
     -- nothing is deleted.
     ALTER TABLE sources ADD COLUMN stopped_on TEXT;  -- the day you stopped it; NULL while it is read
     """,
+    """
+    -- Phase 3.5 phone book. Nothing is deleted. A board in `sources` is read on every collection; a name the phone
+    -- book finds waits in `phonebook` until its site's own API has confirmed it.
+    ALTER TABLE sources ADD COLUMN found_by TEXT;  -- who found it first: simplify, you, commoncrawl, list:<name> or
+        -- cross-check; NULL = found before the phone book (by Simplify or by you)
+    ALTER TABLE sources ADD COLUMN company TEXT;  -- the company name the board itself reports (only Greenhouse does)
+    CREATE TABLE phonebook (
+        board TEXT PRIMARY KEY,  -- e.g. lever:acme
+        found_by TEXT NOT NULL,  -- commoncrawl, list:<name> or cross-check
+        found_on TEXT NOT NULL,
+        cross_of TEXT,  -- for a cross-check: the board whose name was tried on this site
+        checked_on TEXT,  -- NULL until its site's API was asked
+        result TEXT CHECK (result IN ('added', 'not found', 'to confirm', 'declined')),
+        company TEXT  -- the name the board reports, when it reports one
+    );
+    CREATE TABLE phonebook_done (
+        part TEXT PRIMARY KEY,  -- a finished piece of a refresh, e.g. one index page; a rerun skips it
+        done_on TEXT NOT NULL
+    );
+    CREATE TABLE phonebook_runs (
+        id INTEGER PRIMARY KEY,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        outcome TEXT,  -- done, cancelled or stopped
+        summary TEXT NOT NULL DEFAULT ''
+    );
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
