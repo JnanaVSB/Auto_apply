@@ -10,7 +10,8 @@ Adding one more **company** of a kind that already exists is just one settings l
 ## Before you start
 - Use only the site's **official public job-board API**: read-only, no login, no scraping of web pages. Check the
   site's terms of use first. Never add simplify.jobs: its terms forbid automated access.
-- The download itself is shared (`app/fetch.py`): it only contacts the hosts listed in `ALLOWED_HOSTS` there.
+- The download itself is shared (`app/fetch.py`): it only contacts the hosts listed in `ALLOWED_HOSTS` there
+  (collection sites in `COLLECT_HOSTS`, plus Common Crawl's index for the phone book).
   A new board type needs its API host added to that list, which is a security decision for the owner.
 
 ## The template: `app/sources/<name>.py`
@@ -66,8 +67,9 @@ Then connect it. These are all the places a new kind needs:
    collection, Add job, Add company, and the jobs-list Source filter.
 3. **`app/sources/__init__.py` (`BOARD_HOSTS`):** the board's public web host, so job links in Simplify's lists or
    pasted into Add job are recognised. `posting_of` reads such a link as `https://<host>/<board>/<job id>`; a site
-   whose links look different needs its own case there, as Greenhouse has.
-4. **`app/fetch.py` (`ALLOWED_HOSTS`):** the API host from `api_url`. This list is separate on purpose: it is the
+   whose links look different needs its own case there, as Greenhouse has. The phone book also looks for the
+   new kind's boards in Common Crawl under this host, and tries each new name on it (the cross-check).
+4. **`app/fetch.py` (`COLLECT_HOSTS`):** the API host from `api_url`. This list is separate on purpose: it is the
    security list of sites the app may contact, so adding to it is the owner's decision.
 5. **Hand-written wording that names the kinds:** the Add company tip and its "not found" message in
    `app/web/actions.py`, and the first paragraph of this guide.

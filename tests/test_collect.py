@@ -355,7 +355,7 @@ def test_show_prints_a_jobs_status_and_every_source(conn, data_dir):
 def test_the_lock_is_taken_before_the_database_is_opened(main, data_dir, monkeypatch):
     monkeypatch.setattr(collect.db, "connect", lambda folder: pytest.fail("opened before the lock"))
     with closing(collect.lock(data_dir)):
-        assert main([], settings(data_dir)) == (1, "Error: A collection is already running. Wait for it to finish.\n")
+        assert main([], settings(data_dir)) == (1, f"Error: {collect.BUSY}\n")
 
 
 def test_no_internet_stops_at_once(conn, data_dir):

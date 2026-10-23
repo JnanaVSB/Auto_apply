@@ -8,12 +8,17 @@ from typing import Any
 import httpx
 
 # The only places the app downloads from; anything else (including simplify.jobs) is refused.
-ALLOWED_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
+COMMON_CRAWL = "index.commoncrawl.org"  # only the phone-book refresh reads it, never a collection
+COLLECT_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
+ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL}
 USER_AGENT = "auto_apply personal job search"
 TIMEOUT_SECONDS = 20
 MIN_GAP_SECONDS = 1.0  # between the starts of two requests to the same website
 RETRY_WAITS = (2, 4, 8)
 MAX_RETRY_AFTER = 60
+# Common Crawl's index asks for pauses between calls and is often overloaded: slower, with longer retry waits.
+COMMON_CRAWL_GAP_SECONDS = 5.0
+COMMON_CRAWL_RETRY_WAITS = (30, 60, 120)
 MAX_BYTES = 50 * 1024 * 1024
 REACH_TIMEOUT_SECONDS = 10
 BLOCKED_HINT = "the site may be down, or your network may be blocking it"
@@ -56,9 +61,18 @@ class Fetcher:
 
     def get_json(self, url: str, etag: str | None = None) -> tuple[Any, str | None] | None:
         """Return (data, version tag), or None when the file is unchanged since `etag`."""
+        result = self._get(url, etag)
+        return None if result is None else (_parse_json(result[0]), result[1])
+
+    def get_text(self, url: str) -> str:
+        """Return a reply as text, e.g. Common Crawl's index lines; anything that is not UTF-8 is replaced."""
+        return self._get(url, None)[0].decode("utf-8", errors="replace")
+
+    def _get(self, url: str, etag: str | None) -> tuple[bytes, str | None] | None:
         host = _allowed_host(url)
         headers = {"If-None-Match": etag} if etag else {}
-        waits = iter(RETRY_WAITS)
+        retry_waits = COMMON_CRAWL_RETRY_WAITS if host == COMMON_CRAWL else RETRY_WAITS
+        waits = iter(retry_waits)
         while True:
             self._space_out(host)
             try:
@@ -67,7 +81,7 @@ class Fetcher:
                     if status == 304:
                         return None
                     if status == 200:
-                        return _parse_json(_read_limited(response)), response.headers.get("ETag")
+                        return _read_limited(response), response.headers.get("ETag")
                     if status == 404:
                         raise NotFound("not found (404)")
                     if status != 429 and status < 500:
@@ -79,15 +93,16 @@ class Fetcher:
                 reason, site_wait, answered = f"connection failed ({type(error).__name__})", None, False
             wait = next(waits, None)
             if wait is None:
-                gave_up = f"{reason}; gave up after {len(RETRY_WAITS)} retries"
+                gave_up = f"{reason}; gave up after {len(retry_waits)} retries"
                 raise FetchError(gave_up) if answered else Unreachable(f"{gave_up} ({BLOCKED_HINT})")
             time.sleep(wait if site_wait is None else site_wait)
 
     def _space_out(self, host: str) -> None:
-        """Wait for this website's turn: request starts are MIN_GAP_SECONDS apart, however many downloads ask."""
+        """Wait for this website's turn: request starts are a gap apart, however many downloads ask."""
+        gap = COMMON_CRAWL_GAP_SECONDS if host == COMMON_CRAWL else MIN_GAP_SECONDS
         with self._spacing:
             start = max(time.monotonic(), self._next_start.get(host, 0.0))
-            self._next_start[host] = start + MIN_GAP_SECONDS
+            self._next_start[host] = start + gap
         if (wait := start - time.monotonic()) > 0:
             time.sleep(wait)
 
@@ -98,7 +113,7 @@ def _allowed_host(url: str) -> str:
     except httpx.InvalidURL:
         parsed = None
     if parsed is None or parsed.scheme != "https" or parsed.host not in ALLOWED_HOSTS or parsed.userinfo:
-        raise FetchError("address not allowed (only https to the job-list and job-board APIs)")
+        raise FetchError("address not allowed (only https to the job lists, job-board APIs and Common Crawl's index)")
     return parsed.host
 
 

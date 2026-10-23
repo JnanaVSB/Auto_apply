@@ -1,6 +1,6 @@
 import pytest
 
-from app.sources import day_from_timestamp, html_to_text, is_simplify_site, posting_of
+from app.sources import board_of, day_from_timestamp, html_to_text, is_simplify_site, posting_of
 
 
 @pytest.mark.parametrize(
@@ -33,6 +33,26 @@ def test_board_jobs_are_recognised(url, expected):
 )
 def test_other_links_are_not_board_jobs(url):
     assert posting_of(url) is None
+
+
+@pytest.mark.parametrize(
+    ("url", "board"),
+    [
+        ("https://jobs.lever.co/Acme/0a1b-2c3d/apply", "lever:acme"),
+        ("http://jobs.lever.co/acme", "lever:acme"),  # the board's own page counts too
+        ("https://boards.greenhouse.io/embed/job_board?for=acme", "greenhouse:acme"),
+        ("https://job-boards.greenhouse.io/acme/jobs/123", "greenhouse:acme"),
+        ("https://jobs.ashbyhq.com/globex", "ashby:globex"),
+        ("https://jobs.lever.co/", None),
+        ("https://jobs.lever.co/" + "a" * 101, None),  # far too long to be a board name
+        ("https://jobs.lever.co/..%2Fadmin", None),
+        ("https://boards.greenhouse.io/embed/job_board", None),
+        ("https://jobs.eu.lever.co/acme", None),  # no public API there
+        ("https://acme.example/jobs.lever.co/acme", None),
+    ],
+)
+def test_the_board_of_any_address_on_a_job_board_site(url, board):
+    assert board_of(url) == board
 
 
 def test_simplify_site_is_recognised_with_or_without_a_trailing_dot():

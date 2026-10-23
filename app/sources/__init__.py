@@ -15,7 +15,7 @@ BOARD_HOSTS = {
     "jobs.lever.co": "lever",
     "jobs.ashbyhq.com": "ashby",
 }
-BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]*")  # also keeps the name safe to put into an API address
+BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")  # also keeps the name safe to put into an API address
 JOB_ID = re.compile(r"[A-Za-z0-9-]+")
 WORKPLACES = {"remote": "remote", "hybrid": "hybrid", "onsite": "on-site"}
 
@@ -106,6 +106,18 @@ def posting_of(url: str) -> tuple[str, str, str] | None:
     if not (BOARD_NAME.fullmatch(board) and JOB_ID.fullmatch(job_id)):
         return None
     return kind, board, job_id
+
+
+def board_of(url: str) -> str | None:
+    """The board (e.g. lever:acme) any address on a job-board site belongs to: a job, a form or the board itself."""
+    parts = urlsplit(url.strip())
+    kind = BOARD_HOSTS.get(parts.hostname or "")
+    segments = [segment for segment in parts.path.split("/") if segment]
+    if kind is None or not segments:
+        return None
+    board = parse_qs(parts.query).get("for", [""])[0] if segments[0] == "embed" else segments[0]  # Greenhouse's form
+    board = board.lower()  # board names ignore capital letters
+    return f"{kind}:{board}" if BOARD_NAME.fullmatch(board) else None
 
 
 def day_from_timestamp(timestamp: Any) -> str | None:

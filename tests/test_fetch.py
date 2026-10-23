@@ -162,6 +162,14 @@ def test_downloads_running_at_the_same_time_still_start_a_gap_apart(monkeypatch)
     assert min(gaps) >= 0.045  # a little slack for coarse system clocks
 
 
+def test_common_crawl_is_asked_slowly_and_its_lines_are_read_as_text(clock):
+    index = "https://index.commoncrawl.org/CC-MAIN-2026-40-index?url=jobs.lever.co/*&output=json&fl=url"
+    fetcher, _ = fake_web(*[httpx.Response(200, text='{"url": "a"}\n{"url": "b"}\n')] * 2)
+    assert fetcher.get_text(index) == '{"url": "a"}\n{"url": "b"}\n'
+    fetcher.get_text(index)
+    assert clock.waits == [fetch.COMMON_CRAWL_GAP_SECONDS]
+
+
 def test_reachable_means_any_answer_and_only_allowed_sites_are_asked():
     fetcher, requests = fake_web(httpx.Response(404), httpx.ConnectError("down"))
     assert fetcher.reachable("api.lever.co") is True  # even an error page is an answer

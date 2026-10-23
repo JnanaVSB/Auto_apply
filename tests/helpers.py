@@ -67,7 +67,7 @@ def board_job(**changes):
 
 
 class FakeWeb:
-    """Answers each address from `pages`: JSON, (JSON, version tag), a status code or an error to raise.
+    """Answers each address from `pages`: JSON, (JSON, version tag), a status code, a reply or an error to raise.
 
     Sites in `down` never answer at all; sites in `silent` answer the quick reachability check, then go quiet.
     """
@@ -86,6 +86,8 @@ class FakeWeb:
             raise page
         if isinstance(page, int):
             return httpx.Response(page)
+        if isinstance(page, httpx.Response):
+            return page
         data, etag = page if isinstance(page, tuple) else (page, None)
         if etag and request.headers.get("If-None-Match") == etag:
             return httpx.Response(304)

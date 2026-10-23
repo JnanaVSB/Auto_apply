@@ -6,7 +6,7 @@ import pytest
 from helpers import ashby_job, greenhouse_job, lever_job
 
 from app import jobs as rules
-from app.fetch import ALLOWED_HOSTS
+from app.fetch import COLLECT_HOSTS
 from app.sources import SourceError, ashby, greenhouse, lever, posting_of
 from app.sources.boards import BOARDS
 
@@ -140,4 +140,4 @@ def test_every_board_kind_is_connected(kind):
     link = reader.JOB_LINK.format("acme", "123")
     assert posting_of(link) == (kind, "acme", "123")
     assert link.startswith(reader.BOARD_PAGE.format("acme") + "/")
-    assert urlsplit(reader.api_url("acme")).hostname in ALLOWED_HOSTS
+    assert urlsplit(reader.api_url("acme")).hostname in COLLECT_HOSTS

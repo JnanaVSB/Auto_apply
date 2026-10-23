@@ -88,7 +88,7 @@ def test_only_one_collection_at_a_time_and_the_box_refreshes_while_it_runs(clien
     wait_for(lambda: client.app.state.collector.lines)
     progress = client.get("/collect/progress").text
     assert 'hx-get="/collect/progress" hx-trigger="every 2s"' in progress and "Reading 672 company boards" in progress
-    assert "A collection is already running. Wait for it to finish." in collect_now(client).text
+    assert collect.BUSY in collect_now(client).text
     assert "disabled" in client.get("/collect").text
     held.set()
     assert finish(client).state == "done"
@@ -97,7 +97,7 @@ def test_only_one_collection_at_a_time_and_the_box_refreshes_while_it_runs(clien
 def test_a_collection_from_a_terminal_blocks_collect_now(client, data_dir):
     with closing(collect.lock(data_dir)):
         text = collect_now(client).text
-    assert "A collection is already running. Wait for it to finish." in text
+    assert collect.BUSY in text
     assert client.app.state.collector.state == "idle"
 
 

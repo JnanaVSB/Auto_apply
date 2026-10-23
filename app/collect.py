@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import threading
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -19,19 +19,20 @@ import sqlcipher3
 
 from app import db, jobs
 from app.config import Config, ConfigError, RoleSettings, SimplifyList, load_config
-from app.fetch import ALLOWED_HOSTS, BLOCKED_HINT, Fetcher, FetchError, NotFound, Unreachable
+from app.fetch import BLOCKED_HINT, COLLECT_HOSTS, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
 from app.sources import Job, SourceError, is_simplify_site, posting_of, simplify
 from app.sources.boards import BOARDS
 
 LOCK_FILE = "collect-lock.db"
-BUSY = "A collection is already running. Wait for it to finish."
+BUSY = "A collection or a phone-book refresh is already running. Wait for it to finish."
 PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
 SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
 IN_FLIGHT = 3  # downloads open at once per site, for slow replies; new ones still start at most 1 per second
 Output = Callable[[str], None]
+Download = tuple[list[Job], int] | BaseException  # a board's jobs and skipped entries, or why it failed
 # A source first saved here is one you set or added: a Simplify list, extra_boards, Add job or Add company.
 SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok, found_by) VALUES (?, ?, ?, 'you') ON CONFLICT (name)
     DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, empty_runs = 0, retired_on = NULL"""
@@ -131,12 +132,10 @@ class _Run:
     stopped_hiring: list[str] = field(default_factory=list)
     unreachable: set[str] = field(default_factory=set)  # sites skipped for the rest of this run
     skipped: Counter = field(default_factory=Counter)  # sources skipped, per unreachable site
-    silent: Counter = field(default_factory=Counter)  # per site: boards in a row with no answer at all
-    _counting: threading.Lock = field(default_factory=threading.Lock)
 
     def check_internet(self) -> None:
-        self.unreachable = {host for host in sorted(ALLOWED_HOSTS) if not self.fetcher.reachable(host)}
-        if self.unreachable == ALLOWED_HOSTS:
+        self.unreachable = {host for host in sorted(COLLECT_HOSTS) if not self.fetcher.reachable(host)}
+        if self.unreachable == COLLECT_HOSTS:
             raise CollectError(
                 "No internet connection: none of the job sites could be reached. Check your connection and try again."
             )
@@ -177,56 +176,22 @@ class _Run:
         rows = self.conn.execute(BOARDS_TO_READ).fetchall()  # boards you stopped are left out
         later = {name for name, discovered in rows if discovered} - set(extra_boards)  # yours are never "discovered"
         boards = sorted({name for name, _ in rows} | set(extra_boards), key=lambda board: (board in later, board))
-        queues: dict[str, Queue] = {}
-        for board in boards:
-            kind, _, name = board.partition(":")
-            queues.setdefault(urlsplit(BOARDS[kind].api_url(name)).hostname, Queue()).put(board)
-        busiest = max((todo.qsize() for todo in queues.values()), default=0)
+        busiest = max(Counter(map(site_of, boards)).values(), default=0)
         minutes = _plural(busiest // 60 + 1, "minute")  # about 1 s per board on the site with the most boards
         self.out(f"Reading {_plural(len(boards), 'company board')}, all sites at the same time (about {minutes})...")
-        results, stop = Queue(), threading.Event()
-        for host, todo in queues.items():
-            for _ in range(IN_FLIGHT):
-                threading.Thread(target=self._download, args=(host, todo, results, stop), daemon=True).start()
         counts, read = jobs.Counts(), 0
-        try:
-            for number in range(1, len(boards) + 1):
-                host, board, download = _next(results)
+        with closing(download_boards(self.fetcher, boards, self.unreachable)) as downloads:
+            for number, (site, board, download) in enumerate(downloads, 1):
                 if download is None:
-                    self.skipped[host] += 1
+                    self.skipped[site] += 1
                 else:
                     read += self._read_board(board, download, board in extra_boards, counts) == "read"
                 if number % PROGRESS_EVERY == 0:
                     self.out(f"  {number:,} of {len(boards):,} boards done")
-        finally:
-            stop.set()  # after an error or Ctrl+C the downloads stop before their next board
         _add_up(self.total, counts)
         self.out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(counts)}")
 
-    def _download(self, host: str, todo: Queue, results: Queue, stop: threading.Event) -> None:
-        """One of a site's downloaders: takes the site's next board until none is left. Never touches the database."""
-        while not stop.is_set():
-            try:
-                board = todo.get_nowait()
-            except Empty:
-                return
-            if host in self.unreachable:  # the site stopped answering: the rest of it is skipped this run
-                results.put((host, board, None))
-                continue
-            kind, _, name = board.partition(":")
-            try:
-                download = read_board(self.fetcher, kind, name)
-            except BaseException as error:  # even a stop from the dashboard: _read_board raises it again
-                download = error
-            with self._counting:  # a site's downloaders share one count of boards in a row with no answer
-                self.silent[host] = self.silent[host] + 1 if isinstance(download, Unreachable) else 0
-                if self.silent[host] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
-                    self.unreachable.add(host)
-            results.put((host, board, download))
-
-    def _read_board(
-        self, board: str, download: tuple[list[Job], int] | BaseException, extra: bool, counts: jobs.Counts
-    ) -> str:
+    def _read_board(self, board: str, download: Download, extra: bool, counts: jobs.Counts) -> str:
         """Save one downloaded board; return "read", "missing", "unreachable", "failed" or "investigate"."""
         label = source_label(board)
         try:
@@ -313,6 +278,54 @@ class _Run:
                 self.out(heading)
                 for line in lines:
                     self.out(f"  - {line}")
+
+
+def site_of(board: str) -> str:
+    """The website a board is downloaded from, e.g. api.lever.co for lever:acme."""
+    kind, _, name = board.partition(":")
+    return urlsplit(BOARDS[kind].api_url(name)).hostname
+
+
+def download_boards(fetcher: Fetcher, boards: list[str], unreachable: set[str]) -> Iterator[tuple]:
+    """Download boards with one queue per site, all sites at the same time; yields (site, board, download) as each
+    finishes, in any order. Saves nothing, so the database is only ever used by the caller.
+
+    `download` is None for a board whose site is in `unreachable`; a site is added there after SKIP_SITE_AFTER boards
+    in a row with no answer at all. Close the iterator (or finish it) to stop the downloads.
+    """
+    queues: dict[str, Queue] = {}
+    for board in boards:  # in the given order within each site
+        queues.setdefault(site_of(board), Queue()).put(board)
+    results, stop, counting, silent = Queue(), threading.Event(), threading.Lock(), Counter()
+
+    def download(site: str, todo: Queue) -> None:  # one of a site's IN_FLIGHT downloaders
+        while not stop.is_set():
+            try:
+                board = todo.get_nowait()
+            except Empty:
+                return
+            if site in unreachable:  # the site stopped answering: the rest of it is skipped
+                results.put((site, board, None))
+                continue
+            kind, _, name = board.partition(":")
+            try:
+                result = read_board(fetcher, kind, name)
+            except BaseException as error:  # even a stop from the dashboard: the caller raises it again
+                result = error
+            with counting:  # a site's downloaders share one count of boards in a row with no answer
+                silent[site] = silent[site] + 1 if isinstance(result, Unreachable) else 0
+                if silent[site] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
+                    unreachable.add(site)
+            results.put((site, board, result))
+
+    for site, todo in queues.items():
+        for _ in range(IN_FLIGHT):
+            threading.Thread(target=download, args=(site, todo), daemon=True).start()
+    try:
+        for _ in boards:
+            yield _next(results)
+    finally:
+        stop.set()  # after an error or Ctrl+C the downloads stop before their next board
 
 
 def _next(results: Queue) -> tuple:
