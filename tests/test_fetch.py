@@ -1,5 +1,9 @@
 """Downloads, tested against httpx's built-in fake web layer; nothing here reaches the internet."""
 
+import threading
+import time
+from itertools import pairwise
+
 import httpx
 import pytest
 
@@ -136,6 +140,26 @@ def test_one_request_per_second_per_website(clock):
     fetcher.get_json(GREENHOUSE)  # another website: no wait
     fetcher.get_json(LEVER)
     assert clock.waits == [fetch.MIN_GAP_SECONDS]
+
+
+def test_downloads_running_at_the_same_time_still_start_a_gap_apart(monkeypatch):
+    monkeypatch.setattr(fetch, "time", time)  # real waiting, with a short gap
+    monkeypatch.setattr(fetch, "MIN_GAP_SECONDS", 0.05)
+    starts = []
+
+    def answer(request):
+        starts.append(time.monotonic())
+        return httpx.Response(200, json=[])
+
+    fetcher = fetch.Fetcher(httpx.MockTransport(answer))
+    downloads = [threading.Thread(target=fetcher.get_json, args=(LEVER,)) for _ in range(4)]
+    for download in downloads:
+        download.start()
+    for download in downloads:
+        download.join()
+    gaps = [later - earlier for earlier, later in pairwise(sorted(starts))]
+    assert len(gaps) == 3
+    assert min(gaps) >= 0.045  # a little slack for coarse system clocks
 
 
 def test_reachable_means_any_answer_and_only_allowed_sites_are_asked():

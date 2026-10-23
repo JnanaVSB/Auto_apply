@@ -5,12 +5,14 @@ import dataclasses
 import json
 import sqlite3
 import sys
+import threading
 from collections import Counter
 from collections.abc import Callable
 from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from queue import Empty, Queue
 from urllib.parse import urlsplit
 
 import sqlcipher3
@@ -28,6 +30,7 @@ PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
 SKIP_SITE_AFTER = 5  # boards in a row with no answer at all before the rest of that site is skipped this run
+IN_FLIGHT = 3  # downloads open at once per site, for slow replies; new ones still start at most 1 per second
 Output = Callable[[str], None]
 SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok) VALUES (?, ?, ?) ON CONFLICT (name)
     DO UPDATE SET etag = excluded.etag, last_ok = excluded.last_ok, misses = 0, empty_runs = 0, retired_on = NULL"""
@@ -122,6 +125,8 @@ class _Run:
     stopped_hiring: list[str] = field(default_factory=list)
     unreachable: set[str] = field(default_factory=set)  # sites skipped for the rest of this run
     skipped: Counter = field(default_factory=Counter)  # sources skipped, per unreachable site
+    silent: Counter = field(default_factory=Counter)  # per site: boards in a row with no answer at all
+    _counting: threading.Lock = field(default_factory=threading.Lock)
 
     def check_internet(self) -> None:
         self.unreachable = {host for host in sorted(ALLOWED_HOSTS) if not self.fetcher.reachable(host)}
@@ -159,37 +164,70 @@ class _Run:
         self.out(f"{label}: {_describe(counts)}")
 
     def read_boards(self, extra_boards: list[str]) -> None:
-        """Read every board that is not retired, plus extra_boards, skipping sites that stopped answering."""
+        """Read every board that is not retired, plus extra_boards: one queue per site, all sites at the same time.
+
+        Downloads run in the background, IN_FLIGHT per site; saving stays here, one board at a time, all-or-nothing.
+        """
         known = self.conn.execute(
             "SELECT name FROM sources WHERE name NOT LIKE 'simplify:%' AND retired_on IS NULL AND stopped_on IS NULL"
         )  # boards you stopped are left out; extra_boards are always read
         boards = sorted({name for (name,) in known} | set(extra_boards))  # every board found keeps being read
-        minutes = _plural(len(boards) * 2 // 60 + 1, "minute")  # about 2 s per board: the 1-second gap plus the reply
-        self.out(f"Reading {_plural(len(boards), 'company board')} one at a time (about {minutes})...")
-        counts, read, silent = jobs.Counts(), 0, Counter()  # silent: no answer at all, in a row, per site
-        for number, board in enumerate(boards, 1):
+        queues: dict[str, Queue] = {}
+        for board in boards:
             kind, _, name = board.partition(":")
-            url = BOARDS[kind].api_url(name)
-            host = urlsplit(url).hostname
-            if host in self.unreachable:
-                self.skipped[host] += 1
-            else:
-                outcome = self._read_board(board, board in extra_boards, counts)
-                read += outcome == "read"
-                silent[host] = silent[host] + 1 if outcome == "unreachable" else 0
-                if silent[host] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
-                    self.unreachable.add(host)
-            if number % PROGRESS_EVERY == 0:
-                self.out(f"  {number:,} of {len(boards):,} boards done")
+            queues.setdefault(urlsplit(BOARDS[kind].api_url(name)).hostname, Queue()).put(board)
+        busiest = max((todo.qsize() for todo in queues.values()), default=0)
+        minutes = _plural(busiest // 60 + 1, "minute")  # about 1 s per board on the site with the most boards
+        self.out(f"Reading {_plural(len(boards), 'company board')}, all sites at the same time (about {minutes})...")
+        results, stop = Queue(), threading.Event()
+        for host, todo in queues.items():
+            for _ in range(IN_FLIGHT):
+                threading.Thread(target=self._download, args=(host, todo, results, stop), daemon=True).start()
+        counts, read = jobs.Counts(), 0
+        try:
+            for number in range(1, len(boards) + 1):
+                host, board, download = _next(results)
+                if download is None:
+                    self.skipped[host] += 1
+                else:
+                    read += self._read_board(board, download, board in extra_boards, counts) == "read"
+                if number % PROGRESS_EVERY == 0:
+                    self.out(f"  {number:,} of {len(boards):,} boards done")
+        finally:
+            stop.set()  # after an error or Ctrl+C the downloads stop before their next board
         _add_up(self.total, counts)
         self.out(f"Company boards: {read:,} of {len(boards):,} read, {_describe(counts)}")
 
-    def _read_board(self, board: str, extra: bool, counts: jobs.Counts) -> str:
-        """Read and save one board; return "read", "missing", "unreachable", "failed" or "investigate"."""
-        kind, _, name = board.partition(":")
+    def _download(self, host: str, todo: Queue, results: Queue, stop: threading.Event) -> None:
+        """One of a site's downloaders: takes the site's next board until none is left. Never touches the database."""
+        while not stop.is_set():
+            try:
+                board = todo.get_nowait()
+            except Empty:
+                return
+            if host in self.unreachable:  # the site stopped answering: the rest of it is skipped this run
+                results.put((host, board, None))
+                continue
+            kind, _, name = board.partition(":")
+            try:
+                download = read_board(self.fetcher, kind, name)
+            except BaseException as error:  # even a stop from the dashboard: _read_board raises it again
+                download = error
+            with self._counting:  # a site's downloaders share one count of boards in a row with no answer
+                self.silent[host] = self.silent[host] + 1 if isinstance(download, Unreachable) else 0
+                if self.silent[host] == SKIP_SITE_AFTER:  # the site went away mid-run: don't spend hours retrying it
+                    self.unreachable.add(host)
+            results.put((host, board, download))
+
+    def _read_board(
+        self, board: str, download: tuple[list[Job], int] | BaseException, extra: bool, counts: jobs.Counts
+    ) -> str:
+        """Save one downloaded board; return "read", "missing", "unreachable", "failed" or "investigate"."""
         label = source_label(board)
         try:
-            found, skipped = read_board(self.fetcher, kind, name)
+            if isinstance(download, BaseException):
+                raise download  # a failed download, handled below exactly as before; Ctrl+C goes on up
+            found, skipped = download
             reason = self._stopped_hiring(board, label) if not found and not skipped else None
             board_counts = jobs.save(self.conn, board, found, self.roles, now(), reason=reason)
         except NotFound as error:
@@ -272,8 +310,15 @@ class _Run:
                     self.out(f"  - {line}")
 
 
+def _next(results: Queue) -> tuple:
+    """The next finished download; waits in short steps so Ctrl+C is noticed on every system (Windows too)."""
+    while True:
+        with suppress(Empty):
+            return results.get(timeout=1)
+
+
 def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
-    """Read every source one at a time, saving each all-or-nothing, then print a summary."""
+    """Read Simplify's lists, then every board with all sites at the same time; save each source all-or-nothing."""
     run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles), out)
     run.check_internet()
     with conn:

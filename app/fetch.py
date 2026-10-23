@@ -1,6 +1,7 @@
 """The one shared web download: allowed hosts only, polite, size-limited, with retries."""
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -10,7 +11,7 @@ import httpx
 ALLOWED_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
 USER_AGENT = "auto_apply personal job search"
 TIMEOUT_SECONDS = 20
-MIN_GAP_SECONDS = 1.0  # between two requests to the same website
+MIN_GAP_SECONDS = 1.0  # between the starts of two requests to the same website
 RETRY_WAITS = (2, 4, 8)
 MAX_RETRY_AFTER = 60
 MAX_BYTES = 50 * 1024 * 1024
@@ -31,13 +32,14 @@ class Unreachable(FetchError):
 
 
 class Fetcher:
-    """Downloads JSON politely. Keeps one connection pool and the time of the last request to each website."""
+    """Downloads JSON politely. Keeps one connection pool and each website's next free start time."""
 
     def __init__(self, transport: httpx.BaseTransport | None = None) -> None:
         self._client = httpx.Client(
             transport=transport, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS, follow_redirects=False
         )
-        self._last_request: dict[str, float] = {}
+        self._next_start: dict[str, float] = {}  # per website: the earliest time its next request may start
+        self._spacing = threading.Lock()  # several downloads share one Fetcher at once
 
     def close(self) -> None:
         self._client.close()
@@ -82,10 +84,12 @@ class Fetcher:
             time.sleep(wait if site_wait is None else site_wait)
 
     def _space_out(self, host: str) -> None:
-        gap = self._last_request.get(host, -MIN_GAP_SECONDS) + MIN_GAP_SECONDS - time.monotonic()
-        if gap > 0:
-            time.sleep(gap)
-        self._last_request[host] = time.monotonic()
+        """Wait for this website's turn: request starts are MIN_GAP_SECONDS apart, however many downloads ask."""
+        with self._spacing:
+            start = max(time.monotonic(), self._next_start.get(host, 0.0))
+            self._next_start[host] = start + MIN_GAP_SECONDS
+        if (wait := start - time.monotonic()) > 0:
+            time.sleep(wait)
 
 
 def _allowed_host(url: str) -> str:

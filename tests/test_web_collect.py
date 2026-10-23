@@ -117,7 +117,7 @@ def test_no_internet_shows_one_line(client, web):
 
 
 def test_closing_the_dashboard_stops_a_collection_and_keeps_finished_sources(client, conn, web, config, data_dir):
-    config["config"] = settings(data_dir, ["lever:globex"])  # a second board, never reached
+    config["config"] = settings(data_dir, ["lever:globex"])  # a board on another site
 
     def close_after_the_list(request):
         if request.method == "GET" and request.url.host == "boards-api.greenhouse.io":  # the Simplify list is saved

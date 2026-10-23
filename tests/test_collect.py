@@ -1,6 +1,7 @@
 """The collect and add commands, end to end, with a fake web and a throwaway encrypted database."""
 
 import json
+import threading
 import time
 from contextlib import closing
 
@@ -43,7 +44,7 @@ def test_full_run_saves_matching_jobs_and_prints_a_summary(conn, data_dir):
     lines, _ = run(conn, data_dir, PAGES | {GLOBEX: []}, extra_boards=["lever:globex"])
     assert lines == [
         "Simplify Summer2027-Internships: 1 matching (1 new, 0 updated, 0 no longer available)",
-        "Reading 2 company boards one at a time (about 1 minute)...",
+        "Reading 2 company boards, all sites at the same time (about 1 minute)...",
         "Company boards: 2 of 2 read, 1 matching (0 new, 1 updated, 0 no longer available)",
         "Total: 1 new, 1 updated, 0 no longer available.",
         "No sources failed.",
@@ -376,18 +377,52 @@ def test_an_unreachable_site_is_skipped_with_one_line_and_closes_nothing(conn, d
 
 
 def test_a_site_that_stops_answering_mid_run_is_skipped_after_five_boards(conn, data_dir):
-    boards = [f"greenhouse:board{number}" for number in range(7)]
+    boards = [f"greenhouse:board{number}" for number in range(9)]
     lines, web = run(conn, data_dir, {}, extra_boards=boards, silent=["boards-api.greenhouse.io"])
     board_requests = [url for url in requested(web) if "boards-api.greenhouse.io" in url]
-    assert len(board_requests) == 5 * 4  # five boards, each tried four times, then the site is skipped
+    tried = len(set(board_requests))
+    assert 5 <= tried <= 5 + collect.IN_FLIGHT - 1  # five in a row, plus any already being downloaded
+    assert len(board_requests) == tried * 4  # each tried four times, then the site is skipped
     hint = "(the site may be down, or your network may be blocking it)"
-    assert (
-        lines[-2] == f"  - Greenhouse board 'board4': connection failed (ConnectError); gave up after 3 retries {hint}"
+    assert f"connection failed (ConnectError); gave up after 3 retries {hint}" in lines[-2]
+    assert lines[-1] == (
+        f"  - boards-api.greenhouse.io: could not be reached; {9 - tried} sources skipped this run, closing nothing "
+        f"{hint}"
     )
-    assert (
-        lines[-1]
-        == f"  - boards-api.greenhouse.io: could not be reached; 2 sources skipped this run, closing nothing {hint}"
-    )
+
+
+def run_with(conn, data_dir, pages, answer, extra_boards):
+    """One collection whose web layer is `answer(request, web)`, for tests that hold requests open."""
+    web = FakeWeb(pages)
+    with closing(fetch.Fetcher(httpx.MockTransport(lambda request: answer(request, web)))) as fetcher:
+        collect.collect(conn, settings(data_dir, extra_boards), fetcher, [].append)
+
+
+def test_all_sites_are_read_at_the_same_time(conn, data_dir):
+    lever_asked = threading.Event()
+
+    def answer(request, web):
+        if request.method == "GET" and request.url.host == "api.lever.co":
+            lever_asked.set()
+        if request.method == "GET" and request.url.host == "boards-api.greenhouse.io":
+            assert lever_asked.wait(5)  # read one site after another, Greenhouse would wait here for Lever
+        return web(request)
+
+    run_with(conn, data_dir, PAGES | {GLOBEX: []}, answer, ["lever:globex"])
+    assert one(conn, "SELECT count(*) FROM sources WHERE last_ok IS NOT NULL") == (3,)  # the list and both boards
+
+
+def test_up_to_in_flight_downloads_are_open_at_once_on_one_site(conn, data_dir):
+    boards = [f"greenhouse:board{number}" for number in range(collect.IN_FLIGHT)]
+    together = threading.Barrier(collect.IN_FLIGHT, timeout=5)  # passes only when all are open at the same time
+
+    def answer(request, web):
+        if request.method == "GET" and request.url.host == "boards-api.greenhouse.io":
+            together.wait()
+        return web(request)
+
+    run_with(conn, data_dir, {LIST: 404}, answer, boards)
+    assert not together.broken
 
 
 @pytest.mark.parametrize(
