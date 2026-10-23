@@ -166,6 +166,16 @@ def create_app(
     async def collect_progress(request: Request) -> Response:
         return _page(request, "collect_progress.html", collector=request.app.state.collector)
 
+    @app.get("/settings")
+    async def settings_page(request: Request) -> Response:
+        return _settings_page(request)
+
+    @app.post("/settings")
+    async def save_settings(request: Request) -> Response:
+        problem = actions.save_settings(request.state.form)
+        typed = request.state.form if problem else None  # a refused save keeps what was typed
+        return _settings_page(request, problem=problem, typed=typed)
+
     return app
 
 
@@ -188,6 +198,19 @@ def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:
     return _page(
         request, "collect.html", collector=request.app.state.collector, refused=refused, runs=runs, every=every,
         settings_error=settings_error,
+    )  # fmt: skip
+
+
+def _settings_page(request: Request, problem: str | None = None, typed: dict[str, str] | None = None) -> HTMLResponse:
+    try:
+        load_config()  # a settings file that breaks the rules is shown as a problem, never edited
+        form = actions.settings_form() | {name: value for name, value in (typed or {}).items() if name != "data_dir"}
+    except ConfigError as error:
+        return _page(request, "settings.html", file_problem=str(error))
+    rows = sum(1 for name in form if name.startswith("list_url_")) + 1  # one empty row to add a list
+    return _page(
+        request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
+        rows=min(rows, actions.MAX_LISTS + 1),
     )  # fmt: skip
 
 

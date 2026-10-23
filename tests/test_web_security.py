@@ -241,3 +241,15 @@ def test_address_number_in_use_suggests_another(command, monkeypatch):
     monkeypatch.setattr(web_command, "_port_free", lambda port: False)
     code, output, served = command(["--port", "9000"])
     assert (code, "python -m app.web --port 9001" in output.err, served) == (1, True, [])
+
+
+def test_start_without_a_database_points_to_setup(command, data_dir):
+    (data_dir / db.DB_FILE).unlink()
+    code, output, served = command()
+    assert (code, "python -m app.db setup" in output.err, served) == (1, True, [])
+
+
+def test_start_with_the_keychain_entry_missing_says_how_to_recover(command, fake_keychain):
+    fake_keychain.store.clear()
+    code, output, served = command()
+    assert (code, "Run: python -m app.db recover" in output.err, served) == (1, True, [])

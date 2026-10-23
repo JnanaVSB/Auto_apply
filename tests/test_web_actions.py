@@ -23,6 +23,12 @@ def pages():
 
 
 @pytest.fixture
+def web_down(pages):
+    """Every job site stops answering."""
+    pages[greenhouse.api_url("acme")] = httpx.ConnectError("no route to host")
+
+
+@pytest.fixture
 def client(data_dir, clock, pages, monkeypatch):  # noqa: F811
     """A logged-in dashboard whose web requests go to `pages` (a fake web), looking for ML roles."""
     roles = RoleSettings(keywords=["ML", "machine learning"])
@@ -200,3 +206,9 @@ def test_add_actions_open_their_own_connection(data_dir, monkeypatch):  # noqa: 
     with closing(Fetcher(httpx.MockTransport(FakeWeb({})))) as fetcher:
         message, job_id = actions.add_job(data_dir, fetcher, "https://initech.example/9", "Initech", "ML")
     assert (message, job_id) == ("Added: Initech, ML", 1)
+
+
+def test_add_job_says_when_the_board_does_not_answer(client, web_down):
+    text = post(client, "/add/job", link=ACME_JOB).text
+    assert "The job&#39;s board could not be read (connection failed (ConnectError); gave up after 3 retries" in text
+    assert "your network may be blocking it" in text

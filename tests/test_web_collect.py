@@ -196,7 +196,7 @@ def test_the_collect_page_shows_the_schedule_and_last_runs(client, conn, config)
     assert "<td>2026-10-21 08:30</td><td>done</td><td>552</td>" in page and "<td>1,192</td>" in page
     assert "not finished (running, or interrupted)" in page
     config["config"] = config["config"].model_copy(update={"collect_every_hours": 0})
-    assert "Off. To turn it on" in client.get("/collect").text
+    assert "Off. Turn it on on the" in client.get("/collect").text
 
 
 def test_collect_now_needs_the_anti_forgery_token(client):

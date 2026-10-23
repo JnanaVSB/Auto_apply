@@ -5,7 +5,8 @@ nothing personal is ever stored in this repository.
 
 > **Status:** early development. Phase 1 (foundation): private settings, secrets in the OS keychain
 > and an encrypted database. Phase 2: job collection from Simplify's public GitHub lists and the
-> Greenhouse, Lever and Ashby job boards. Dashboard and applying come in later phases.
+> Greenhouse, Lever and Ashby job boards. Phase 3: a jobs dashboard on this computer. Applying comes
+> in later phases.
 
 ## Requirements
 - [Miniconda](https://docs.anaconda.com/miniconda/) (or any conda)
@@ -87,10 +88,40 @@ To see one saved job's status and every board or list it appears on (changes not
 python -m app.collect show "<job link>"
 ```
 
+## Dashboard
+```bash
+python -m app.web
+```
+Opens the jobs dashboard in your browser at http://127.0.0.1:8765. It works on this computer only. The first time,
+it asks you to choose a dashboard password in the terminal (12+ characters; use a different one from your master
+password). Press Ctrl+C in the terminal to stop it.
+- **Jobs:** every saved job, 50 per page, with filters (source, level, US location, remote, date posted, role category,
+  term, sponsorship, status and reason, added by you, not interested) and sorting. Filters stay in the page address, so
+  you can bookmark a view. Open a job to see its details, its description and every board or list it is on.
+- **On a job's page:** mark it "not interested" (this only hides it; nothing is ever deleted), or set its location to
+  US or not US. Later collections keep your choice until you click "Let collections decide again".
+- **Add:** save a job by its link (the same rules as `collect add`), or find a company's board on Greenhouse, Lever and
+  Ashby by typing its name.
+- **Collect:** "Collect now" runs the same collection as `python -m app.collect`, with live progress. Only one
+  collection runs at a time, including one started from a terminal. You can also collect automatically every few hours
+  while the dashboard is open (see Settings).
+- **Settings:** roles, Simplify lists, extra boards and the automatic collection. Saving checks them with the same rules
+  as the file and rewrites `data/config.yaml` (comments in that file are not kept).
+
+Forgot the dashboard password? Stop the dashboard and run:
+```bash
+python -m app.web reset-password
+```
+If another program is using the address, start it with `python -m app.web --port 8766`.
+
+Security: the dashboard only listens on this computer and refuses requests addressed to any other name. Its login locks
+for 15 minutes after 5 wrong passwords and logs you out after 30 idle minutes. Every change carries an anti-forgery
+token, pages load nothing from the internet, and job text is always shown as plain text.
+
 ## Adding companies and board types
 - **Another company** on Greenhouse, Lever or Ashby: add one line to `extra_boards` in `data/config.yaml`, using the
   name from the board's web address, e.g. `greenhouse:openai` for `job-boards.greenhouse.io/openai`. Boards linked
-  from Simplify's lists are found automatically. (A dashboard button for this comes in a later phase.)
+  from Simplify's lists are found automatically. Or use **Add company** in the dashboard.
 - **Another kind of job board** (for example Workable): one small translator file in `app/sources/` plus its tests.
   See [docs/adding-a-board-type.md](docs/adding-a-board-type.md) for the template and the test checklist.
 
@@ -104,6 +135,9 @@ python -m app.collect show "<job link>"
 US and foreign place names (used to decide whether a job is in the US) come from
 [GeoNames](https://www.geonames.org), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.
+
+The dashboard uses [HTMX](https://htmx.org) (BSD Zero-Clause licence), stored in `app/web/static/` so nothing is loaded
+from the internet.
 
 ## Development
 - Run all tests: `python -m pytest`

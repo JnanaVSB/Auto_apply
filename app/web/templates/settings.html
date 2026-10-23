@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+{% if file_problem %}
+<p class="error" role="alert">{{ file_problem }}</p>
+<p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
+{% else %}
+{% if problem %}<p class="error" role="alert">Not saved: {{ problem }}</p>{% endif %}
+{% if saved %}<p class="result" role="status">Saved. Used from the next collection or action.</p>{% endif %}
+<form method="post" action="/settings" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+  <h2>Roles</h2>
+  <p class="hint">A job is kept when Simplify puts it in one of these categories, or one of the keywords appears as a
+    whole word (capital letters ignored) in its title or description.</p>
+  <label>Simplify categories, one per line <textarea name="simplify_categories" rows="3">{{ form.simplify_categories }}</textarea></label>
+  <label>Keywords, one per line <textarea name="keywords" rows="8">{{ form.keywords }}</textarea></label>
+
+  <h2>Simplify lists</h2>
+  <p class="hint">Simplify's public GitHub lists (they change name each season). Clear an address to remove that list.</p>
+  {% for number in range(rows) %}
+  <div class="list-row">
+    <label>Address <input name="list_url_{{ number }}" type="url" maxlength="500" value="{{ form.get('list_url_' ~ number, '') }}"></label>
+    <label>Level
+      <select name="list_level_{{ number }}">
+        {% for level in ["intern", "new grad"] %}
+        <option{% if form.get('list_level_' ~ number) == level %} selected{% endif %}>{{ level }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  {% endfor %}
+
+  <h2>Extra boards</h2>
+  <label>One per line, for example greenhouse:acme (read on every collection, never retired)
+    <textarea name="extra_boards" rows="4">{{ form.extra_boards }}</textarea></label>
+
+  <h2>Automatic collection</h2>
+  <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)
+    <input name="collect_every_hours" type="number" min="0" max="168" step="1" value="{{ form.collect_every_hours }}"></label>
+
+  <h2>Data folder</h2>
+  <p><code>{{ form.data_dir }}</code> <span class="muted">(changed only by hand in data/config.yaml)</span></p>
+
+  <p class="hint">Saving rewrites data/config.yaml with these settings; comments you wrote in that file are not kept.</p>
+  <button type="submit">Save settings</button>
+</form>
+{% endif %}
+{% endblock %}

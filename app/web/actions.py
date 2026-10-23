@@ -1,4 +1,4 @@
-"""Dashboard actions that change data: not interested, fix location, add a job by link, add a company.
+"""Dashboard actions that change data: not interested, fix location, add a job, add a company, save the settings.
 
 Nothing here ever deletes anything. The two "add" actions contact job sites, so they run beside the dashboard with
 their own database connection.
@@ -10,8 +10,10 @@ from contextlib import closing
 from pathlib import Path
 
 import sqlcipher3
+import yaml
 
 from app import collect, db, jobs
+from app import config as settings_file
 from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
@@ -21,6 +23,8 @@ from app.web import queries
 KINDS = ("greenhouse", "lever", "ashby")
 LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
+MAX_LISTS = 20  # Simplify list rows on the settings form
+SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
 NOT_FOUND_TIP = (
     "Tip: open the company's careers page; if its address contains greenhouse.io, lever.co or ashbyhq.com, type the "
     "name from that address (for example greenhouse:acme), or paste one job's link into Add job."
@@ -125,3 +129,63 @@ def _find_boards(
         tried = ", ".join(dict.fromkeys(name for _, name in tries))
         lines.append(f"No Greenhouse, Lever or Ashby board found for '{text}' (tried {tried}). {NOT_FOUND_TIP}")
     return lines
+
+
+def _lines(text: str) -> list[str]:
+    """One entry per line: spaces trimmed, empty lines left out, repeats kept once."""
+    return list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
+
+
+def settings_form() -> dict[str, str]:
+    """The settings file as the settings form shows it, values as written in the file."""
+    raw = yaml.safe_load(settings_file.CONFIG_PATH.read_text(encoding="utf-8"))
+    roles, sources = raw.get("roles") or {}, raw.get("sources") or {}
+    form = {
+        "data_dir": str(raw["data_dir"]),
+        "simplify_categories": "\n".join(roles.get("simplify_categories") or []),
+        "keywords": "\n".join(roles.get("keywords") or []),
+        "extra_boards": "\n".join(sources.get("extra_boards") or []),
+        "collect_every_hours": str(raw.get("collect_every_hours", 0)),
+    }
+    for number, listing in enumerate(sources.get("simplify_lists") or []):
+        form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
+    return form
+
+
+def save_settings(form: dict[str, str]) -> str | None:
+    """Check the form's settings with the usual rules, then swap them in all at once; returns the problem, or None.
+
+    The data folder is kept exactly as written in the file; it is changed by hand only.
+    """
+    path, hours = settings_file.CONFIG_PATH, form.get("collect_every_hours", "").strip()
+    new = path.with_name(f"{path.name}.new")
+    try:
+        settings = {
+            "data_dir": yaml.safe_load(path.read_text(encoding="utf-8"))["data_dir"],
+            "roles": {
+                "simplify_categories": _lines(form.get("simplify_categories", "")),
+                "keywords": _lines(form.get("keywords", "")),
+            },
+            "sources": {
+                "simplify_lists": [
+                    {"url": form[f"list_url_{number}"].strip(), "level": form.get(f"list_level_{number}", "")}
+                    for number in range(MAX_LISTS + 1)
+                    if form.get(f"list_url_{number}", "").strip()
+                ],
+                "extra_boards": _lines(form.get("extra_boards", "")),
+            },
+            "collect_every_hours": int(hours) if hours.isdigit() else hours,
+        }
+        new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
+        new.chmod(0o600)
+        load_config(new)  # the very rules used when data/config.yaml is read
+        new.replace(path)  # all at once: never a half-written settings file
+    except ConfigError as error:
+        return str(error)
+    except (yaml.YAMLError, KeyError, TypeError):
+        return "data/config.yaml could not be read. Fix it by hand (config.example.yaml shows the layout)."
+    except OSError as error:  # only the file name, since full paths include the user's name
+        return f"The settings could not be saved ({error.strerror or error}: {Path(error.filename or path).name})."
+    finally:
+        new.unlink(missing_ok=True)
+    return None

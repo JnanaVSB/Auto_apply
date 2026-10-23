@@ -15,10 +15,10 @@
 {% if settings_error %}
 <p class="error">{{ settings_error }}</p>
 {% elif every %}
-<p>Every {{ every }} hour{{ "s" if every != 1 }} while the dashboard is open (checked once a minute). Change it in
-  <code>data/config.yaml</code>: <code>collect_every_hours</code>.</p>
+<p>Every {{ every }} hour{{ "s" if every != 1 }} while the dashboard is open (checked once a minute).
+  Change it on the <a href="/settings">Settings</a> page.</p>
 {% else %}
-<p>Off. To turn it on, set <code>collect_every_hours</code> in <code>data/config.yaml</code> to 1–168.</p>
+<p>Off. Turn it on on the <a href="/settings">Settings</a> page.</p>
 {% endif %}
 
 <h2>Last collections</h2>

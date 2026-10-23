@@ -65,7 +65,8 @@ class Config(BaseModel):
     collect_every_hours: Annotated[int, Field(ge=0, le=168, strict=True)] = 0  # dashboard schedule; 0 = off
 
 
-def load_config(path: Path = CONFIG_PATH) -> Config:
+def load_config(path: Path | None = None) -> Config:
+    path = path or CONFIG_PATH  # looked up when called, so every part of the app reads the same file
     if not path.is_file():
         raise ConfigError(
             "Settings file not found at data/config.yaml. Copy config.example.yaml to data/config.yaml and fill it in."
