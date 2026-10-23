@@ -2,6 +2,9 @@
 data/
 exports/
 *.db
+*.db-wal
+*.db-shm
+*-journal
 *.bak-v*
 *.log
 *.sqlite
