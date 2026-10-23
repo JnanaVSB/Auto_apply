@@ -19,6 +19,12 @@ def parse(data: Any, board: str) -> tuple[list[Job], int]:
     return parse_each(data.get("jobs") if isinstance(data, dict) else None, lambda entry: _job(entry, board))
 
 
+def reported_company(jobs: list[Job], board: str) -> str | None:
+    """The company name the board itself reports, from its jobs; None when they give none (a job without one is
+    stored under the board's own name, which the board did not report)."""
+    return next((job.company for job in jobs if job.company != board), None)
+
+
 def _job(entry: dict, board: str) -> Job:
     if not isinstance(entry["id"], int | str):
         raise ValueError("id is missing")

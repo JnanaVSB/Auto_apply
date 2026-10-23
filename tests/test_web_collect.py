@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import ACME, ADDRESS, LIST, FakeWeb, board_job, csrf, entry, log_in, one, settings
 
-from app import collect, fetch
+from app import collect, fetch, phonebook
 from app.fetch import Fetcher
 from app.web import collector, main, security
 
@@ -124,7 +124,7 @@ def test_closing_the_dashboard_stops_a_collection_and_keeps_finished_sources(cli
             client.app.state.collector._stop.set()
         return web(request)
 
-    client.app.state.collector.new_fetcher = lambda: Fetcher(httpx.MockTransport(close_after_the_list))
+    client.app.state.collector.fetcher = Fetcher(httpx.MockTransport(close_after_the_list))
     collect_now(client)
     worker = finish(client)
     assert (worker.state, worker.lines[-1]) == ("cancelled", collector.CANCELLED)
@@ -162,7 +162,7 @@ def test_the_schedule_is_due_only_when_on_idle_and_old_enough(data_dir, conn, ev
     if last_started:
         with conn:
             conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (last_started.isoformat(),))
-    worker = collector.Collector(data_dir)
+    worker = collector.Collector(data_dir, Fetcher())
     if running:
         worker._thread = threading.Thread(target=threading.Event().wait, args=(5,), daemon=True)
         worker._thread.start()
@@ -170,25 +170,28 @@ def test_the_schedule_is_due_only_when_on_idle_and_old_enough(data_dir, conn, ev
 
 
 @pytest.mark.parametrize(
-    ("every", "done", "last", "running", "due"),
+    ("every", "runs", "running", "due"),
     [
-        (0, None, None, False, False),  # off
-        (30, None, None, False, True),  # never refreshed
-        (30, NOW - timedelta(days=29), NOW - timedelta(days=29), False, False),
-        (30, NOW - timedelta(days=30), NOW - timedelta(days=30), False, True),
-        (30, NOW - timedelta(days=40), NOW - timedelta(hours=20), False, False),  # an unfinished one today: wait a day
-        (30, NOW - timedelta(days=40), NOW - timedelta(hours=25), False, True),  # then try again
-        (30, None, None, True, False),  # something is running
+        (0, [], False, False),  # off
+        (30, [], False, True),  # never refreshed
+        (30, [(29, "done", 0)], False, False),
+        (30, [(30, "done", 0)], False, True),  # a new round 30 days after the last round began
+        (30, [(29, "partial", 0), (2, "partial", 1)], False, True),  # unfinished: continued after a day...
+        (30, [(29, "partial", 0), (2, "done", 1)], False, False),  # ...and the clock still counts from day 29
+        (30, [(5, "partial", 0), (0.5, "partial", 1)], False, False),  # a failing site: at most once a day
+        (30, [(5, "paused", 0)], False, True),  # paused, cancelled or stopped: at the next chance
+        (30, [(5, None, 0)], False, True),  # never finished (a power cut)
+        (30, [(40, "partial", 0), (0.5, "partial", 1)], False, True),  # the round is 30 days old: a new one
+        (30, [], True, False),  # something is running here
     ],
 )
-def test_the_phone_book_is_due_monthly_and_an_unfinished_refresh_daily(data_dir, conn, every, done, last, running, due):
+def test_the_phone_book_schedule_rule(data_dir, conn, every, runs, running, due):
     with conn:
-        for started, outcome in ((done, "done"), (last, "partial")):
-            if started:
-                conn.execute(
-                    "INSERT INTO phonebook_runs (started_at, outcome) VALUES (?, ?)", (started.isoformat(), outcome)
-                )
-    worker = collector.Collector(data_dir)
+        for days_ago, outcome, continues in runs:
+            started = (NOW - timedelta(days=days_ago)).isoformat()
+            conn.execute("INSERT INTO phonebook_runs (started_at, outcome, continues) VALUES (?, ?, ?)",
+                         (started, outcome, continues))  # fmt: skip
+    worker = collector.Collector(data_dir, Fetcher())
     if running:
         worker._thread = threading.Thread(target=threading.Event().wait, args=(5,), daemon=True)
         worker._thread.start()
@@ -205,6 +208,67 @@ def test_refresh_phone_book_runs_beside_the_dashboard_and_shows_its_summary(clie
     page = client.get("/collect").text
     assert "<td>partial</td>" in page  # Common Crawl is not in the fake web: tried again tomorrow
     assert one(conn, "SELECT result FROM phonebook WHERE board = 'greenhouse:acme'") == ("added",)
+
+
+def test_collect_now_during_a_refresh_pauses_it_and_the_refresh_continues_afterwards(
+    client, conn, web, data_dir, monkeypatch
+):
+    monkeypatch.setattr(collect, "PAUSE_POLL_SECONDS", 0.01)
+    worker, pressed = client.app.state.collector, []
+
+    def collect_now_once_the_refresh_reads_lists(request):
+        if worker.task == "refresh" and str(request.url) == LIST and not pressed:
+            pressed.append(worker.start())  # what "Collect now" does
+        return web(request)
+
+    worker.fetcher = Fetcher(httpx.MockTransport(collect_now_once_the_refresh_reads_lists))
+    client.post("/phonebook/refresh", data={"csrf_token": csrf(client)})
+    finish(client)
+    assert (pressed, worker.task, worker.state) == ([None], "refresh", "done")  # accepted, not refused
+    lines = worker.lines
+    paused, resumed = lines.index(phonebook.PAUSED), lines.index(collector.RESUMED)
+    assert any(line.startswith("Total:") for line in lines[paused:resumed])  # the collection ran in between
+    assert lines[-1].startswith("Checked ")  # then the refresh finished
+    assert conn.execute("SELECT outcome, continues FROM phonebook_runs ORDER BY id").fetchall() == [
+        ("paused", 0), ("partial", 1)]  # fmt: skip
+    assert one(conn, "SELECT count(*) FROM collect_runs") == (1,)
+    assert not (data_dir / collect.PAUSE_FILE).exists()
+
+
+def test_a_collection_is_due_even_while_a_refresh_runs(data_dir, conn):
+    worker = collector.Collector(data_dir, Fetcher())
+    worker._thread = threading.Thread(target=threading.Event().wait, args=(5,), daemon=True)
+    worker._thread.start()
+    worker.task = "refresh"
+    assert worker.due(conn, 6, NOW) is True
+    worker.collection_wanted = True  # already asked for: not twice
+    assert worker.due(conn, 6, NOW) is False
+
+
+def test_the_boards_page_says_when_a_refresh_runs_or_is_paused(client):
+    worker, finished = client.app.state.collector, threading.Event()
+    worker._thread = threading.Thread(target=finished.wait, args=(5,), daemon=True)
+    worker._thread.start()
+    worker.task = "refresh"
+    assert "A phone-book refresh is running" in client.get("/boards").text
+    worker.task, worker.refresh_paused = "collect", True
+    assert "A phone-book refresh is paused for a collection" in client.get("/boards").text
+    finished.set()
+
+
+def test_the_dashboard_uses_one_downloader_for_everything(data_dir, clock, web):
+    made = []
+
+    def new_fetcher():
+        made.append(Fetcher(httpx.MockTransport(web)))
+        return made[-1]
+
+    app = main.create_app(data_dir, security.Logins(clock=clock), new_fetcher)
+    with TestClient(app, base_url=ADDRESS) as client:
+        log_in(client)
+        client.post("/add/company", data={"name": "Acme", "csrf_token": csrf(client)})
+        client.post("/add/board", data={"board": "greenhouse:acme", "csrf_token": csrf(client)})
+    assert len(made) == 1  # so "at most N requests per second to a site" counts every request
 
 
 def test_a_refresh_waits_for_a_collection_from_a_terminal(client, data_dir):

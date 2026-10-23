@@ -2,10 +2,11 @@
 
 import json
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from helpers import ACME_JOB, LIST, FakeWeb, ashby_job, board_job, entry, one, settings
+from helpers import ACME_JOB, LIST, FakeWeb, add_job, ashby_job, board_job, entry, one, settings
 
 from app import collect, fetch, phonebook
 from app.config import SimplifyList, SourceSettings
@@ -81,8 +82,8 @@ def test_a_refresh_finds_checks_and_adds_boards_and_their_jobs(conn, data_dir):
     assert sources == [("greenhouse:acme", "cross-check", "Acme"), ("lever:acme", "commoncrawl", None)]
     assert one(conn, "SELECT count(*) FROM job_sources WHERE source = 'lever:acme'") == (1,)  # ML Engineer matches
     assert lines[-1] == (
-        "Checked 4 names: 2 added (read on every collection from now on), 2 not found, 0 to confirm on the Boards "
-        "page, 0 could not be checked (asked again next time)."
+        "Checked 4 names: 2 added (read on every collection from now on), 0 with no jobs yet (asked again next "
+        "round), 2 not found, 0 to confirm on the Boards page, 0 could not be checked (asked again next time)."
     )  # a name that was not found is not tried on the other sites
     assert one(conn, "SELECT outcome FROM phonebook_runs") == ("done",)
 
@@ -212,6 +213,151 @@ def test_a_list_that_cannot_be_read_is_named_and_the_rest_goes_on(conn, data_dir
     assert "someone/jobs could not be read (not found (404)); try again later." in lines
     assert results(conn)["lever:acme"] == "added"  # Common Crawl and the checks still ran
     assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
+
+
+def test_a_refresh_pauses_before_its_next_request_when_a_collection_waits(conn, data_dir):
+    collect.ask_refresh_to_pause(data_dir)
+    lines, web = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | BOARDS_PAGES)
+    assert lines == [phonebook.PAUSED]
+    assert [request.method for request in web.requests] == ["HEAD"]  # only the internet check
+    assert one(conn, "SELECT outcome, continues FROM phonebook_runs") == ("paused", 0)
+    (data_dir / collect.PAUSE_FILE).unlink()
+    refresh(conn, data_dir, crawl_pages(LEVER_URLS) | BOARDS_PAGES)
+    assert conn.execute("SELECT outcome, continues FROM phonebook_runs ORDER BY id").fetchall() == [
+        ("paused", 0), ("done", 1)]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("last", "every", "continues"),
+    [
+        (None, 30, False),  # the first refresh starts a round
+        (("done", 1), 30, False),  # the last round finished: a new one
+        (("partial", 1), 30, True),  # unfinished: continued
+        (("paused", 29), 30, True),
+        (("partial", 30), 30, False),  # the round began 30 days ago: a new one
+        (("partial", 400), 0, True),  # no schedule: an unfinished round is always continued
+    ],
+)
+def test_a_refresh_continues_an_unfinished_round_unless_it_is_too_old(conn, last, every, continues):
+    if last:
+        with conn:
+            started = (datetime.now(UTC) - timedelta(days=last[1])).isoformat()
+            conn.execute("INSERT INTO phonebook_runs (started_at, outcome) VALUES (?, ?)", (started, last[0]))
+    assert phonebook.continues_round(conn, every, datetime.now(UTC)) is continues
+
+
+def test_the_command_continues_after_the_collection_it_paused_for(data_dir, monkeypatch, capsys):
+    outcomes, waited = iter(["paused", "done"]), []
+    monkeypatch.setattr(phonebook, "load_config", lambda: settings(data_dir))
+    monkeypatch.setattr(phonebook, "refresh", lambda conn, config, fetcher: next(outcomes))
+
+    def collection_ran(folder):
+        waited.append(folder)
+        return collect.lock(folder)
+
+    monkeypatch.setattr(collect, "wait_for_collection", collection_ran)
+    assert phonebook.main(["refresh"]) == 0
+    assert waited == [data_dir]
+
+
+def done_parts(conn):
+    return {part for (part,) in conn.execute("SELECT part FROM phonebook_done")}
+
+
+def test_not_found_in_the_index_means_no_names_there_and_the_rest_is_read(conn, data_dir):
+    pages = (
+        crawl_pages(LEVER_URLS)
+        | BOARDS_PAGES
+        | {
+            INDEX.format("boards.greenhouse.io") + "&showNumPages=true": 404,  # no page count
+            INDEX.format("jobs.ashbyhq.com") + "&page=0": 404,  # an empty page
+        }
+    )
+    refresh(conn, data_dir, pages)
+    assert {f"commoncrawl:{CRAWL}:boards.greenhouse.io", f"commoncrawl:{CRAWL}:jobs.ashbyhq.com"} <= done_parts(conn)
+    assert results(conn)["lever:acme"] == "added"
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("done",)
+
+
+def test_a_site_whose_index_part_fails_is_skipped_and_asked_again_next_time(conn, data_dir):
+    count = INDEX.format("jobs.lever.co") + "&showNumPages=true"
+    lines, _ = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | BOARDS_PAGES | {count: 500})
+    assert (
+        f"Common Crawl {CRAWL}, jobs.lever.co could not be read (busy or failing (status 500); gave up after 3 "
+        "retries); tried again next time."
+    ) in lines
+    assert f"commoncrawl:{CRAWL}:jobs.ashbyhq.com" in done_parts(conn)  # the sites after it were still read
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
+    _, web = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | BOARDS_PAGES)
+    index = [str(request.url) for request in web.requests if request.url.host == fetch.COMMON_CRAWL]
+    assert index == [phonebook.CRAWLS, count, INDEX.format("jobs.lever.co") + "&page=0"]  # only what was missing
+    assert results(conn)["lever:acme"] == "added"
+
+
+def test_an_index_that_stops_answering_ends_its_reading_until_next_time(conn, data_dir):
+    first = INDEX.format("boards.greenhouse.io") + "&showNumPages=true"
+    lines, web = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | {first: httpx.ConnectError("dropped")})
+    assert lines[0].startswith("Common Crawl's index could not be read (connection failed (ConnectError)")
+    assert len([request for request in web.requests if request.url.host == fetch.COMMON_CRAWL]) == 1 + 4  # 3 retries
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
+
+
+def test_a_page_that_is_not_index_lines_is_asked_again_next_time(conn, data_dir):
+    page = INDEX.format("jobs.lever.co") + "&page=0"
+    lines, _ = refresh(conn, data_dir, crawl_pages() | {page: httpx.Response(200, text="<html>\nBusy\n</html>\n")})
+    assert (
+        f"Common Crawl {CRAWL}, jobs.lever.co could not be read (page 1 is not index lines (perhaps an error page)); "
+        "tried again next time."
+    ) in lines
+    assert not [part for part in done_parts(conn) if "jobs.lever.co" in part]
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
+
+
+def test_a_real_sighting_asks_again_a_name_only_the_cross_check_found_missing(conn, data_dir):
+    refresh(conn, data_dir, crawl_pages(LEVER_URLS) | BOARDS_PAGES)
+    assert (results(conn)["ashby:acme"], results(conn)["lever:gone"]) == ("not found", "not found")
+    gone_checked = one(conn, "SELECT checked_on FROM phonebook WHERE board = 'lever:gone'")
+    links = httpx.Response(200, text="[Apply](https://jobs.ashbyhq.com/acme/1) [Old](https://jobs.lever.co/gone/2)")
+    ashby = {"jobs": [ashby_job(jobUrl="https://jobs.ashbyhq.com/acme/9f8e-7d6c")]}
+    pages = crawl_pages(LEVER_URLS) | {OTHER_LIST: links, ASHBY_ACME: ashby}
+    refresh(conn, data_dir, pages, SourceSettings(phonebook_lists=[OTHER_LIST]))
+    assert one(conn, "SELECT found_by, result FROM phonebook WHERE board = 'ashby:acme'") == (
+        "list:someone/jobs", "added")  # fmt: skip
+    assert one(conn, "SELECT checked_on FROM phonebook WHERE board = 'lever:gone'") == gone_checked  # stays decided
+
+
+def test_a_board_with_no_jobs_is_added_only_once_it_lists_one(conn, data_dir):
+    empty = "https://api.lever.co/v0/postings/emptyco?mode=json"
+    pages = crawl_pages(("https://jobs.lever.co/emptyco",)) | {empty: []}
+    lines, _ = refresh(conn, data_dir, pages)
+    assert results(conn) == {"lever:emptyco": "empty"}
+    assert one(conn, "SELECT count(*) FROM sources") == (0,)  # not read by collections
+    assert "1 with no jobs yet (asked again next round)" in lines[-1]
+    with conn:
+        conn.execute("UPDATE phonebook_runs SET outcome = 'paused'")
+    _, web = refresh(conn, data_dir, pages)  # the same round continues: not asked again
+    assert empty not in [str(request.url) for request in web.requests]
+    with conn:  # that round finished, and the board was asked before the next round began
+        conn.execute("UPDATE phonebook_runs SET outcome = 'done'")
+        conn.execute("UPDATE phonebook SET checked_on = '2026-01-01T00:00:00+00:00'")
+    hired = [{"id": "e-1", "text": "ML Engineer", "hostedUrl": "https://jobs.lever.co/emptyco/e-1",
+              "categories": {"location": "Austin, TX"}}]  # fmt: skip
+    refresh(conn, data_dir, pages | {empty: hired})
+    assert results(conn)["lever:emptyco"] == "added"
+    assert one(conn, "SELECT count(*) FROM job_sources WHERE source = 'lever:emptyco'") == (1,)
+
+
+def test_the_cross_check_after_a_stop_compares_with_the_jobs_saved_from_the_first_board(conn, data_dir):
+    titles = ("ML Engineer", "ML Researcher", "ML Intern")
+    with conn:
+        conn.execute("INSERT INTO sources (name, found_by) VALUES ('lever:acme', 'commoncrawl')")
+        for title in titles:
+            add_job(conn, title, sources=["lever:acme"])
+        values = {"board": "greenhouse:acme", "found_by": "cross-check", "on": "2026-10-01", "cross_of": "lever:acme"}
+        conn.execute(phonebook.ADD_NAME, values)  # left unchecked by a refresh that was stopped
+    same = {"jobs": [greenhouse(title, number) for number, title in enumerate(titles)]}
+    refresh(conn, data_dir, crawl_pages() | {GREENHOUSE_ACME: same})
+    assert results(conn)["greenhouse:acme"] == "added"
 
 
 def test_the_cross_check_compares_job_titles(conn, data_dir):

@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -106,6 +107,27 @@ class Fetcher:
             self._next_start[host] = start + gap
         if (wait := start - time.monotonic()) > 0:
             time.sleep(wait)
+
+
+class Guarded:
+    """A Fetcher that calls `check` before every request; `check` raises to stop (the dashboard is closing, or a
+    collection is waiting for a phone-book refresh to pause)."""
+
+    def __init__(self, fetcher: "Fetcher | Guarded", check: Callable[[], None]) -> None:
+        self._fetcher, self._check = fetcher, check
+        self.per_second = fetcher.per_second
+
+    def reachable(self, host: str) -> bool:
+        self._check()
+        return self._fetcher.reachable(host)
+
+    def get_json(self, url: str, etag: str | None = None) -> tuple[Any, str | None] | None:
+        self._check()
+        return self._fetcher.get_json(url, etag)
+
+    def get_text(self, url: str) -> str:
+        self._check()
+        return self._fetcher.get_text(url)
 
 
 def _allowed_host(url: str) -> str:

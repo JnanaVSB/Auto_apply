@@ -152,6 +152,13 @@ def test_add_company_offers_every_board_on_every_site(client, pages):
     assert "ashby:acme-ai exists but lists no jobs right now, so it cannot be added." in text
 
 
+def test_a_greenhouse_job_without_a_company_name_is_not_shown_as_the_boards_name(client, pages):
+    pages[greenhouse.api_url("acme")] = {"jobs": [board_job(company_name=None)]}  # stored under the board's name
+    text = post(client, "/add/company", name="greenhouse:acme").text
+    assert "the board does not say its company name" in text
+    assert "the board says the company is" not in text
+
+
 def test_add_company_with_one_exact_board_tries_only_that(client, pages):
     pages[ashby.api_url("acme")] = {"jobs": []}
     text = post(client, "/add/company", name="ashby:acme").text

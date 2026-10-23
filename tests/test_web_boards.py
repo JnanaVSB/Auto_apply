@@ -125,6 +125,33 @@ def test_adding_a_waiting_board_reads_it_like_add_company(client, conn, web):
     assert "Waiting for you" not in text
 
 
+def test_a_waiting_board_that_is_read_by_now_waits_no_more(client, conn, waiting):
+    with conn:
+        conn.execute("INSERT INTO sources (name, found_by) VALUES ('greenhouse:initech', 'simplify')")
+    assert "Waiting for you" not in client.get("/boards").text
+    assert post(client, "/boards/decline", board="greenhouse:initech").status_code == 404  # never declined while read
+
+
+def test_a_greenhouse_board_without_a_company_name_says_so(client, conn):
+    with conn:
+        conn.execute(
+            "INSERT INTO phonebook (board, found_by, found_on, cross_of, checked_on, result) VALUES "
+            "('greenhouse:quiet', 'cross-check', '2026-10-23', 'lever:quiet', '2026-10-23', 'to confirm')"
+        )
+    text = client.get("/boards").text
+    assert "<strong>greenhouse:quiet</strong>:\n      the board does not say its company name" in text
+    assert "Greenhouse boards do not report" not in text
+
+
+def test_boards_with_no_jobs_yet_are_explained(client, conn):
+    with conn:
+        conn.execute("INSERT INTO phonebook (board, found_by, found_on, checked_on, result) VALUES "
+                     "('lever:quiet', 'commoncrawl', '2026-10-23', '2026-10-23', 'empty')")  # fmt: skip
+    text = client.get("/boards").text
+    assert "1 more boards found by the phone book exist but list no jobs yet" in text
+    assert "a shorter refresh interval" in text
+
+
 def test_the_boards_page_needs_a_login(client):
     client.post("/logout", data={"csrf_token": csrf(client)})
     assert client.get("/boards", follow_redirects=False).headers["location"] == "/login"

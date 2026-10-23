@@ -6,6 +6,7 @@ import json
 import sqlite3
 import sys
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import closing, suppress
@@ -24,8 +25,15 @@ from app.keychain import KeychainError
 from app.sources import Job, SourceError, is_simplify_site, posting_of, simplify
 from app.sources.boards import BOARDS
 
-LOCK_FILE = "collect-lock.db"
+LOCK_FILE = "collect-lock.db"  # held by a collection, or by a refresh except while it is paused
+REFRESH_LOCK = "phonebook-lock.db"  # held by a phone-book refresh from start to end, paused or not
+PAUSE_FILE = "collection-waiting"  # a collection waits for the refresh to pause: it stops at its next request
+PAUSE_WAIT_SECONDS = (
+    360  # longest wait for a refresh to pause (a request in its slowest retries); older flags are stale
+)
+PAUSE_POLL_SECONDS = 1
 BUSY = "A collection or a phone-book refresh is already running. Wait for it to finish."
+PAUSING = "Waiting for the phone-book refresh to pause (it stops at its next request, then continues afterwards)..."
 PROGRESS_EVERY = 50
 RETIRE_AFTER = 3  # runs in a row a board answers "not found" before it is no longer read
 STOPPED_HIRING_AFTER = 3  # runs in a row a board that listed jobs sends none before its company stopped hiring
@@ -117,6 +125,64 @@ def lock(data_dir: Path, file: str = LOCK_FILE, busy: str = BUSY) -> sqlite3.Con
             raise
         raise CollectError(busy) from None
     return held
+
+
+def collection_waiting(data_dir: Path) -> bool:
+    """True while a collection waits for a refresh to pause; a flag older than the longest wait is a leftover."""
+    try:
+        return time.time() - (data_dir / PAUSE_FILE).stat().st_mtime < PAUSE_WAIT_SECONDS
+    except FileNotFoundError:
+        return False
+
+
+def ask_refresh_to_pause(data_dir: Path) -> None:
+    (data_dir / PAUSE_FILE).touch()
+
+
+def lock_for_collection(data_dir: Path, waiting: Callable[[], None] = lambda: None) -> sqlite3.Connection:
+    """The shared lock for a collection, which always goes first: a phone-book refresh holding it is asked to pause
+    (`waiting` is told), and the lock is taken as soon as it does. Another collection holding it means BUSY."""
+    try:
+        return _taken(data_dir)
+    except CollectError:
+        if not data_dir.is_dir() or not _refresh_running(data_dir):
+            raise  # no data folder, or another collection is running
+    ask_refresh_to_pause(data_dir)
+    waiting()
+    deadline = time.monotonic() + PAUSE_WAIT_SECONDS
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(PAUSE_POLL_SECONDS)
+            with suppress(CollectError):
+                return _taken(data_dir)
+    finally:
+        (data_dir / PAUSE_FILE).unlink(missing_ok=True)
+    raise CollectError("The phone-book refresh did not pause in time. Try again in a few minutes.")
+
+
+def _refresh_running(data_dir: Path) -> bool:
+    try:
+        lock(data_dir, REFRESH_LOCK).close()
+    except CollectError:
+        return True
+    return False
+
+
+def _taken(data_dir: Path) -> sqlite3.Connection:
+    held = lock(data_dir)
+    (data_dir / PAUSE_FILE).unlink(missing_ok=True)  # this collection's own request to pause, now answered
+    return held
+
+
+def wait_for_collection(data_dir: Path, check: Callable[[], None] = lambda: None) -> sqlite3.Connection:
+    """For a paused refresh: wait until the collection it paused for has run, then take the shared lock back.
+    `check` is called while waiting and raises to stop."""
+    while True:
+        check()
+        time.sleep(PAUSE_POLL_SECONDS)
+        if not collection_waiting(data_dir):
+            with suppress(CollectError):
+                return lock(data_dir)
 
 
 @dataclass
@@ -447,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command is None:
             check_settings(config)
         with (
-            closing(lock(config.data_dir)),  # first, so two copies can never both upgrade the database
+            closing(lock_for_collection(config.data_dir, lambda: print(PAUSING))),  # first: one upgrade at a time
             closing(db.connect(config.data_dir)) as conn,
             closing(Fetcher(per_second=config.requests_per_second)) as fetcher,
         ):

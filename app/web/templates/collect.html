@@ -12,7 +12,8 @@
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <button type="submit"{% if collector.running %} disabled{% endif %}>Refresh phone book</button>
   <span class="muted">Finds more company boards, the same as <code>python -m app.phonebook refresh</code>. Slow on
-    purpose (often an hour or more); safe to stop, and the next one continues. See them on the <a href="/boards">Boards</a> page.</span>
+    purpose (often an hour or more), but collections never wait for it: it pauses for them and continues afterwards.
+    See the boards on the <a href="/boards">Boards</a> page.</span>
 </form>
 {% if refused %}<p class="error" role="alert">{{ refused }}</p>{% endif %}
 
@@ -32,8 +33,9 @@
 {% if settings_error %}
 <p class="error">{{ settings_error }}</p>
 {% elif refresh_every %}
-<p>Every {{ refresh_every }} day{{ "s" if refresh_every != 1 }} while the dashboard is open; one that did not finish is
-  tried again the next day. Change it on the <a href="/settings">Settings</a> page.</p>
+<p>A new round every {{ refresh_every }} day{{ "s" if refresh_every != 1 }} (counted from when the last round
+  began) while the dashboard is open. A round that was paused or stopped continues at the next chance; one that a
+  failing site left unfinished is continued the next day. Change it on the <a href="/settings">Settings</a> page.</p>
 {% else %}
 <p>Off. Turn it on on the <a href="/settings">Settings</a> page.</p>
 {% endif %}

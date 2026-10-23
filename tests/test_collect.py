@@ -1,6 +1,7 @@
 """The collect and add commands, end to end, with a fake web and a throwaway encrypted database."""
 
 import json
+import os
 import threading
 import time
 from contextlib import closing
@@ -441,6 +442,57 @@ def test_the_command_uses_your_requests_per_second(main, data_dir, monkeypatch):
     monkeypatch.setattr(collect, "collect", lambda conn, config, fetcher: used.append(fetcher.per_second))
     assert main([], settings(data_dir).model_copy(update={"requests_per_second": 3}))[0] == 0
     assert used == [3]
+
+
+@pytest.fixture
+def quick_pause(monkeypatch):
+    monkeypatch.setattr(collect, "PAUSE_POLL_SECONDS", 0.01)
+
+
+@pytest.mark.usefixtures("quick_pause")
+def test_a_collection_asks_a_running_refresh_to_pause_and_takes_the_lock_when_it_does(data_dir):
+    flag = data_dir / collect.PAUSE_FILE
+
+    def refresh():  # holds both locks, and lets the shared one go once asked to pause
+        with closing(collect.lock(data_dir, collect.REFRESH_LOCK)):
+            shared = collect.lock(data_dir)
+            ready.set()
+            while not collect.collection_waiting(data_dir):
+                time.sleep(0.01)
+            shared.close()
+            done.wait(5)
+
+    ready, done, said = threading.Event(), threading.Event(), []
+    running = threading.Thread(target=refresh, daemon=True)
+    running.start()
+    ready.wait(5)
+    with closing(collect.lock_for_collection(data_dir, lambda: said.append("waiting"))):
+        assert said == ["waiting"] and not flag.exists()  # the request to pause is answered and removed
+    done.set()
+    running.join(5)
+
+
+def test_another_collection_running_is_refused_at_once(data_dir):
+    with closing(collect.lock(data_dir)):
+        with pytest.raises(collect.CollectError, match="already running"):
+            collect.lock_for_collection(data_dir, lambda: pytest.fail("no refresh runs: nothing to wait for"))
+
+
+@pytest.mark.usefixtures("quick_pause")
+def test_a_refresh_that_never_pauses_gives_a_clear_message(data_dir, monkeypatch):
+    monkeypatch.setattr(collect, "PAUSE_WAIT_SECONDS", 0.05)
+    with closing(collect.lock(data_dir, collect.REFRESH_LOCK)), closing(collect.lock(data_dir)):
+        with pytest.raises(collect.CollectError, match="did not pause in time"):
+            collect.lock_for_collection(data_dir)
+    assert not (data_dir / collect.PAUSE_FILE).exists()
+
+
+def test_a_request_to_pause_left_over_from_a_crash_is_ignored(data_dir):
+    collect.ask_refresh_to_pause(data_dir)
+    assert collect.collection_waiting(data_dir)
+    old = time.time() - collect.PAUSE_WAIT_SECONDS - 1
+    os.utime(data_dir / collect.PAUSE_FILE, (old, old))
+    assert not collect.collection_waiting(data_dir)
 
 
 def test_all_sites_are_read_at_the_same_time(conn, data_dir):

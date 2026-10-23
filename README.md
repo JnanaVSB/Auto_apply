@@ -101,14 +101,18 @@ Greenhouse, Lever and Ashby publish no list of the companies that use them, so t
 A refresh takes company board names from every job-board link in Simplify's lists (closed jobs too), from the other
 public GitHub job lists in your `phonebook_lists` setting (add only lists whose licence allows it), and from
 [Common Crawl](https://commoncrawl.org)'s public index of the web. Each new name is checked once with its site's own
-public API: a board that exists is read on every collection from then on (after the boards that already had jobs for
-you), and its matching jobs are saved at once; one that does not exist is remembered and never asked again. Each new
+public API: a board that lists jobs is read on every collection from then on (after the boards that already had jobs
+for you), and its matching jobs are saved at once; one that does not exist is remembered and never asked again. A
+board that exists but lists no jobs (often an old account a company no longer uses) is not read by collections: each
+refresh round asks it again and adds it as soon as it lists a job, the same rule as Add company. The trade-off: a job
+posted on such a board is found at the next round, so a shorter refresh interval means less delay. Each new
 name is also tried once on the other sites; a board found that way is added only if it shares at least 3 job titles
 with the first one, otherwise it waits for you on the dashboard's Boards page.
 
 It is slow on purpose (Common Crawl asks for pauses between requests and is often overloaded): often an hour or more.
-It is safe to stop with Ctrl+C; the next refresh continues where it stopped. It does not run while a collection runs,
-and the other way round. Nothing is ever deleted.
+Collections never wait for it: when a collection starts (from the dashboard or a terminal), a running refresh pauses
+at its next request and continues where it stopped once the collection has finished. It is safe to stop with Ctrl+C;
+the next refresh continues where it stopped. Nothing is ever deleted.
 
 ## Dashboard
 ```bash
@@ -131,8 +135,10 @@ password). Press Ctrl+C in the terminal to stop it.
   board or read it again, and add or decline the boards the phone book could not confirm on its own.
 - **Collect:** "Collect now" runs the same collection as `python -m app.collect`, and "Refresh phone book" the same
   refresh as `python -m app.phonebook refresh`, with live progress. Only one of them runs at a time, including one
-  started from a terminal. While the dashboard is open, it can collect every few hours and refresh the phone book every
-  few days (monthly unless you change it; see Settings).
+  started from a terminal, except that a collection always goes first: a refresh pauses for it and continues
+  afterwards. While the dashboard is open, it can collect every few hours and start a new phone-book round every few
+  days (monthly unless you change it; see Settings), counted from when the last round began. A round that was paused
+  or stopped continues at the next chance; one that a failing site left unfinished continues the next day.
 - **Settings:** roles, Simplify lists, extra boards, phone-book lists, the automatic collection and phone-book refresh,
   and requests per second to each job site. Saving checks them with the same rules as the file and rewrites
   `data/config.yaml` (comments in that file are not kept).

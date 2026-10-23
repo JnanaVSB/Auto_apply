@@ -230,7 +230,7 @@ UPGRADES = (
         found_on TEXT NOT NULL,
         cross_of TEXT,  -- for a cross-check: the board whose name was tried on this site
         checked_on TEXT,  -- NULL until its site's API was asked
-        result TEXT CHECK (result IN ('added', 'not found', 'to confirm', 'declined')),
+        result TEXT CHECK (result IN ('added', 'empty', 'not found', 'to confirm', 'declined')),
         company TEXT  -- the name the board reports, when it reports one
     );
     CREATE TABLE phonebook_done (
@@ -241,8 +241,9 @@ UPGRADES = (
         id INTEGER PRIMARY KEY,
         started_at TEXT NOT NULL,
         finished_at TEXT,
-        outcome TEXT,  -- done, cancelled or stopped
-        summary TEXT NOT NULL DEFAULT ''
+        outcome TEXT,  -- done, partial (a source failed), paused (for a collection), cancelled or stopped
+        summary TEXT NOT NULL DEFAULT '',
+        continues INTEGER NOT NULL DEFAULT 0  -- 1 when it continued an unfinished round instead of starting one
     );
     """,
 )

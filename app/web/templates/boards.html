@@ -6,6 +6,16 @@
   collection: {{ "{:,}".format(counts.active) }} active, then {{ "{:,}".format(counts.discovered) }} discovered
   (found by the phone book, no matching job yet). {{ "{:,}".format(counts.stopped) }} stopped by you,
   {{ "{:,}".format(counts.retired) }} retired (not found 3 collections in a row). Nothing here is ever deleted.</p>
+{% if empty %}
+<p class="hint">{{ "{:,}".format(empty) }} more boards found by the phone book exist but list no jobs yet. Collections
+  do not read them; each phone-book refresh round asks them again and adds a board as soon as it lists a job. So a job
+  posted there is found at the next round: a shorter refresh interval on <a href="/settings">Settings</a> means less
+  delay.</p>
+{% endif %}
+{% if collector.running and (collector.task == "refresh" or collector.refresh_paused) %}
+<p class="hint" role="status">{% if collector.refresh_paused %}A phone-book refresh is paused for a collection and continues afterwards.{% else %}A phone-book refresh is running; this list grows as it goes.{% endif %}
+  <a href="/collect">See its progress</a></p>
+{% endif %}
 {% if line %}<p class="result" role="status">{{ line }}</p>{% endif %}
 
 {% if waiting %}
@@ -16,7 +26,7 @@
   {% for board in waiting %}
   <div class="found">
     <p><strong>{{ board.name }}</strong>:
-      {% if board.company %}the board says the company is <strong>{{ board.company }}</strong>{% else %}{{ board.name.partition(":")[0].title() }} boards do not report a company name{% endif %};
+      {% if board.company %}the board says the company is <strong>{{ board.company }}</strong>{% elif board.name.startswith("greenhouse:") %}the board does not say its company name{% else %}{{ board.name.partition(":")[0].title() }} boards do not report a company name{% endif %};
       same name as <strong>{{ board.cross_of }}</strong>.
       {% if board.page %}<a href="{{ board.page }}" target="_blank" rel="noopener noreferrer">See the board's own page</a> <span class="muted">(new tab)</span>{% endif %}</p>
     <form method="post" action="/boards/confirm" class="inline">

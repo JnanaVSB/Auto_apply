@@ -341,10 +341,16 @@ def board_counts(conn: sqlcipher3.Connection) -> dict[str, int]:
     return {show: count or 0 for show, count in zip(BOARD_SHOWS, row, strict=True)}
 
 
+def empty_boards(conn: sqlcipher3.Connection) -> int:
+    """Boards the phone book found that exist but list no jobs yet; each refresh round asks them again."""
+    return conn.execute("SELECT count(*) FROM phonebook WHERE result = 'empty'").fetchone()[0]
+
+
 def waiting_boards(conn: sqlcipher3.Connection) -> list[dict]:
     """Boards the cross-check found that wait for you to add or decline them."""
-    rows = conn.execute(
-        "SELECT board, company, cross_of FROM phonebook WHERE result = 'to confirm' ORDER BY board"
+    rows = conn.execute(  # a board that reached the boards list another way (e.g. through Simplify) waits no more
+        "SELECT board, company, cross_of FROM phonebook WHERE result = 'to confirm' "
+        "AND NOT EXISTS (SELECT 1 FROM sources WHERE name = board) ORDER BY board"
     ).fetchall()
     found = []
     for board, company, cross_of in rows:

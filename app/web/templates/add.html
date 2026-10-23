@@ -34,7 +34,7 @@
   {% for found in found or [] %}
   <div class="found">
     <p><strong>{{ found.board }}</strong>:
-      {% if found.company %}the board says the company is <strong>{{ found.company }}</strong>{% else %}{{ found.board.partition(":")[0].title() }} boards do not report a company name{% endif %}.
+      {% if found.company %}the board says the company is <strong>{{ found.company }}</strong>{% elif found.board.startswith("greenhouse:") %}the board does not say its company name{% else %}{{ found.board.partition(":")[0].title() }} boards do not report a company name{% endif %}.
       {{ "{:,}".format(found.listed) }} jobs listed, {{ "{:,}".format(found.matching) }} match your roles.
       <a href="{{ found.page }}" target="_blank" rel="noopener noreferrer">See the board's own page</a> <span class="muted">(new tab)</span></p>
     <p class="muted">First jobs: {{ found.titles | join("; ") }}</p>

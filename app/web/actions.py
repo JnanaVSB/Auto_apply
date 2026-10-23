@@ -20,7 +20,7 @@ from app import config as settings_file
 from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
-from app.sources import BOARD_NAME, SourceError
+from app.sources import BOARD_NAME, SourceError, greenhouse
 from app.sources.boards import BOARDS
 from app.web import queries
 
@@ -143,7 +143,7 @@ def _find_boards(
         boards.append(
             FoundBoard(
                 board,
-                found[0].company if kind == "greenhouse" else None,
+                greenhouse.reported_company(found, name) if kind == "greenhouse" else None,
                 len(found),
                 sum(jobs.wanted(job, roles) for job in found),
                 [job.title for job in found[:3]],
@@ -201,7 +201,9 @@ def decline_board(conn: sqlcipher3.Connection, board: str) -> bool:
     """A board the cross-check found is not the company you want: it is never offered again. Deletes nothing."""
     with conn:
         rows = conn.execute(
-            "UPDATE phonebook SET result = 'declined' WHERE board = ? AND result = 'to confirm'", (board,)
+            "UPDATE phonebook SET result = 'declined' WHERE board = ? AND result = 'to confirm' "
+            "AND NOT EXISTS (SELECT 1 FROM sources WHERE name = ?)",  # never one that is already read
+            (board, board),
         )
     return rows.rowcount == 1
 

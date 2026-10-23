@@ -133,6 +133,12 @@ def test_a_board_with_only_unreadable_entries_fails_instead_of_looking_empty(mod
         module.parse(data, "acme")
 
 
+def test_the_company_greenhouse_reports_is_never_the_boards_own_name():
+    jobs, _ = greenhouse.parse({"jobs": [greenhouse_job(company_name=None), greenhouse_job(id=2)]}, "acme")
+    assert greenhouse.reported_company(jobs, "acme") == "Acme"  # the second job names it
+    assert greenhouse.reported_company(jobs[:1], "acme") is None
+
+
 @pytest.mark.parametrize("kind", BOARDS)
 def test_every_board_kind_is_connected(kind):
     """Its standard job link is recognised as that kind, its page is that link's board, and its API may be read."""

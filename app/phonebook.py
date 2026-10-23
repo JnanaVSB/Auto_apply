@@ -15,6 +15,7 @@ import sqlite3
 import sys
 from collections import Counter
 from contextlib import closing, suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,9 +24,9 @@ import sqlcipher3
 from app import collect, db, jobs
 from app.collect import CollectError, Download, Output, now
 from app.config import Config, ConfigError, load_config
-from app.fetch import COMMON_CRAWL, Fetcher, FetchError, NotFound
+from app.fetch import COMMON_CRAWL, Fetcher, FetchError, Guarded, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import BOARD_HOSTS, Job, SourceError, board_of, simplify
+from app.sources import BOARD_HOSTS, SourceError, board_of, greenhouse, simplify
 from app.sources.boards import BOARDS
 
 CRAWLS = f"https://{COMMON_CRAWL}/collinfo.json"
@@ -33,11 +34,63 @@ CRAWL_ID = re.compile(r"CC-MAIN-[0-9]{4}-[0-9]{2}")
 CRAWLS_TO_READ = 3  # the newest monthly crawls; each is read once, so a monthly refresh reads one new crawl
 SAME_TITLES = 3  # job titles two boards must share for the cross-check to call them one company
 PROGRESS_EVERY = 100
-# A name is added once, and never when it is already a board the app reads.
+RETRY_AFTER = timedelta(days=1)  # a round a failing source left unfinished is continued at most once a day
+PAUSED = "Paused so a collection can run; the refresh continues where it stopped once the collection has finished."
+# A name is added once, and never when it is already a board the app reads. A real sighting (not the cross-check) of a
+# name that only the cross-check found "not found" makes it a new name again, asked once more.
 ADD_NAME = """INSERT INTO phonebook (board, found_by, found_on, cross_of) SELECT :board, :found_by, :on, :cross_of
-    WHERE NOT EXISTS (SELECT 1 FROM sources WHERE name = :board) ON CONFLICT (board) DO NOTHING"""
+    WHERE NOT EXISTS (SELECT 1 FROM sources WHERE name = :board)
+    ON CONFLICT (board) DO UPDATE SET found_by = excluded.found_by, found_on = excluded.found_on, cross_of = NULL,
+        checked_on = NULL, result = NULL
+    WHERE phonebook.found_by = 'cross-check' AND phonebook.result = 'not found'
+        AND excluded.found_by != 'cross-check'"""
+# Names to ask: never asked yet, or empty when last asked before this round began (round_start).
+TO_CHECK = """SELECT board, found_by, cross_of FROM phonebook
+    WHERE checked_on IS NULL OR (result = 'empty' AND checked_on < ?) ORDER BY board"""
 DONE = "INSERT INTO phonebook_done (part, done_on) VALUES (?, ?) ON CONFLICT (part) DO NOTHING"
 LINK = re.compile(r"https?://[^\s\"'<>()\[\]|\\]+")  # any web address in a list file, JSON or Markdown
+
+
+class Paused(Exception):
+    """A collection is waiting for the shared lock: the refresh stops before its next request."""
+
+
+def _pause_if_asked(config: Config) -> None:
+    if collect.collection_waiting(config.data_dir):
+        raise Paused
+
+
+def _round(conn: sqlcipher3.Connection) -> tuple[str | None, str | None, str | None]:
+    """When the current round began, and the last refresh's start and outcome (all None before the first one).
+
+    A round is one or more refreshes: it starts fresh, and every refresh that continues it after a pause, a stop or a
+    failing source belongs to it, until one ends as "done".
+    """
+    row = conn.execute(
+        "SELECT (SELECT max(started_at) FROM phonebook_runs WHERE continues = 0), started_at, outcome "
+        "FROM phonebook_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return row or (None, None, None)
+
+
+def continues_round(conn: sqlcipher3.Connection, every_days: int, now: datetime) -> bool:
+    """A refresh continues the current round when the last one left it unfinished, unless the round began
+    `every_days` ago or more (0 = never too old): then a new round starts."""
+    round_start, _, outcome = _round(conn)
+    if round_start is None or outcome == "done":
+        return False
+    return not every_days or now - datetime.fromisoformat(round_start) < timedelta(days=every_days)
+
+
+def due(conn: sqlcipher3.Connection, every_days: int, now: datetime) -> bool:
+    """The schedule: a new round when the current one began `every_days` ago or more (or there was none); an
+    unfinished round continues at the next chance, or after a day when a source failed."""
+    round_start, last_start, outcome = _round(conn)
+    if round_start is None or now - datetime.fromisoformat(round_start) >= timedelta(days=every_days):
+        return True
+    if outcome == "done":
+        return False
+    return outcome != "partial" or now - datetime.fromisoformat(last_start) >= RETRY_AFTER
 
 
 def _add_names(conn: sqlcipher3.Connection, names: set[str], found_by: str) -> int:
@@ -60,46 +113,73 @@ def _newest_crawls(data: Any) -> list[str]:
     return sorted(names, reverse=True)[:CRAWLS_TO_READ]
 
 
-def _names(text: str) -> tuple[set[str], int]:
-    """Board names from one index page (one JSON line per web address), and how many lines could not be read."""
-    names, damaged = set(), 0
+def _names(text: str) -> tuple[set[str], int, int]:
+    """Board names from one index page (one JSON line per web address), how many lines were read, and how many could
+    not be."""
+    names, read, damaged = set(), 0, 0
     for line in filter(str.strip, text.splitlines()):
         try:
             board = board_of(json.loads(line)["url"])
         except (ValueError, KeyError, TypeError, AttributeError):
             damaged += 1
             continue
+        read += 1
         if board:
             names.add(board)
-    return names, damaged
+    return names, read, damaged
 
 
-def read_common_crawl(conn: sqlcipher3.Connection, fetcher: Fetcher, out: Output) -> tuple[int, int]:
+def read_common_crawl(conn: sqlcipher3.Connection, fetcher: Fetcher, out: Output) -> tuple[int, int, list[str]]:
     """Take board names from the newest crawls' index, one page at a time, each page saved as it is read.
 
-    Returns how many new names were found and how many index lines were damaged.
+    A site whose part fails is skipped until the next refresh; an index that stops answering ends the reading (its
+    retries already took minutes). Returns new names, damaged index lines, and a line per part that failed.
     """
     new = damaged = 0
+    failed = []
     for crawl in _newest_crawls(fetcher.get_json(CRAWLS)[0]):
         for host in BOARD_HOSTS:
             part = f"commoncrawl:{crawl}:{host}"
             if _done(conn, part):
                 continue
-            query = f"https://{COMMON_CRAWL}/{crawl}-index?url={host}/*&output=json&fl=url"
-            pages = fetcher.get_json(f"{query}&showNumPages=true")[0]
-            if not isinstance(pages, dict) or not isinstance(pages.get("pages"), int):
-                raise SourceError("its page count looks different from usual")
-            for page in range(pages["pages"]):
-                if _done(conn, f"{part}:{page}"):
-                    continue
-                names, bad = _names(fetcher.get_text(f"{query}&page={page}"))
-                with conn:  # the page's names and "page done" are saved together
-                    new += _add_names(conn, names, "commoncrawl")
-                    conn.execute(DONE, (f"{part}:{page}", now()))
-                damaged += bad
+            try:
+                found, bad = _read_part(conn, fetcher, crawl, host, part)
+            except Unreachable:
+                raise
+            except (FetchError, SourceError) as error:
+                failed.append(f"Common Crawl {crawl}, {host} could not be read ({error}); tried again next time.")
+                continue
             with conn:
                 conn.execute(DONE, (part, now()))
+            new, damaged = new + found, damaged + bad
             out(f"Common Crawl {crawl}, {host}: read ({new:,} new names so far)")
+    return new, damaged, failed
+
+
+def _read_part(conn: sqlcipher3.Connection, fetcher: Fetcher, crawl: str, host: str, part: str) -> tuple[int, int]:
+    """One site's pages in one crawl; "not found" means the index has nothing there. New names and damaged lines."""
+    query = f"https://{COMMON_CRAWL}/{crawl}-index?url={host}/*&output=json&fl=url"
+    try:
+        pages = fetcher.get_json(f"{query}&showNumPages=true")[0]
+    except NotFound:
+        return 0, 0
+    if not isinstance(pages, dict) or not isinstance(pages.get("pages"), int):
+        raise SourceError("its page count looks different from usual")
+    new = damaged = 0
+    for page in range(pages["pages"]):
+        if _done(conn, f"{part}:{page}"):
+            continue
+        try:
+            text = fetcher.get_text(f"{query}&page={page}")
+        except NotFound:
+            text = ""
+        names, read, bad = _names(text)
+        if bad and not read:  # not index lines at all, e.g. an error page: asked again next time
+            raise SourceError(f"page {page + 1} is not index lines (perhaps an error page)")
+        with conn:  # the page's names and "page done" are saved together
+            new += _add_names(conn, names, "commoncrawl")
+            conn.execute(DONE, (f"{part}:{page}", now()))
+        damaged += bad
     return new, damaged
 
 
@@ -125,8 +205,18 @@ def read_lists(conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, ou
     return failed
 
 
-def _titles(found: list[Job]) -> set[str]:
-    return {" ".join(job.title.casefold().split()) for job in found}
+def _titles(titles: list[str]) -> set[str]:
+    return {" ".join(title.casefold().split()) for title in titles}
+
+
+def _titles_of(conn: sqlcipher3.Connection, board: str, titles: dict[str, set[str]]) -> set[str]:
+    """A board's job titles: from this refresh, or else the titles of the jobs saved from it (e.g. after a stop)."""
+    if board not in titles:
+        rows = conn.execute(
+            "SELECT j.title FROM jobs j JOIN job_sources s ON s.job_id = j.id WHERE s.source = ?", (board,)
+        )
+        titles[board] = _titles([title for (title,) in rows])
+    return titles[board]
 
 
 def _check(
@@ -145,11 +235,14 @@ def _check(
         return "could not be checked"  # stays unchecked, so the next refresh asks again
     elif isinstance(download, BaseException):
         raise download  # Ctrl+C, or a fault in the app
+    elif not download[0]:  # it exists but lists no jobs: added only once it does (as with Add company)
+        result, found, company = "empty", [], None
     else:
         found = download[0]
-        company = found[0].company if found and board.startswith("greenhouse:") else None  # only Greenhouse says
-        titles[board] = _titles(found)
-        same = found_by != "cross-check" or len(titles.get(cross_of, set()) & titles[board]) >= SAME_TITLES
+        kind, _, short = board.partition(":")
+        company = greenhouse.reported_company(found, short) if kind == "greenhouse" else None  # only Greenhouse says
+        titles[board] = _titles([job.title for job in found])
+        same = found_by != "cross-check" or len(_titles_of(conn, cross_of, titles) & titles[board]) >= SAME_TITLES
         result = "added" if same else "to confirm"
     checked = now()
     with conn:
@@ -174,8 +267,9 @@ def check_names(conn: sqlcipher3.Connection, fetcher: Fetcher, roles: jobs.Roles
     Then once more for the names the cross-check added meanwhile; a name is asked at most once per refresh.
     """
     results, titles, asked = Counter(), {}, set()  # titles: each board's job titles, for the cross-check
+    round_start = _round(conn)[0]
     for _ in range(2):
-        rows = conn.execute("SELECT board, found_by, cross_of FROM phonebook WHERE checked_on IS NULL ORDER BY board")
+        rows = conn.execute(TO_CHECK, (round_start,))
         names = {board: (found_by, cross_of) for board, found_by, cross_of in rows if board not in asked}
         asked |= names.keys()
         if not names:
@@ -189,12 +283,19 @@ def check_names(conn: sqlcipher3.Connection, fetcher: Fetcher, roles: jobs.Roles
     return results
 
 
-def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
-    """Find new board names, check them, and record the refresh; what is done is kept if it stops midway."""
+def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guarded, out: Output = print) -> str:
+    """Find new board names, check them, and record the refresh; what is done is kept if it stops midway.
+
+    Returns the outcome: done, partial (a source failed), or paused (a collection is waiting; the next refresh
+    continues the same round).
+    """
     if not any(fetcher.reachable(site) for site in sorted({collect.site_of(f"{kind}:x") for kind in BOARDS})):
         raise CollectError("No internet connection: none of the job sites could be reached. Check it and try again.")
+    fetcher = Guarded(fetcher, lambda: _pause_if_asked(config))
     with conn:
-        run_id = conn.execute("INSERT INTO phonebook_runs (started_at) VALUES (?)", (now(),)).lastrowid
+        continues = continues_round(conn, config.phonebook_every_days, datetime.now(UTC))
+        sql = "INSERT INTO phonebook_runs (started_at, continues) VALUES (?, ?)"
+        run_id = conn.execute(sql, (now(), continues)).lastrowid
     lines: list[str] = []
     outcome = "stopped"
 
@@ -208,7 +309,10 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
             say(line)
         complete = not failed
         try:
-            new, damaged = read_common_crawl(conn, fetcher, say)
+            new, damaged, failed = read_common_crawl(conn, fetcher, say)
+            for line in failed:
+                say(line)
+            complete = complete and not failed
             say(f"Common Crawl: {new:,} new names" + (f" ({damaged:,} damaged index lines skipped)" if damaged else ""))
         except (FetchError, SourceError) as error:
             complete = False
@@ -216,10 +320,14 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
         results = check_names(conn, fetcher, jobs.Roles.from_settings(config.roles), say)
         say(
             f"Checked {results.total():,} names: {results['added']:,} added (read on every collection from now on), "
-            f"{results['not found']:,} not found, {results['to confirm']:,} to confirm on the Boards page, "
+            f"{results['empty']:,} with no jobs yet (asked again next round), {results['not found']:,} not found, "
+            f"{results['to confirm']:,} to confirm on the Boards page, "
             f"{results['could not be checked']:,} could not be checked (asked again next time)."
         )
         outcome = "done" if complete else "partial"
+    except Paused:
+        outcome = "paused"
+        say(PAUSED)
     except KeyboardInterrupt:
         outcome = "cancelled"
         raise
@@ -229,6 +337,7 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
                 "UPDATE phonebook_runs SET finished_at = ?, outcome = ?, summary = ? WHERE id = ?",
                 (now(), outcome, "\n".join(lines), run_id),
             )
+    return outcome
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -239,11 +348,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config()
         with (
-            closing(collect.lock(config.data_dir)),  # one collection or refresh at a time
-            closing(db.connect(config.data_dir)) as conn,
+            closing(collect.lock(config.data_dir, collect.REFRESH_LOCK)),  # one refresh at a time, paused or not
             closing(Fetcher(per_second=config.requests_per_second)) as fetcher,
         ):
-            refresh(conn, config, fetcher)
+            shared = collect.lock(config.data_dir)  # no collection runs meanwhile, except while paused
+            while True:
+                with closing(shared), closing(db.connect(config.data_dir)) as conn:
+                    if refresh(conn, config, fetcher) != "paused":
+                        break
+                shared = collect.wait_for_collection(config.data_dir)
     except (
         ConfigError,
         KeychainError,

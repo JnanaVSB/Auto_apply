@@ -52,10 +52,11 @@ def create_app(
             finally:  # the dashboard is closing: so are the schedule and any collection
                 schedule.cancel()
                 await asyncio.to_thread(app.state.collector.stop)
+                app.state.collector.fetcher.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
-    app.state.collector = Collector(data_dir, new_fetcher)
+    app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
@@ -147,24 +148,23 @@ def create_app(
     @app.post("/add/job")
     async def add_job(request: Request) -> Response:
         form = request.state.form
-        with closing(new_fetcher()) as fetcher:  # beside the dashboard: sites can take a while to answer
-            message, job_id = await run_in_threadpool(
-                actions.add_job, data_dir, fetcher, form.get("link", ""), form.get("company", ""),
-                form.get("title", ""),
-            )  # fmt: skip
+        message, job_id = await run_in_threadpool(  # beside the dashboard: sites can take a while to answer
+            actions.add_job, data_dir, request.app.state.collector.fetcher, form.get("link", ""),
+            form.get("company", ""), form.get("title", ""),
+        )  # fmt: skip
         return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
 
     @app.post("/add/company")
     async def find_company(request: Request) -> Response:
         form = request.state.form
-        with closing(new_fetcher()) as fetcher:  # finds only; nothing is saved until "Add" is pressed
-            boards, notes = await run_in_threadpool(actions.find_company, data_dir, fetcher, form.get("name", ""))
+        fetcher = request.app.state.collector.fetcher  # finds only; nothing is saved until "Add" is pressed
+        boards, notes = await run_in_threadpool(actions.find_company, data_dir, fetcher, form.get("name", ""))
         return _page(request, "add.html", form=form, found=boards, company_lines=notes)
 
     @app.post("/add/board")
     async def add_board(request: Request) -> Response:
-        with closing(new_fetcher()) as fetcher:
-            line = await run_in_threadpool(actions.add_board, data_dir, fetcher, request.state.form.get("board", ""))
+        fetcher, board = request.app.state.collector.fetcher, request.state.form.get("board", "")
+        line = await run_in_threadpool(actions.add_board, data_dir, fetcher, board)
         return _page(request, "add.html", form={}, company_lines=[line])
 
     @app.post("/boards/stop")
@@ -183,8 +183,8 @@ def create_app(
 
     @app.post("/boards/confirm")
     async def confirm_board(request: Request) -> Response:
-        with closing(new_fetcher()) as fetcher:  # the same as Add: its jobs are read and saved now
-            line = await run_in_threadpool(actions.add_board, data_dir, fetcher, request.state.form.get("board", ""))
+        fetcher, board = request.app.state.collector.fetcher, request.state.form.get("board", "")
+        line = await run_in_threadpool(actions.add_board, data_dir, fetcher, board)  # the same as Add
         return _boards_page(request, line=line)
 
     @app.post("/boards/decline")
@@ -255,7 +255,9 @@ def _boards_page(request: Request, line: str | None = None) -> HTMLResponse:
     boards, total, number, pages = queries.list_boards(conn, view)
     return _page(
         request, "boards.html", view=view, boards=boards, total=total, number=number, pages=pages,
-        counts=queries.board_counts(conn), waiting=queries.waiting_boards(conn), line=line,
+        counts=queries.board_counts(conn), waiting=queries.waiting_boards(conn), empty=queries.empty_boards(conn),
+        line=line,
+        collector=request.app.state.collector,
     )  # fmt: skip
 
 
