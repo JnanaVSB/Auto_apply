@@ -33,3 +33,14 @@ collect_every_hours: 0
 phonebook_every_days: 30
 # New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
 requests_per_second: 1
+
+# Job scoring. The quick check passes a job with one of your keywords in its title, or with both its meaning match
+# and its skill overlap at or above these thresholds (0 to 1); your answer key helps choose them.
+scoring:
+  meaning_threshold: 0.5  # almost any job ad scores 0.45 or more; the local AI does the fine filtering
+  skills_threshold: 0.15  # the share of the job's listed skills that your resume has
+  # Tools of your field that the O*NET skills list lacks, written as job ads write them. List them whether or not
+  # you know them: the app checks your resume for the ones you have.
+  extra_skills: ["MuJoCo", "CARLA", "SLURM", "ROS", "ROS 2", "Gazebo", "Isaac Sim", "Isaac Lab", "PyBullet",
+                 "Gymnasium", "Stable-Baselines3", "RLlib", "JAX", "CUDA", "scikit-learn", "OpenCV", "MATLAB",
+                 "Hugging Face", "Weights & Biases", "MLflow"]

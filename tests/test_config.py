@@ -132,3 +132,9 @@ def test_the_phone_book_schedule_and_requests_per_second_have_limits(tmp_path, s
 def test_without_them_the_phone_book_is_monthly_at_one_request_per_second(tmp_path):
     config = load_config(write(tmp_path, "data_dir: data\n"))
     assert (config.phonebook_every_days, config.requests_per_second) == (30, 1)
+
+
+def test_scoring_settings_have_defaults_and_limits(tmp_path):
+    assert load_config(write(tmp_path, "data_dir: data\n")).scoring.meaning_threshold == 0.5
+    with pytest.raises(ConfigError, match="scoring.skills_threshold: Input should be less than or equal to 1"):
+        load_config(write(tmp_path, "data_dir: data\nscoring:\n  skills_threshold: 1.5\n"))

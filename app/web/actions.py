@@ -238,14 +238,16 @@ def settings_form() -> dict[str, str]:
 def save_settings(form: dict[str, str]) -> str | None:
     """Check the form's settings with the usual rules, then swap them in all at once; returns the problem, or None.
 
-    The data folder is kept exactly as written in the file; it is changed by hand only.
+    The data folder is kept exactly as written in the file; it is changed by hand only, and so are the scoring
+    settings until the form shows them.
     """
     path = settings_file.CONFIG_PATH
     rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
     new = path.with_name(f"{path.name}.new")
     try:
+        old = yaml.safe_load(path.read_text(encoding="utf-8"))
         settings = {
-            "data_dir": yaml.safe_load(path.read_text(encoding="utf-8"))["data_dir"],
+            "data_dir": old["data_dir"],
             "roles": {
                 "simplify_categories": _lines(form.get("simplify_categories", "")),
                 "keywords": _lines(form.get("keywords", "")),
@@ -260,7 +262,7 @@ def save_settings(form: dict[str, str]) -> str | None:
                 "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             },
             **{name: _whole(form.get(name, "")) for name in NUMBERS},
-        }
+        } | ({"scoring": old["scoring"]} if "scoring" in old else {})
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)
         load_config(new)  # the very rules used when data/config.yaml is read

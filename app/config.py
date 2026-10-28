@@ -61,6 +61,15 @@ class SourceSettings(BaseModel):
         return cleaned
 
 
+class ScoringSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Stage A passes a job with one of your keywords in its title, or with both of these reached (0 to 1).
+    meaning_threshold: Annotated[float, Field(ge=0, le=1)] = 0.5
+    skills_threshold: Annotated[float, Field(ge=0, le=1)] = 0.15  # share of the job's skills your resume has
+    extra_skills: list[str] = []  # tool names the O*NET skills list lacks, looked for in your resume and in job ads
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -70,6 +79,7 @@ class Config(BaseModel):
     collect_every_hours: Annotated[int, Field(ge=0, le=168, strict=True)] = 0  # dashboard schedule; 0 = off
     phonebook_every_days: Annotated[int, Field(ge=0, le=365, strict=True)] = 30  # dashboard schedule; 0 = off
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
+    scoring: ScoringSettings = ScoringSettings()
 
 
 def load_config(path: Path | None = None) -> Config:
