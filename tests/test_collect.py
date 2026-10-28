@@ -495,6 +495,15 @@ def test_a_request_to_pause_left_over_from_a_crash_is_ignored(data_dir):
     assert not collect.collection_waiting(data_dir)
 
 
+@pytest.mark.parametrize(("per_second", "minutes"), [(1, "about 2 minutes"), (2, "about 1 minute")])
+def test_the_time_estimate_counts_the_requests_per_second(conn, data_dir, per_second, minutes):
+    boards = [f"lever:board{number}" for number in range(70)]  # all on one site: it sets the time
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({LIST: 404})), per_second=per_second)) as fetcher:
+        lines = []
+        collect.collect(conn, settings(data_dir, boards), fetcher, lines.append)
+    assert f"Reading 70 company boards, all sites at the same time ({minutes})..." in lines
+
+
 def test_all_sites_are_read_at_the_same_time(conn, data_dir):
     lever_asked = threading.Event()
 

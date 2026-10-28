@@ -61,7 +61,7 @@
   <p>{% if total %}{{ "{:,}".format(total) }} boards.{% else %}No boards match.{% endif %}</p>
   {% if boards %}
   <table class="jobs">
-    <thead><tr><th>Board</th><th>Company</th><th>Found by</th><th>Kind</th><th>Last read</th><th>Open jobs saved</th><th></th></tr></thead>
+    <thead><tr><th>Board</th><th>Company</th><th>Found by</th><th>State</th><th>Last read</th><th>Open jobs saved</th><th></th></tr></thead>
     <tbody>
     {% for board in boards %}
     <tr>

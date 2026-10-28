@@ -229,12 +229,7 @@ def settings_form() -> dict[str, str]:
         "keywords": "\n".join(roles.get("keywords") or []),
         "extra_boards": "\n".join(sources.get("extra_boards") or []),
         "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
-        "collect_every_hours": str(raw.get("collect_every_hours", 0)),
-        "phonebook_every_days": str(
-            raw.get("phonebook_every_days", Config.model_fields["phonebook_every_days"].default)
-        ),
-        "requests_per_second": str(raw.get("requests_per_second", 1)),
-    }
+    } | {name: str(raw.get(name, Config.model_fields[name].default)) for name in NUMBERS}  # defaults from Config
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
     return form

@@ -24,7 +24,7 @@ import sqlcipher3
 from app import collect, db, jobs
 from app.collect import CollectError, Download, Output, now
 from app.config import Config, ConfigError, load_config
-from app.fetch import COMMON_CRAWL, Fetcher, FetchError, Guarded, NotFound, Unreachable
+from app.fetch import COLLECT_HOSTS, COMMON_CRAWL, Fetcher, FetchError, Guarded, NotFound, Unreachable
 from app.keychain import KeychainError
 from app.sources import BOARD_HOSTS, SourceError, board_of, greenhouse, simplify
 from app.sources.boards import BOARDS
@@ -181,15 +181,16 @@ def _read_part(
         pages = fetcher.get_json(f"{query}&showNumPages=true")[0]
     except NotFound:
         return 0, 0
-    if not isinstance(pages, dict) or not isinstance(pages.get("pages"), int):
+    count = pages.get("pages") if isinstance(pages, dict) else None
+    if type(count) is not int or count < 0:  # true and false are not counts
         raise SourceError("its page count looks different from usual")
     new = damaged = 0
-    out(f"Common Crawl {crawl}, {host}: {pages['pages']:,} index page{'' if pages['pages'] == 1 else 's'} to read")
-    for page in range(pages["pages"]):
+    out(f"Common Crawl {crawl}, {host}: {count:,} index page{'' if count == 1 else 's'} to read")
+    for page in range(count):
         if _done(conn, f"{part}:{page}"):
             continue
         if page and page % PAGES_NOTE_EVERY == 0:
-            out(f"  page {page + 1:,} of {pages['pages']:,}")
+            out(f"  page {page + 1:,} of {count:,}")
         try:
             text = fetcher.get_text(f"{query}&page={page}")
         except NotFound:
@@ -310,7 +311,7 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guar
     Returns the outcome: done, partial (a source failed), or paused (a collection is waiting; the next refresh
     continues the same round).
     """
-    if not any(fetcher.reachable(site) for site in sorted({collect.site_of(f"{kind}:x") for kind in BOARDS})):
+    if not any(fetcher.reachable(site) for site in sorted(COLLECT_HOSTS)):
         raise CollectError("No internet connection: none of the job sites could be reached. Check it and try again.")
     fetcher = Guarded(fetcher, lambda: _pause_if_asked(config))
     with conn:

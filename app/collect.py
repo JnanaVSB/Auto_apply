@@ -245,7 +245,8 @@ class _Run:
         later = {name for name, discovered in rows if discovered} - set(extra_boards)  # yours are never "discovered"
         boards = sorted({name for name, _ in rows} | set(extra_boards), key=lambda board: (board in later, board))
         busiest = max(Counter(map(site_of, boards)).values(), default=0)
-        minutes = _plural(busiest // 60 + 1, "minute")  # about 1 s per board on the site with the most boards
+        # about one board per allowed request on the site with the most boards
+        minutes = _plural(busiest // (60 * self.fetcher.per_second) + 1, "minute")
         self.out(f"Reading {_plural(len(boards), 'company board')}, all sites at the same time (about {minutes})...")
         counts, read = jobs.Counts(), 0
         with closing(download_boards(self.fetcher, boards, self.unreachable)) as downloads:

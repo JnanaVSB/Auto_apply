@@ -101,6 +101,7 @@ def test_the_phone_book_schedule_and_requests_per_second_are_saved_and_shown(cli
         'name="phonebook_every_days" type="number" min="0" max="365" step="1" value="30"'
         in client.get("/settings").text
     )  # not in the file yet: the default, monthly
+    assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="1"' in client.get("/settings").text
     save(client, phonebook_every_days="7", requests_per_second="2")
     config = load_config(settings_file)
     assert (config.phonebook_every_days, config.requests_per_second) == (7, 2)

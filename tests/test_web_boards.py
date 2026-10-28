@@ -53,6 +53,7 @@ def test_every_company_board_is_listed_with_where_it_came_from(client):
     assert "<td>2026-10-22</td>" in text and "<td>never</td>" in text
     assert "stopped by you on 2026-10-21" in text and "retired on 2026-10-01" in text
     assert 'href="https://job-boards.greenhouse.io/acme" target="_blank" rel="noopener noreferrer"' in text
+    assert "<th>State</th>" in text
 
 
 @pytest.mark.parametrize(

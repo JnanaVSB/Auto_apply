@@ -329,6 +329,16 @@ def test_reading_the_index_says_what_it_is_doing(conn, data_dir):
     assert f"Common Crawl {CRAWL}, boards.greenhouse.io: 1 index page to read" in lines
 
 
+@pytest.mark.parametrize("count", [True, -1, "3", 1.5])
+def test_an_odd_page_count_is_reported_and_asked_again_next_time(conn, data_dir, count):
+    pages = crawl_pages() | {INDEX.format("jobs.lever.co") + "&showNumPages=true": {"pages": count}}
+    lines, _ = refresh(conn, data_dir, pages)
+    assert (
+        f"Common Crawl {CRAWL}, jobs.lever.co could not be read (its page count looks different from usual); "
+        "tried again next time."
+    ) in lines
+
+
 def test_an_index_that_stops_answering_ends_its_reading_until_next_time(conn, data_dir):
     first = INDEX.format("boards.greenhouse.io") + "&showNumPages=true"
     lines, web = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | {first: httpx.ConnectError("dropped")})

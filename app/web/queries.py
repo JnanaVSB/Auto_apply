@@ -325,11 +325,10 @@ def list_boards(conn: sqlcipher3.Connection, view: BoardView) -> tuple[list[dict
     )
     boards = []
     for name, found_by, company, last_ok, stopped_on, retired_on, discovered, jobs_listed in rows:
-        kind, _, short = name.partition(":")
         boards.append({
             "name": name, "company": company, "found_by": found_by_label(found_by), "last_read": (last_ok or "")[:10],
             "stopped_on": stopped_on, "retired_on": retired_on, "discovered": bool(discovered), "jobs": jobs_listed,
-            "page": BOARDS[kind].BOARD_PAGE.format(short) if kind in BOARDS else None,
+            "page": _board_page(name),
         })  # fmt: skip
     return boards, total, number, pages
 
@@ -352,12 +351,16 @@ def waiting_boards(conn: sqlcipher3.Connection) -> list[dict]:
         "SELECT board, company, cross_of FROM phonebook WHERE result = 'to confirm' "
         "AND NOT EXISTS (SELECT 1 FROM sources WHERE name = board) ORDER BY board"
     ).fetchall()
-    found = []
-    for board, company, cross_of in rows:
-        kind, _, short = board.partition(":")
-        page = BOARDS[kind].BOARD_PAGE.format(short) if kind in BOARDS else None
-        found.append({"name": board, "company": company, "cross_of": cross_of, "page": page})
-    return found
+    return [
+        {"name": board, "company": company, "cross_of": cross_of, "page": _board_page(board)}
+        for board, company, cross_of in rows
+    ]
+
+
+def _board_page(board: str) -> str | None:
+    """The board's own public page, e.g. https://jobs.lever.co/acme for lever:acme."""
+    kind, _, name = board.partition(":")
+    return BOARDS[kind].BOARD_PAGE.format(name) if kind in BOARDS else None
 
 
 def last_runs(conn: sqlcipher3.Connection, count: int = 5) -> list[dict]:
