@@ -10,8 +10,18 @@
     {% for value in values %}<option{% if value == view[name] %} selected{% endif %}>{{ value }}</option>{% endfor %}
   </select>
 {% endmacro %}
+{% macro number(value) %}{{ "{:,}".format(value) }}{% endmacro %}
 {% block content %}
-<h1>Jobs</h1>
+<h1>{{ "Low score" if low else "Jobs" }}</h1>
+{% if counts.open %}
+<p class="counts">{{ number(counts.open) }} open jobs:
+  <a href="/?f=1&amp;status=open&amp;scoring=ready">{{ number(counts.ready) }} ready</a> ·
+  <a href="{{ LOW_SCORE }}">{{ number(counts.low + counts.quick) }} low score</a>
+  ({{ number(counts.quick) }} by the quick check) ·
+  <a href="/?f=1&amp;status=open&amp;scoring=failed">{{ number(counts.failed) }} failed</a> ·
+  <a href="/?f=1&amp;status=open&amp;scoring=waiting">{{ number(counts.waiting) }} not scored yet</a>.
+  <span class="muted">{{ number(counts.passed) }} passed the quick check.</span></p>
+{% endif %}
 <form method="get" action="/" class="filters">
   <input type="hidden" name="f" value="1">
   <p>
@@ -39,6 +49,11 @@
   <fieldset><legend>Status</legend>{{ boxes("status") }}
     <label>reason {{ pick("reason", options.reason) }}</label>
   </fieldset>
+  <fieldset><legend>Scoring</legend>{{ boxes("scoring", SCORING_LABELS) }}
+    <label><input type="checkbox" name="odd" value="1"{% if view.odd %} checked{% endif %}> only "score looks odd"</label>
+    <label>score from <input name="score_from" type="number" min="0" max="100" step="1" value="{{ view.score_from }}"></label>
+    <label>to <input name="score_to" type="number" min="0" max="100" step="1" value="{{ view.score_to }}"></label>
+  </fieldset>
   <p>
     <label>Posted from <input type="date" name="posted_from" value="{{ view.posted_from }}"></label>
     <label>to <input type="date" name="posted_to" value="{{ view.posted_to }}"></label>
@@ -56,7 +71,7 @@
     </label>
     <label>Sort
       <select name="sort">
-        {% for value, label in [("posted", "newest posted"), ("found", "newest found"), ("company", "company A-Z"), ("title", "title A-Z")] %}
+        {% for value, label in [("posted", "newest posted"), ("found", "newest found"), ("company", "company A-Z"), ("title", "title A-Z"), ("score", "highest score")] %}
         <option value="{{ value }}"{% if value == view.sort %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
@@ -74,7 +89,8 @@
 {% if page.jobs %}
 <table class="jobs">
   <thead>
-    <tr><th>Title</th><th>Company</th><th>Location</th><th>Level</th><th>Remote</th><th>US</th><th>Posted</th><th>Status</th></tr>
+    <tr><th>Title</th><th>Company</th><th>Location</th><th>Level</th><th>Remote</th><th>US</th><th>Posted</th><th>Status</th>
+      <th>Score</th><th>Scoring</th></tr>
   </thead>
   <tbody>
     {% for job in page.jobs %}
@@ -89,6 +105,22 @@
       <td>{{ US_LABELS[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
       <td>{{ job.date_posted or "" }}</td>
       <td>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</td>
+      <td>{{ job.score if job.score is not none else "–" }}
+        {% if job.other %}<span class="muted">(another model: {{ job.other }})</span>{% endif %}</td>
+      <td>{{ SCORING_LABELS[job.scoring] }}
+        {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
+        {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
+        {% if job.title_only %}<span class="mark">title only</span>{% endif %}
+        {% if job.older %}<span class="mark">scored with an older resume</span>{% endif %}
+        {% if low %}
+        {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+        <form method="post" action="/jobs/{{ job.id }}/prepare" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="back" value="{{ view.address(page=page.number) }}">
+          <input type="hidden" name="to" value="list">
+          <input type="hidden" name="value" value="1"><button type="submit">Prepare anyway</button>
+        </form>
+        {% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

@@ -37,6 +37,57 @@
   </form>
 </div>
 
+{% set scoring = job.scoring %}
+<h2>Score</h2>
+<p><strong>{{ scoring.label }}</strong>{% if scoring.score is not none %}: {{ scoring.score }} of 100{% endif %}
+  {% if scoring.prepare_anyway %}<span class="mark">prepare anyway (set by you)</span>{% endif %}
+  {% if scoring.older %}<span class="mark">scored with an older resume</span>{% endif %}
+  {% if scoring.answer %}<span class="mark">your answer key: {{ scoring.answer }}</span>{% endif %}</p>
+{% if scoring.reasons %}<ul class="reasons">{% for reason in scoring.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+{% if scoring.failed %}<p class="error">{{ scoring.failed }}</p>{% endif %}
+{% if scoring.odd %}<p><span class="mark warn">score looks odd</span> {{ scoring.odd }}</p>{% endif %}
+<p class="muted">Model {{ scoring.model }}{% if scoring.scored_on %}, scored {{ scoring.scored_on[:10] }}{% endif %}.
+  {% for model, score, failed, on in scoring.others %}{% if loop.first %}Other models:{% endif %}
+  {{ model }}: {{ score if score is not none else "failed" }} ({{ on[:10] }}){{ "," if not loop.last else "." }}{% endfor %}</p>
+
+<div class="actions">
+  <form method="post" action="/jobs/{{ job.id }}/answer">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <span class="muted">Answer key:</span>
+    {% for label in ["yes", "maybe", "no"] %}
+    <button type="submit" name="label" value="{{ label }}"{% if scoring.answer == label %} aria-pressed="true"{% endif %}>{{ label }}</button>
+    {% endfor %}
+    {% if scoring.answer %}<button type="submit" name="label" value="clear">clear</button>{% endif %}
+  </form>
+  <form method="post" action="/jobs/{{ job.id }}/prepare">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    {% if scoring.prepare_anyway %}
+    <input type="hidden" name="value" value="0"><button type="submit">Undo "prepare anyway"</button>
+    {% elif scoring.status != "ready" %}
+    <input type="hidden" name="value" value="1"><button type="submit">Prepare anyway</button>
+    {% endif %}
+  </form>
+</div>
+
+<h3>Quick check</h3>
+{% if scoring.checked_on %}
+<dl class="details">
+  <dt>Result</dt><dd>{{ "passed" if scoring.passed else "did not pass" }}
+    {% if scoring.title_only %}<span class="mark">title only: the job has no description</span>{% endif %}</dd>
+  <dt>Your keywords in the title</dt><dd>{{ scoring.keywords | join(", ") or "none" }}</dd>
+  <dt>Skills</dt><dd>{{ scoring.shared_skills | length }} of the job's {{ scoring.job_skills }} are on your resume
+    {%- if scoring.shared_skills %} ({{ scoring.shared_skills | join(", ") }}){% endif %}</dd>
+  <dt>Meaning match</dt><dd>{{ "%.2f" | format(scoring.meaning) }} <span class="muted">(0 to 1)</span></dd>
+  {% if scoring.trick %}<dt>Aimed at AI tools</dt><dd><span class="mark warn">score looks odd</span> the ad says "{{ scoring.trick }}"</dd>{% endif %}
+  <dt>Checked</dt><dd>{{ scoring.checked_on[:10] }}</dd>
+</dl>
+{% else %}
+<p class="muted">Not checked yet: the next scoring run checks it.</p>
+{% endif %}
+
+<h2>Details</h2>
 <dl class="details">
   <dt>Status</dt><dd>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</dd>
   <dt>Locations</dt><dd>{{ job.locations | join("; ") or "not given" }}</dd>

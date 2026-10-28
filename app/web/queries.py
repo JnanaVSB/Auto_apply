@@ -11,6 +11,7 @@ import sqlcipher3
 
 from app import jobs
 from app.collect import DISCOVERED, source_label, source_state
+from app.config import AISettings, ScoringSettings
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
 
@@ -27,27 +28,69 @@ OPTIONS = {  # every value a list filter accepts; anything else in the address i
         jobs.INACTIVE, jobs.NOT_RECORDED,
     ),
     "hidden": ("hide", "show", "only"),
-    "sort": ("posted", "found", "company", "title"),
+    "sort": ("posted", "found", "company", "title", "score"),
+    "scoring": ("ready", "low", "quick", "failed", "waiting"),
 }  # fmt: skip
+SCORING_LABELS = {
+    "ready": "ready for preparation",
+    "low": "low score",
+    "quick": "low score (quick check)",
+    "failed": "AI score failed: check by hand",
+    "waiting": "not scored yet",
+}
 PAGE_NUMBER = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
+SCORE = re.compile(r"[0-9]{1,3}")
 SOURCE = re.compile(rf"(simplify|{'|'.join(BOARDS)})(:[\w.-]+)?|manual")  # a kind, or one list or board
 SORTS = {
     "posted": "date_posted IS NULL, date_posted DESC, id DESC",  # jobs with no date go last
     "found": "first_seen DESC, id DESC",
     "company": "company COLLATE NOCASE, title COLLATE NOCASE, id",
     "title": "title COLLATE NOCASE, company COLLATE NOCASE, id",
+    "score": "s.score IS NULL, s.score DESC, id DESC",  # unscored jobs go last
 }
 HIDDEN = {"hide": "not_interested = 0", "only": "not_interested = 1", "show": ""}
 US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 # Only columns of the jobs_list index, so listing never reads the long descriptions.
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
+# Every jobs query joins each job's quick check and its score from the chosen model. The first two values of every
+# query are that model and the ready threshold; a job's scoring status is worked out from them when it is shown.
+SCORED = """WITH chosen (model, threshold) AS (SELECT ?, ?)
+    SELECT {columns} FROM jobs CROSS JOIN chosen LEFT JOIN stage_a a ON a.job_id = jobs.id
+    LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model"""
+STATUS = """CASE WHEN jobs.prepare_anyway OR s.score >= chosen.threshold THEN 'ready'
+    WHEN s.score IS NOT NULL THEN 'low' WHEN s.failed IS NOT NULL THEN 'failed' WHEN a.passed = 0 THEN 'quick'
+    ELSE 'waiting' END"""
+ODD = "(s.odd IS NOT NULL OR a.trick IS NOT NULL)"
+SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, {STATUS} AS scoring,
+    jobs.prepare_anyway, (SELECT o.model || ': ' || o.score FROM ai_scores o WHERE o.job_id = jobs.id
+        AND o.model != chosen.model AND o.score IS NOT NULL ORDER BY o.scored_on DESC LIMIT 1) AS other"""  # noqa: S608 (fixed text)
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
     added_by_you, check_location, location_by_you, not_interested"""
+JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume, a.keywords,
+    a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on, jobs.prepare_anyway,
+    (SELECT label FROM answer_key WHERE job_id = jobs.id) AS answer"""  # noqa: S608 (fixed text)
+OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE job_id = ? AND model != ?
+    ORDER BY scored_on DESC"""
 SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
         r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%'
     FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
+
+
+@dataclass(frozen=True)
+class Scoring:
+    """What a job's scoring status depends on: the chosen model, the ready threshold and the current resume."""
+
+    model: str = AISettings().evaluator.model
+    threshold: int = ScoringSettings().ready_threshold
+    resume: str | None = None  # the resume's fingerprint; None when there is no usable resume
+
+    def values(self) -> list:
+        return [self.model, self.threshold]
+
+
+DEFAULT_SCORING = Scoring()
 
 
 @dataclass(frozen=True)
@@ -69,6 +112,10 @@ class Filters:
     reason: str = ""
     added: bool = False
     hidden: str = "hide"
+    scoring: tuple[str, ...] = ()
+    odd: bool = False  # only scores that look odd
+    score_from: str = ""  # whole numbers 0 to 100, kept as typed
+    score_to: str = ""
     sort: str = "posted"
     page: int = 1
 
@@ -92,6 +139,10 @@ class Filters:
             except ValueError:
                 return ""
 
+        def score(name: str) -> str:
+            value = one(name)
+            return value if SCORE.fullmatch(value) and int(value) <= 100 else ""
+
         page, source = one("page"), one("board") or one("source")  # a typed board wins over the source list
         return cls(
             q=one("q"),
@@ -109,6 +160,10 @@ class Filters:
             reason=one("reason"),
             added=one("added") == "1",
             hidden=one("hidden") or cls.hidden,
+            scoring=many("scoring"),
+            odd=one("odd") == "1",
+            score_from=score("score_from"),
+            score_to=score("score_to"),
             sort=one("sort") or cls.sort,
             page=max(1, int(page)) if PAGE_NUMBER.fullmatch(page) else 1,
         )
@@ -183,29 +238,52 @@ def _where(view: Filters, *, status: bool = True) -> tuple[str, list]:
         add("status_reason = ?", view.reason)
     if view.added:
         add("added_by_you = 1")
+    if view.scoring:
+        add(f"{STATUS} IN ({', '.join('?' * len(view.scoring))})", *view.scoring)
+    if view.odd:
+        add(ODD)
+    if view.score_from:
+        add("s.score >= ?", int(view.score_from))
+    if view.score_to:
+        add("s.score <= ?", int(view.score_to))
     return " AND ".join(rules) or "1", values
 
 
-def list_jobs(conn: sqlcipher3.Connection, view: Filters) -> Page:
+def list_jobs(conn: sqlcipher3.Connection, view: Filters, scoring: Scoring = DEFAULT_SCORING) -> Page:
     """One page of the jobs matching `view`; a page number past the end shows the last page."""
     where, values = _where(view)
-    total = conn.execute(f"SELECT count(*) FROM jobs WHERE {where}", values).fetchone()[0]  # noqa: S608 (fixed rules)
+    count = SCORED.format(columns="count(*)")
+    total = conn.execute(f"{count} WHERE {where}", scoring.values() + values).fetchone()[0]  # noqa: S608 (fixed rules)
     pages = max(1, math.ceil(total / PAGE_SIZE))
     number = min(view.page, pages)
+    select = SCORED.format(columns=LIST_COLUMNS + SCORE_COLUMNS)
     rows = conn.execute(
-        f"SELECT {LIST_COLUMNS} FROM jobs WHERE {where} ORDER BY {SORTS[view.sort]} LIMIT ? OFFSET ?",  # noqa: S608
-        [*values, PAGE_SIZE, (number - 1) * PAGE_SIZE],
+        f"{select} WHERE {where} ORDER BY {SORTS[view.sort]} LIMIT ? OFFSET ?",  # noqa: S608 (fixed rules)
+        [*scoring.values(), *values, PAGE_SIZE, (number - 1) * PAGE_SIZE],
     )
     names = [column[0] for column in rows.description]
     found = [dict(zip(names, row, strict=True)) for row in rows]
     for job in found:
-        job["locations"] = json.loads(job["locations"])
+        job["locations"], job["reasons"] = json.loads(job["locations"]), json.loads(job["reasons"] or "[]")
+        job["older"] = bool(scoring.resume and job["resume"] and job["resume"] != scoring.resume)
     page = Page(found, total, number, pages)
     if view.status:
         where, values = _where(view, status=False)
-        everything = conn.execute(f"SELECT count(*) FROM jobs WHERE {where}", values).fetchone()[0]  # noqa: S608
+        everything = conn.execute(f"{count} WHERE {where}", scoring.values() + values).fetchone()[0]  # noqa: S608
         page.other_statuses = everything - total
     return page
+
+
+def counts(conn: sqlcipher3.Connection, scoring: Scoring = DEFAULT_SCORING) -> dict[str, int]:
+    """Open jobs by scoring status (they add up to `open`), and how many passed the quick check."""
+    columns = f"{STATUS}, count(*), coalesce(sum(a.passed), 0)"
+    rows = conn.execute(f"{SCORED.format(columns=columns)} WHERE status = 'open' GROUP BY 1", scoring.values())  # noqa: S608
+    found = {status: 0 for status in OPTIONS["scoring"]} | {"open": 0, "passed": 0}
+    for status, number, passed in rows:
+        found[status] += number
+        found["open"] += number
+        found["passed"] += passed
+    return found
 
 
 def choices(conn: sqlcipher3.Connection) -> dict[str, list[str]]:
@@ -242,6 +320,19 @@ def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
         }
         for source, listed, since, reason, retired, read, stopped, board in conn.execute(SOURCES_OF, (job_id,))
     ]
+    return found
+
+
+def job_scoring(conn: sqlcipher3.Connection, job_id: int, scoring: Scoring = DEFAULT_SCORING) -> dict:
+    """One job's scoring: its status, the chosen model's score, the quick check, other models' scores and your
+    answer-key mark. The job must exist."""
+    rows = conn.execute(f"{SCORED.format(columns=JOB_SCORING)} WHERE jobs.id = ?", [*scoring.values(), job_id])  # noqa: S608
+    found = dict(zip([column[0] for column in rows.description], rows.fetchone(), strict=True))
+    for name in ("reasons", "keywords", "shared_skills"):
+        found[name] = json.loads(found[name] or "[]")
+    found["label"], found["model"] = SCORING_LABELS[found["status"]], scoring.model
+    found["older"] = bool(scoring.resume and found["resume"] and found["resume"] != scoring.resume)
+    found["others"] = conn.execute(OTHER_SCORES, (job_id, scoring.model)).fetchall()
     return found
 
 

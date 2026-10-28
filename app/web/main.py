@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException
 from app import db
 from app.config import ConfigError, load_config
 from app.fetch import Fetcher
+from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
 from app.web import actions, queries, security
 from app.web.collector import Collector
@@ -36,6 +37,9 @@ SCHEDULE_CHECK_SECONDS = 60
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
 templates.env.globals["US_LABELS"] = queries.US_LABELS
 templates.env.globals["BOARD_KINDS"] = [(kind, kind.title()) for kind in BOARDS]  # Source choices on the jobs page
+ANSWERS = ("yes", "maybe", "no", "clear")
+LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
+templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE}
 
 
 def create_app(
@@ -114,16 +118,40 @@ def create_app(
 
     @app.get("/")
     async def jobs_list(request: Request) -> Response:
-        conn, view = request.app.state.conn, queries.Filters.from_address(request.url.query)
-        page, choices = queries.list_jobs(conn, view), queries.choices(conn)
-        return _page(request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS)
+        conn, view, scoring = request.app.state.conn, queries.Filters.from_address(request.url.query), _scoring()
+        page, choices = queries.list_jobs(conn, view, scoring), queries.choices(conn)
+        low = bool(view.scoring) and set(view.scoring) <= {"low", "quick"}  # the Low score tab shows the reasons
+        return _page(
+            request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS, low=low,
+            counts=queries.counts(conn, scoring),
+        )  # fmt: skip
 
     @app.get("/jobs/{job_id:int}")
     async def job_page(request: Request, job_id: int) -> Response:
-        job = queries.job(request.app.state.conn, _known(job_id))
+        conn = request.app.state.conn
+        job = queries.job(conn, _known(job_id))
         if job is None:
             raise HTTPException(404)
+        job["scoring"] = queries.job_scoring(conn, job_id, _scoring())
         return _page(request, "job.html", job=job, back=_back(request.query_params.get("back", "")))
+
+    @app.post("/jobs/{job_id:int}/prepare")
+    async def prepare_anyway(request: Request, job_id: int) -> Response:
+        form = request.state.form
+        if not actions.set_prepare_anyway(request.app.state.conn, _known(job_id), form.get("value") == "1"):
+            raise HTTPException(404)
+        if form.get("to") == "list":  # pressed in the Low score list: back to that list
+            return RedirectResponse(_back(form.get("back", "")), 303)
+        return _to_job(job_id, form)
+
+    @app.post("/jobs/{job_id:int}/answer")
+    async def answer(request: Request, job_id: int) -> Response:
+        form = request.state.form
+        if form.get("label") not in ANSWERS:
+            raise HTTPException(400, "Choose yes, maybe or no, or clear the mark.")
+        if not actions.set_answer(request.app.state.conn, _known(job_id), form["label"]):
+            raise HTTPException(404)
+        return _to_job(job_id, form)
 
     @app.post("/jobs/{job_id:int}/not-interested")
     async def not_interested(request: Request, job_id: int) -> Response:
@@ -235,6 +263,19 @@ async def _schedule(app: FastAPI) -> None:
             app.state.collector.tick(app.state.conn)
         except Exception as error:  # e.g. the database busy for a moment: try again next minute
             log.error("Schedule check failed: %s", type(error).__name__)
+
+
+def _scoring() -> queries.Scoring:
+    """The chosen model, the ready threshold and the resume's fingerprint, as they are now."""
+    try:
+        config = load_config()
+    except ConfigError:  # shown on the Settings page; the defaults meanwhile
+        return queries.Scoring()
+    try:
+        resume = read_resume(config.data_dir).fingerprint
+    except ResumeError:
+        resume = None
+    return queries.Scoring(config.ai.evaluator.model, config.scoring.ready_threshold, resume)
 
 
 def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:

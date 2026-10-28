@@ -30,6 +30,8 @@ ADDING = threading.Lock()  # the two "add" actions run one at a time, so a doubl
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 NUMBERS = ("collect_every_hours", "phonebook_every_days", "requests_per_second")  # whole numbers on the settings form
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
+SAVE_ANSWER = """INSERT INTO answer_key (job_id, label, marked_on) VALUES (?, ?, ?)
+    ON CONFLICT (job_id) DO UPDATE SET label = excluded.label, marked_on = excluded.marked_on"""
 NOT_FOUND_TIP = (
     "Tip: open the company's careers page; if its address contains greenhouse.io, lever.co or ashbyhq.com, type the "
     "name from that address (for example greenhouse:acme), or paste one job's link into Add job."
@@ -52,6 +54,25 @@ def set_location(conn: sqlcipher3.Connection, job_id: int, choice: str) -> bool:
             sql = "UPDATE jobs SET us_location = ?, location_by_you = 1, check_location = 0 WHERE id = ?"
             rows = conn.execute(sql, (choice, job_id))
     return rows.rowcount == 1
+
+
+def set_prepare_anyway(conn: sqlcipher3.Connection, job_id: int, value: bool) -> bool:
+    """Send a job on to preparation despite its score, or undo that; False if there is no such job."""
+    with conn:
+        changed = conn.execute("UPDATE jobs SET prepare_anyway = ? WHERE id = ?", (value, job_id))
+    return changed.rowcount == 1
+
+
+def set_answer(conn: sqlcipher3.Connection, job_id: int, label: str) -> bool:
+    """Mark a job yes, maybe or no for the answer key, or clear the mark; False if there is no such job."""
+    with conn:
+        if not conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone():
+            return False
+        if label == "clear":
+            conn.execute("DELETE FROM answer_key WHERE job_id = ?", (job_id,))  # your own mark, removed by you
+        else:
+            conn.execute(SAVE_ANSWER, (job_id, label, collect.now()))
+    return True
 
 
 def add_job(data_dir: Path, fetcher: Fetcher, link: str, company: str, title: str) -> tuple[str, int | None]:
