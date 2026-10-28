@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Answer key{% endblock %}
+{% block content %}
+{% set total = marks.values() | sum %}
+<h1>Answer key</h1>
+<p>Mark jobs <strong>yes</strong>, <strong>maybe</strong> or <strong>no</strong> on their own page, as you would judge
+  them yourself. With about 40 marks, the tables below show which AI model and which quick-check thresholds agree with
+  you best; change them on the <a href="/settings">Settings</a> page.</p>
+<p>You have marked {{ total }} jobs: {{ marks.yes }} yes, {{ marks.maybe }} maybe, {{ marks.no }} no.</p>
+
+<h2>Jobs worth marking</h2>
+<p class="hint">Open jobs you have not marked, newest first, from strong, borderline and weak meaning matches, so your
+  marks cover all three. You can also mark any other job on its page.</p>
+{% for band, jobs in suggestions.items() %}
+<h3>{{ band }}</h3>
+{% if jobs %}
+<table class="jobs">
+  <tr><th>Job</th><th>Company</th><th>Meaning</th></tr>
+  {% for job in jobs %}
+  <tr><td><a href="/jobs/{{ job.id }}">{{ job.title }}</a></td><td>{{ job.company }}</td><td>{{ "%.2f" | format(job.meaning) }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">None left to suggest.</p>{% endif %}
+{% endfor %}
+
+<h2>How each AI model agrees with you</h2>
+<p class="hint">For each model and each "ready" score: how many of your marked jobs it scored at least that high. A good
+  model passes your "yes" jobs and few of your "no" jobs. Only scores made with your current resume count.</p>
+{% if scoring.resume is none %}
+<p class="error">Your resume can't be read, so no AI score counts here. Press Score now on the Collect page to see why.</p>
+{% elif not ai %}
+<p class="muted">None of your marked jobs has an AI score yet. Use "Score my marked jobs" below.</p>
+{% endif %}
+{% for model, counts in ai.items() %}
+<h3>{{ model }}{% if model == scoring.model %} (the chosen model){% endif %}</h3>
+<table class="jobs">
+  <tr><th>AI score from</th>{% for label in labels %}<th>your "{{ label }}" jobs</th>{% endfor %}</tr>
+  {% for threshold in thresholds %}{% set column = loop.index0 %}
+  <tr>
+    <td>{{ threshold }}{% if threshold == scoring.threshold %} (your setting){% endif %}</td>
+    {% for label in labels %}{% set count = counts.get(label) %}
+    <td>{% if count and count.scored %}{{ count.passes[column] }} of {{ count.scored }}{% else %}–{% endif %}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">{% for label in labels %}{% set count = counts.get(label) %}"{{ label }}": {{ count.scored if count else 0 }} scored{% if count and count.failed %}, {{ count.failed }} failed{% endif %}, {{ marks[label] - (count.scored + count.failed if count else 0) }} not scored yet{{ "; " if not loop.last else "." }}{% endfor %}</p>
+{% endfor %}
+
+<h2>Score your marked jobs with a model</h2>
+{% if models %}
+<form method="post" action="/answer-key/score">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Model
+    <select name="model">
+      {% for model in models %}<option{% if model == scoring.model %} selected{% endif %}>{{ model }}</option>{% endfor %}
+    </select></label>
+  <button type="submit"{% if not total %} disabled{% endif %}>Score my marked jobs</button>
+  <span class="muted">Your open marked jobs only. Each model's scores are kept apart, so you can compare them: this
+    does not change the chosen model or use up the day's scoring time. Progress shows on the Collect page.</span>
+</form>
+{% else %}
+<p class="error">No models found: start Ollama with <code>ollama serve</code>, and download a model with
+  <code>ollama pull</code> and its name.</p>
+{% endif %}
+
+<h2>How the quick-check threshold agrees with you</h2>
+<p class="hint">For each meaning match needed (with your skills share of {{ settings.skills_threshold }}): how many of
+  your marked jobs would pass the quick check. A job with your keyword in its title always passes.</p>
+<table class="jobs">
+  <tr><th>Meaning from</th>{% for label in labels %}<th>your "{{ label }}" jobs</th>{% endfor %}</tr>
+  {% for meaning, counts in quick.items() %}
+  <tr>
+    <td>{{ "%.2f" | format(meaning) }}{% if meaning == settings.meaning_threshold %} (your setting){% endif %}</td>
+    {% for label in labels %}{% set count = counts.get(label) %}
+    <td>{% if count %}{{ count[1] }} of {{ count[0] }}{% else %}–{% endif %}</td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Pass-through</h2>
+<p class="hint">Open jobs that passed the quick check (as of its last run), by the way they passed, and how many of
+  them {{ scoring.model }} then scored {{ scoring.threshold }} or more. A band with a low share passes many jobs the
+  AI turns down: raising the meaning threshold above it would save AI time.</p>
+{% if routes %}
+<table class="jobs">
+  <tr><th>Passed by</th><th>Passed</th><th>AI-scored</th><th>AI {{ scoring.threshold }} or more</th><th>Share</th></tr>
+  {% for route in routes %}
+  <tr>
+    <td>{{ route.label }}</td><td>{{ "{:,}".format(route.passed) }}</td><td>{{ "{:,}".format(route.scored) }}</td>
+    <td>{{ "{:,}".format(route.ready) }}</td>
+    <td>{% if route.scored %}{{ (100 * route.ready / route.scored) | round | int }}%{% else %}–{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">No job has passed the quick check yet.</p>{% endif %}
+{% endblock %}

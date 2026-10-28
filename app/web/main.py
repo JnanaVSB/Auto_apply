@@ -17,12 +17,12 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import db
-from app.config import ConfigError, load_config
+from app.config import ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
-from app.web import actions, queries, security
+from app.web import actions, answer_key, queries, security
 from app.web.collector import Collector
 from app.web.scorer import Scorer
 
@@ -172,6 +172,29 @@ def create_app(
     async def score_progress(request: Request) -> Response:
         return _page(request, "score_progress.html", scorer=request.app.state.scorer)
 
+    @app.get("/answer-key")
+    async def answer_key_page(request: Request) -> Response:
+        conn, scoring = request.app.state.conn, _scoring()
+        try:
+            settings = load_config().scoring
+        except ConfigError:  # shown on the Settings page; the defaults meanwhile
+            settings = ScoringSettings()
+        return _page(
+            request, "answer_key.html", marks=answer_key.marks(conn), suggestions=answer_key.suggestions(conn),
+            ai=answer_key.ai_agreement(conn, scoring.resume), quick=answer_key.quick_agreement(conn, settings),
+            routes=answer_key.pass_through(conn, scoring), scoring=scoring, settings=settings,
+            models=await _installed(), labels=answer_key.LABELS, thresholds=answer_key.AI_THRESHOLDS,
+        )  # fmt: skip
+
+    @app.post("/answer-key/score")
+    async def score_marked(request: Request) -> Response:
+        model = request.state.form.get("model", "")
+        if model not in await _installed():  # only a model Ollama on this computer has downloaded
+            raise HTTPException(400, "Choose a model that is downloaded in Ollama.")
+        ids, scorer = answer_key.marked_open(request.app.state.conn), request.app.state.scorer
+        scorer.notice = scorer.start(ids, model) if ids else "No marked open jobs to score: mark some jobs first."
+        return RedirectResponse("/collect#scoring", 303)
+
     @app.post("/jobs/{job_id:int}/answer")
     async def answer(request: Request, job_id: int) -> Response:
         form = request.state.form
@@ -306,6 +329,15 @@ def _scoring() -> queries.Scoring:
     except ResumeError:
         resume = None
     return queries.Scoring(config.ai.evaluator.model, config.scoring.ready_threshold, resume)
+
+
+async def _installed() -> list[str]:
+    """The models downloaded in Ollama on this computer; none when Ollama is off or the evaluator is a cloud service."""
+    try:
+        role = load_config().ai.evaluator
+    except ConfigError:
+        return []
+    return await run_in_threadpool(ollama.installed, role) if role.service == "ollama" else []
 
 
 def _collect_page(request: Request, refused: str | None = None, score_refused: str | None = None) -> HTMLResponse:

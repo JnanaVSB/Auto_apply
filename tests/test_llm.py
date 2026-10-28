@@ -150,3 +150,20 @@ def test_ollama_status_says_what_to_do(reply, ready, line):
     transport, _ = fake(reply)
     found, text = ollama.status(LOCAL, transport)
     assert found == ready and line in text
+
+
+@pytest.mark.parametrize(
+    ("reply", "names"),
+    [
+        (httpx.Response(200, json={"models": [{"name": "qwen3.6:35b-a3b"}, {"name": "gemma4:26b-a4b-it-qat"}]}),
+         ["gemma4:26b-a4b-it-qat", "qwen3.6:35b-a3b"]),
+        (httpx.Response(500), []),
+        (httpx.ConnectError("refused"), []),
+    ],
+)  # fmt: skip
+def test_ollama_lists_its_downloaded_models(reply, names):
+    from app.llm import ollama
+
+    transport, requests = fake(reply)
+    assert ollama.installed(LOCAL, transport) == names
+    assert str(requests[0].url) == "http://127.0.0.1:11434/api/tags"  # only Ollama on this computer is asked

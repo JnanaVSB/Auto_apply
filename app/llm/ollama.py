@@ -47,13 +47,16 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
     return data.get("message", {}).get("content", "")
 
 
+def _tags(role: AIRole, transport: httpx.BaseTransport | None) -> httpx.Response:
+    """Ollama's list of downloaded models."""
+    with httpx.Client(transport=transport, timeout=STATUS_SECONDS, follow_redirects=False, trust_env=False) as client:
+        return client.get(f"{role.address}/api/tags")
+
+
 def status(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[bool, str]:
     """Whether Ollama is running with the role's model downloaded, and one line saying so or giving the fix."""
     try:
-        with httpx.Client(
-            transport=transport, timeout=STATUS_SECONDS, follow_redirects=False, trust_env=False
-        ) as client:
-            reply = client.get(f"{role.address}/api/tags")
+        reply = _tags(role, transport)
     except httpx.TransportError:
         return False, "Ollama isn't running: start it with `ollama serve` (install it first if needed)."
     if reply.status_code != 200:
@@ -62,3 +65,14 @@ def status(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[
     if role.model in names or f"{role.model}:latest" in names:
         return True, f"Ollama is running and the model {role.model} is downloaded."
     return False, f"Ollama is running, but the model {role.model} is not downloaded: run `ollama pull {role.model}`."
+
+
+def installed(role: AIRole, transport: httpx.BaseTransport | None = None) -> list[str]:
+    """The models downloaded in Ollama, by name; none when it does not answer."""
+    try:
+        reply = _tags(role, transport)
+    except httpx.TransportError:
+        return []
+    if reply.status_code != 200:
+        return []
+    return sorted({name for model in reply.json().get("models", []) if isinstance(name := model.get("name"), str)})
