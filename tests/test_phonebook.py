@@ -294,10 +294,46 @@ def test_a_site_whose_index_part_fails_is_skipped_and_asked_again_next_time(conn
     assert results(conn)["lever:acme"] == "added"
 
 
+def test_an_overloaded_index_is_left_after_two_failed_parts_in_a_row_and_the_names_are_checked(conn, data_dir):
+    busy = {INDEX.format(host) + "&showNumPages=true": 504 for host in ("job-boards.greenhouse.io", "jobs.lever.co")}
+    pages = (
+        crawl_pages(greenhouse_urls=())
+        | busy
+        | {
+            INDEX.format("boards.greenhouse.io") + "&page=0": index_page("https://boards.greenhouse.io/acme/jobs/1"),
+            GREENHOUSE_ACME: {"jobs": [greenhouse("ML Engineer", 1)]},
+        }
+    )
+    lines, web = refresh(conn, data_dir, pages)
+    failed = [line for line in lines if "could not be read" in line]
+    assert failed == [
+        f"Common Crawl {CRAWL}, job-boards.greenhouse.io could not be read (busy or failing (status 504); gave up after"
+        " 3 retries); tried again next time.",
+        f"Common Crawl {CRAWL}, jobs.lever.co could not be read (busy or failing (status 504); gave up after 3"
+        " retries); tried again next time.",
+    ]  # said as they happen, not at the end
+    assert lines[lines.index(failed[1]) + 1] == phonebook.OVERLOADED
+    assert INDEX.format("jobs.ashbyhq.com") + "&showNumPages=true" not in [str(r.url) for r in web.requests]
+    assert results(conn)["greenhouse:acme"] == "added"  # the names found so far were still checked
+    assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
+
+
+def test_reading_the_index_says_what_it_is_doing(conn, data_dir):
+    host = "jobs.lever.co"
+    pages = crawl_pages(LEVER_URLS) | BOARDS_PAGES | {INDEX.format(host) + "&showNumPages=true": {"pages": 12}}
+    pages |= {INDEX.format(host) + f"&page={page}": index_page() for page in range(1, 12)}
+    lines, _ = refresh(conn, data_dir, pages)
+    assert lines[0] == phonebook.READING
+    assert f"Common Crawl {CRAWL}, {host}: 12 index pages to read" in lines
+    assert "  page 11 of 12" in lines
+    assert f"Common Crawl {CRAWL}, boards.greenhouse.io: 1 index page to read" in lines
+
+
 def test_an_index_that_stops_answering_ends_its_reading_until_next_time(conn, data_dir):
     first = INDEX.format("boards.greenhouse.io") + "&showNumPages=true"
     lines, web = refresh(conn, data_dir, crawl_pages(LEVER_URLS) | {first: httpx.ConnectError("dropped")})
-    assert lines[0].startswith("Common Crawl's index could not be read (connection failed (ConnectError)")
+    assert lines[0] == phonebook.READING
+    assert lines[1].startswith("Common Crawl's index could not be read (connection failed (ConnectError)")
     assert len([request for request in web.requests if request.url.host == fetch.COMMON_CRAWL]) == 1 + 4  # 3 retries
     assert one(conn, "SELECT outcome FROM phonebook_runs") == ("partial",)
 

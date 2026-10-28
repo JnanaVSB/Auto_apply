@@ -110,6 +110,8 @@ name is also tried once on the other sites; a board found that way is added only
 with the first one, otherwise it waits for you on the dashboard's Boards page.
 
 It is slow on purpose (Common Crawl asks for pauses between requests and is often overloaded): often an hour or more.
+It says which part of the index it is reading. When the index is overloaded (two site parts in a row fail), it
+leaves the rest for the next refresh and goes on to check the names it already has.
 Collections never wait for it: when a collection starts (from the dashboard or a terminal), a running refresh pauses
 at its next request and continues where it stopped once the collection has finished. It is safe to stop with Ctrl+C;
 the next refresh continues where it stopped. Nothing is ever deleted.

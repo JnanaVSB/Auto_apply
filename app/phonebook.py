@@ -34,6 +34,16 @@ CRAWL_ID = re.compile(r"CC-MAIN-[0-9]{4}-[0-9]{2}")
 CRAWLS_TO_READ = 3  # the newest monthly crawls; each is read once, so a monthly refresh reads one new crawl
 SAME_TITLES = 3  # job titles two boards must share for the cross-check to call them one company
 PROGRESS_EVERY = 100
+OVERLOADED_AFTER = 2  # site parts in a row that fail before Common Crawl is left for this refresh
+PAGES_NOTE_EVERY = 10  # a progress line every this many index pages
+READING = (
+    "Reading Common Crawl's index, one site at a time. It is slow on purpose and often busy: a busy part can take up"
+    " to 4 minutes of waiting before it is left for next time."
+)
+OVERLOADED = (
+    f"Common Crawl's index seems overloaded ({OVERLOADED_AFTER} parts in a row failed): the rest of it is read at the"
+    " next refresh. Checking the names found so far."
+)
 RETRY_AFTER = timedelta(days=1)  # a round a failing source left unfinished is continued at most once a day
 PAUSED = "Paused so a collection can run; the refresh continues where it stopped once the collection has finished."
 # A name is added once, and never when it is already a board the app reads. A real sighting (not the cross-check) of a
@@ -129,34 +139,42 @@ def _names(text: str) -> tuple[set[str], int, int]:
     return names, read, damaged
 
 
-def read_common_crawl(conn: sqlcipher3.Connection, fetcher: Fetcher, out: Output) -> tuple[int, int, list[str]]:
+def read_common_crawl(conn: sqlcipher3.Connection, fetcher: Fetcher, out: Output) -> tuple[int, int, int]:
     """Take board names from the newest crawls' index, one page at a time, each page saved as it is read.
 
-    A site whose part fails is skipped until the next refresh; an index that stops answering ends the reading (its
-    retries already took minutes). Returns new names, damaged index lines, and a line per part that failed.
+    A site whose part fails is skipped until the next refresh, and said at once; after OVERLOADED_AFTER failed parts
+    in a row, or when the index stops answering, the rest waits for the next refresh (each failure already took
+    minutes of retries). Returns new names, damaged index lines, and how many parts failed.
     """
-    new = damaged = 0
-    failed = []
+    new = damaged = failed = in_a_row = 0
     for crawl in _newest_crawls(fetcher.get_json(CRAWLS)[0]):
         for host in BOARD_HOSTS:
             part = f"commoncrawl:{crawl}:{host}"
             if _done(conn, part):
                 continue
+            if not new and not damaged and not failed:  # said once, before the first part to read
+                out(READING)
             try:
-                found, bad = _read_part(conn, fetcher, crawl, host, part)
+                found, bad = _read_part(conn, fetcher, crawl, host, part, out)
             except Unreachable:
                 raise
             except (FetchError, SourceError) as error:
-                failed.append(f"Common Crawl {crawl}, {host} could not be read ({error}); tried again next time.")
+                out(f"Common Crawl {crawl}, {host} could not be read ({error}); tried again next time.")
+                failed, in_a_row = failed + 1, in_a_row + 1
+                if in_a_row == OVERLOADED_AFTER:
+                    out(OVERLOADED)
+                    return new, damaged, failed
                 continue
             with conn:
                 conn.execute(DONE, (part, now()))
-            new, damaged = new + found, damaged + bad
+            new, damaged, in_a_row = new + found, damaged + bad, 0
             out(f"Common Crawl {crawl}, {host}: read ({new:,} new names so far)")
     return new, damaged, failed
 
 
-def _read_part(conn: sqlcipher3.Connection, fetcher: Fetcher, crawl: str, host: str, part: str) -> tuple[int, int]:
+def _read_part(
+    conn: sqlcipher3.Connection, fetcher: Fetcher, crawl: str, host: str, part: str, out: Output
+) -> tuple[int, int]:
     """One site's pages in one crawl; "not found" means the index has nothing there. New names and damaged lines."""
     query = f"https://{COMMON_CRAWL}/{crawl}-index?url={host}/*&output=json&fl=url"
     try:
@@ -166,9 +184,12 @@ def _read_part(conn: sqlcipher3.Connection, fetcher: Fetcher, crawl: str, host: 
     if not isinstance(pages, dict) or not isinstance(pages.get("pages"), int):
         raise SourceError("its page count looks different from usual")
     new = damaged = 0
+    out(f"Common Crawl {crawl}, {host}: {pages['pages']:,} index page{'' if pages['pages'] == 1 else 's'} to read")
     for page in range(pages["pages"]):
         if _done(conn, f"{part}:{page}"):
             continue
+        if page and page % PAGES_NOTE_EVERY == 0:
+            out(f"  page {page + 1:,} of {pages['pages']:,}")
         try:
             text = fetcher.get_text(f"{query}&page={page}")
         except NotFound:
@@ -309,9 +330,7 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guar
             say(line)
         complete = not failed
         try:
-            new, damaged, failed = read_common_crawl(conn, fetcher, say)
-            for line in failed:
-                say(line)
+            new, damaged, failed = read_common_crawl(conn, fetcher, say)  # failed parts are said as they happen
             complete = complete and not failed
             say(f"Common Crawl: {new:,} new names" + (f" ({damaged:,} damaged index lines skipped)" if damaged else ""))
         except (FetchError, SourceError) as error:
