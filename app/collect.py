@@ -145,7 +145,7 @@ def lock_for_collection(data_dir: Path, waiting: Callable[[], None] = lambda: No
     try:
         return _taken(data_dir)
     except CollectError:
-        if not data_dir.is_dir() or not _refresh_running(data_dir):
+        if not data_dir.is_dir() or not refresh_running(data_dir):
             raise  # no data folder, or another collection is running
     ask_refresh_to_pause(data_dir)
     waiting()
@@ -160,7 +160,7 @@ def lock_for_collection(data_dir: Path, waiting: Callable[[], None] = lambda: No
     raise CollectError("The phone-book refresh did not pause in time. Try again in a few minutes.")
 
 
-def _refresh_running(data_dir: Path) -> bool:
+def refresh_running(data_dir: Path) -> bool:
     try:
         lock(data_dir, REFRESH_LOCK).close()
     except CollectError:

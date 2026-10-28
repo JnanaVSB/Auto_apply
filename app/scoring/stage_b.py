@@ -37,6 +37,8 @@ COPIED = 20  # a whole reason this long found word for word in the ad was copied
 ODD_SCORE = 85
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+ADD_TIME = """INSERT INTO scoring_days (day, seconds) VALUES (?, ?)
+    ON CONFLICT (day) DO UPDATE SET seconds = seconds + excluded.seconds"""
 Ask = Callable[..., str]
 
 
@@ -123,9 +125,14 @@ def _odd(score: int, reasons: list[str], ad: str, quick: Check, settings: Scorin
     return None
 
 
-def save(conn: sqlcipher3.Connection, job_id: int, model: str, result: Score, resume_fingerprint: str) -> None:
-    """One job's score for one model, replacing that model's older score for the job; never half-saved."""
+def save(
+    conn: sqlcipher3.Connection, job_id: int, model: str, result: Score, resume_fingerprint: str, day: str | None = None
+) -> None:
+    """One job's score for one model, replacing that model's older score for the job; with a `day`, its time counts
+    towards that day's scoring time. Saved together, never half-saved."""
     with conn:
+        if day:
+            conn.execute(ADD_TIME, (day, result.seconds))
         conn.execute(
             SAVE,
             (

@@ -44,6 +44,8 @@ scoring:
   extra_skills: ["MuJoCo", "CARLA", "SLURM", "ROS", "ROS 2", "Gazebo", "Isaac Sim", "Isaac Lab", "PyBullet",
                  "Gymnasium", "Stable-Baselines3", "RLlib", "JAX", "CUDA", "scikit-learn", "OpenCV", "MATLAB",
                  "Hugging Face", "Weights & Biases", "MLflow"]
+  minutes_per_day: 120  # automatic AI scoring time per day (1 to 1440); then it continues the next day
+  ready_threshold: 70  # an AI score from this up makes a job "ready for preparation"; below it, "low score"
 
 # The AI model for each role. Phase 3b uses only the evaluator, which scores jobs on this computer through Ollama:
 # nothing leaves the laptop. service: ollama, openai-compatible or anthropic; a cloud service also needs key_name, the

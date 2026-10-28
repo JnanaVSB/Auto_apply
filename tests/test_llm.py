@@ -130,3 +130,23 @@ def test_missing_key_is_named_and_nothing_is_sent():
     with pytest.raises(llm.StopScoring, match="No key is saved in the keychain under the name 'groq'"):
         llm.ask(GROQ, "rules", "texts", SHAPE, transport=transport)
     assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("reply", "ready", "line"),
+    [
+        (httpx.Response(200, json={"models": [{"name": "gemma4:26b-a4b-it-q8_0"}]}), True, "is downloaded"),
+        (
+            httpx.Response(200, json={"models": [{"name": "qwen3:14b"}]}),
+            False,
+            "run `ollama pull gemma4:26b-a4b-it-q8_0`",
+        ),
+        (httpx.ConnectError("refused"), False, "start it with `ollama serve`"),
+    ],
+)
+def test_ollama_status_says_what_to_do(reply, ready, line):
+    from app.llm import ollama
+
+    transport, _ = fake(reply)
+    found, text = ollama.status(LOCAL, transport)
+    assert found == ready and line in text

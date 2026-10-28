@@ -167,3 +167,11 @@ def test_ai_roles_have_safe_defaults(tmp_path):
     )  # fmt: skip
     claude = load_config(write(tmp_path, AI_ROLE + "    service: anthropic\n    model: m\n    key_name: k\n"))
     assert claude.ai.evaluator.address == "https://api.anthropic.com"
+
+
+@pytest.mark.parametrize(
+    ("setting", "value"), [("minutes_per_day", 0), ("minutes_per_day", 1441), ("ready_threshold", 101)]
+)
+def test_scoring_time_and_threshold_have_limits(tmp_path, setting, value):
+    with pytest.raises(ConfigError, match=f"scoring.{setting}"):
+        load_config(write(tmp_path, f"data_dir: data\nscoring:\n  {setting}: {value}\n"))

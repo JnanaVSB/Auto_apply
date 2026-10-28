@@ -70,6 +70,8 @@ class ScoringSettings(BaseModel):
     meaning_threshold: Annotated[float, Field(ge=0, le=1)] = 0.5
     skills_threshold: Annotated[float, Field(ge=0, le=1)] = 0.15  # share of the job's skills your resume has
     extra_skills: list[str] = []  # tool names the O*NET skills list lacks, looked for in your resume and in job ads
+    minutes_per_day: Annotated[int, Field(ge=1, le=1440, strict=True)] = 120  # automatic AI scoring time per day
+    ready_threshold: Annotated[int, Field(ge=0, le=100, strict=True)] = 70  # AI score from which a job is ready
 
 
 class AIRole(BaseModel):

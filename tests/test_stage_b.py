@@ -142,3 +142,11 @@ def test_save_keeps_one_score_per_job_and_model(conn):
         ("m", 82, json.dumps(["Strong RL match."]), None, "resume-fp"),
         ("other", 40, "[]", None, "resume-fp"),
     ]
+
+
+def test_a_score_and_its_time_are_saved_together(conn):
+    job = add_job(conn, "Robot Learning Engineer")
+    stage_b.save(conn, job, "m", stage_b.Score(82, [], None, None, 4.5), "resume-fp", "2026-10-28")
+    stage_b.save(conn, job, "other", stage_b.Score(40, [], None, None, 1.5), "resume-fp", "2026-10-28")
+    stage_b.save(conn, job, "m", stage_b.Score(50, [], None, None, 9.0), "resume-fp")  # "Score these": not counted
+    assert conn.execute("SELECT day, seconds FROM scoring_days").fetchall() == [("2026-10-28", 6.0)]

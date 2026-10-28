@@ -10,6 +10,7 @@ ANSWER_LIMIT = 1024  # word-pieces; with thinking on, the model needs more room
 THINKING_ANSWER_LIMIT = 4096
 CHARACTERS_PER_PIECE = 8  # any text has at least one word-piece per 8 characters; fewer read means a cut prompt
 OUT_OF_MEMORY = ("out of memory", "cudamalloc", "cuda error")
+STATUS_SECONDS = 5
 
 
 def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool) -> str:
@@ -44,3 +45,20 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
             f"the texts (about {sent // 4:,} word-pieces) do not fit the model's working size of {role.context:,}"
         )
     return data.get("message", {}).get("content", "")
+
+
+def status(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[bool, str]:
+    """Whether Ollama is running with the role's model downloaded, and one line saying so or giving the fix."""
+    try:
+        with httpx.Client(
+            transport=transport, timeout=STATUS_SECONDS, follow_redirects=False, trust_env=False
+        ) as client:
+            reply = client.get(f"{role.address}/api/tags")
+    except httpx.TransportError:
+        return False, "Ollama isn't running: start it with `ollama serve` (install it first if needed)."
+    if reply.status_code != 200:
+        return False, f"Ollama did not answer as expected (status {reply.status_code}): restart it with `ollama serve`."
+    names = {model.get("name") for model in reply.json().get("models", [])}
+    if role.model in names or f"{role.model}:latest" in names:
+        return True, f"Ollama is running and the model {role.model} is downloaded."
+    return False, f"Ollama is running, but the model {role.model} is not downloaded: run `ollama pull {role.model}`."
