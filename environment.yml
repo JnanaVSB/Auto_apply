@@ -17,6 +17,10 @@ dependencies:
   - starlette=1.6.0  # the web toolkit FastAPI is built on
   - uvicorn=0.53.0  # local web server for the dashboard
   - jinja2=3.1.6  # dashboard page templates
+  - rapidfuzz=3.14.6  # job scoring: keywords and skills, including spelling variants
+  - numpy=2.5.4  # job scoring: maths for the meaning match
+  - onnxruntime=1.31.0=*_0_cpu  # job scoring: runs the meaning model on the processor (not the 280 MB GPU build)
+  - tokenizers=0.23.3  # job scoring: splits text into the word-pieces the meaning model reads
   - pytest=9.1.1
   - ruff=0.16.10
   - pip:
