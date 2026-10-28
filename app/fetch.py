@@ -1,9 +1,11 @@
 """The one shared web download: allowed hosts only, polite, size-limited, with retries."""
 
+import hashlib
 import json
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -12,6 +14,11 @@ import httpx
 COMMON_CRAWL = "index.commoncrawl.org"  # only the phone-book refresh reads it, never a collection
 COLLECT_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
 ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL}
+# Files job scoring downloads once (download_file): only these downloads may follow a redirect, and only between these
+# hosts. huggingface.co hands its large files to its storage address, us.aws.cdn.hf.co.
+SETUP_HOSTS = frozenset({"huggingface.co", "us.aws.cdn.hf.co", "www.onetcenter.org"})
+MAX_REDIRECTS = 2
+REDIRECTS = frozenset({301, 302, 303, 307, 308})
 USER_AGENT = "auto_apply personal job search"
 TIMEOUT_SECONDS = 20
 MIN_GAP_SECONDS = 1.0  # between the starts of two requests to the same website, at one request per second
@@ -35,6 +42,10 @@ class NotFound(FetchError):
 
 class Unreachable(FetchError):
     """No answer at all: the connection failed or timed out on every try."""
+
+
+class _TryAgain(Exception):
+    """A setup download that may work on the next try: the site was busy, or the file arrived incomplete."""
 
 
 class Fetcher:
@@ -69,6 +80,58 @@ class Fetcher:
     def get_text(self, url: str) -> str:
         """Return a reply as text, e.g. Common Crawl's index lines; anything that is not UTF-8 is replaced."""
         return self._get(url, None)[0].decode("utf-8", errors="replace")
+
+    def download_file(self, url: str, path: Path, size: int, sha256: str) -> None:
+        """Save one setup file all-or-nothing: only a file of exactly `size` bytes with the `sha256` fingerprint
+        reaches `path`; anything else is refused and leaves no file."""
+        partial = path.with_name(f"{path.name}.partial")
+        waits = iter(RETRY_WAITS)
+        try:
+            while True:
+                try:
+                    digest = self._save(url, partial, size)
+                    break
+                except (httpx.RequestError, _TryAgain) as error:  # RequestError includes timeouts
+                    wait = next(waits, None)
+                    if wait is None:
+                        reason = (
+                            error if isinstance(error, _TryAgain) else f"connection failed ({type(error).__name__})"
+                        )
+                        raise FetchError(
+                            f"{reason}; gave up after {len(RETRY_WAITS)} retries, try again later"
+                        ) from None
+                    time.sleep(wait)
+            if digest != sha256:
+                raise FetchError("the downloaded file did not match its fingerprint, so it was refused")
+            partial.replace(path)
+        finally:
+            partial.unlink(missing_ok=True)  # after an error, Ctrl+C or a refusal
+
+    def _save(self, url: str, partial: Path, size: int) -> str:
+        """Download to `partial`, following at most MAX_REDIRECTS redirects between setup hosts; return the SHA-256."""
+        for _ in range(MAX_REDIRECTS + 1):
+            _setup_host(url)
+            with self._client.stream("GET", url) as response:
+                status = response.status_code
+                if status in REDIRECTS and "Location" in response.headers:
+                    url = str(response.url.join(response.headers["Location"]))
+                    continue
+                if status == 429 or status >= 500:
+                    raise _TryAgain(f"busy or failing (status {status})")
+                if status != 200:
+                    raise FetchError(_refusal(status))
+                digest, received = hashlib.sha256(), 0
+                with partial.open("wb") as file:
+                    for chunk in response.iter_bytes():
+                        received += len(chunk)
+                        if received > size:
+                            raise FetchError("the file is larger than expected, so it was refused")
+                        digest.update(chunk)
+                        file.write(chunk)
+                if received < size:
+                    raise _TryAgain("the file arrived incomplete")
+                return digest.hexdigest()
+        raise FetchError(f"sent on more than {MAX_REDIRECTS} times, so it was refused")
 
     def _get(self, url: str, etag: str | None) -> tuple[bytes, str | None] | None:
         host = _allowed_host(url)
@@ -138,6 +201,16 @@ def _allowed_host(url: str) -> str:
     if parsed is None or parsed.scheme != "https" or parsed.host not in ALLOWED_HOSTS or parsed.userinfo:
         raise FetchError("address not allowed (only https to the job lists, job-board APIs and Common Crawl's index)")
     return parsed.host
+
+
+def _setup_host(url: str) -> None:
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL:
+        parsed = None
+    if parsed is None or parsed.scheme != "https" or parsed.host not in SETUP_HOSTS or parsed.userinfo:
+        where = parsed.host if parsed is not None and parsed.host else "an unknown address"
+        raise FetchError(f"it was sent to {where}, which is not on the approved list; nothing was downloaded")
 
 
 def _refusal(status: int) -> str:

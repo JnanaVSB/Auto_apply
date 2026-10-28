@@ -1,5 +1,6 @@
 """Downloads, tested against httpx's built-in fake web layer; nothing here reaches the internet."""
 
+import hashlib
 import threading
 import time
 from itertools import pairwise
@@ -195,3 +196,91 @@ def test_no_answer_at_all_is_reported_as_unreachable_with_the_blocking_hint():
     with pytest.raises(fetch.FetchError) as error:
         fetcher.get_json(LEVER)
     assert not isinstance(error.value, fetch.Unreachable)  # the site answered; it is just failing
+
+
+CONTENT = b"fake model bytes"
+SHA256 = hashlib.sha256(CONTENT).hexdigest()
+MODEL = "https://huggingface.co/fake/model.onnx"
+
+
+def download(tmp_path, *replies):
+    """Download the fake setup file through `replies`; returns its path and the requests made."""
+    fetcher, requests = fake_web(*replies)
+    path = tmp_path / "model.onnx"
+    fetcher.download_file(MODEL, path, len(CONTENT), SHA256)
+    return path, requests
+
+
+def moved(location):
+    return httpx.Response(302, headers={"Location": location})
+
+
+def test_setup_file_follows_redirects_between_approved_hosts(tmp_path):
+    path, requests = download(
+        tmp_path,
+        httpx.Response(307, headers={"Location": "/api/resolve-cache/model.onnx"}),  # same site, short form
+        moved("https://us.aws.cdn.hf.co/xet/abc?signature=1"),
+        httpx.Response(200, content=CONTENT),
+    )
+    assert path.read_bytes() == CONTENT
+    assert [str(request.url) for request in requests] == [
+        MODEL,
+        "https://huggingface.co/api/resolve-cache/model.onnx",
+        "https://us.aws.cdn.hf.co/xet/abc?signature=1",
+    ]
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    ("location", "host"),
+    [
+        ("https://cdn.example.net/model.onnx", "cdn.example.net"),
+        ("http://us.aws.cdn.hf.co/model.onnx", "us.aws.cdn.hf.co"),  # not https
+        ("https://api.lever.co/model.onnx", "api.lever.co"),  # a job site is not a setup host
+    ],
+)
+def test_setup_file_refuses_a_redirect_elsewhere(tmp_path, location, host):
+    with pytest.raises(fetch.FetchError, match=f"sent to {host}, which is not on the approved list"):
+        download(tmp_path, moved(location))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_setup_file_stops_after_two_redirects(tmp_path):
+    with pytest.raises(fetch.FetchError, match="sent on more than 2 times"):
+        download(tmp_path, moved(MODEL), moved(MODEL), moved(MODEL))
+
+
+def test_setup_file_with_the_wrong_fingerprint_is_refused(tmp_path):
+    with pytest.raises(fetch.FetchError, match="did not match its fingerprint"):
+        download(tmp_path, httpx.Response(200, content=b"other model bytes"[: len(CONTENT)]))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_setup_file_larger_than_expected_is_refused(tmp_path):
+    with pytest.raises(fetch.FetchError, match="larger than expected"):
+        download(tmp_path, httpx.Response(200, content=CONTENT + b" and more"))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_busy_site_or_incomplete_file_is_tried_again(tmp_path, clock):
+    path, _ = download(
+        tmp_path, httpx.Response(503), httpx.Response(200, content=CONTENT[:5]), httpx.Response(200, content=CONTENT)
+    )
+    assert path.read_bytes() == CONTENT
+    assert clock.waits == [2, 4]
+
+
+def test_setup_file_gives_up_after_three_retries(tmp_path):
+    with pytest.raises(fetch.FetchError, match="connection failed .ConnectError.; gave up after 3 retries, try again"):
+        download(tmp_path, *[httpx.ConnectError("no route to host")] * 4)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_interrupted_setup_download_leaves_no_file(tmp_path):
+    def stopped_halfway():
+        yield CONTENT[:5]
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        download(tmp_path, httpx.Response(200, content=stopped_halfway()))
+    assert list(tmp_path.iterdir()) == []
