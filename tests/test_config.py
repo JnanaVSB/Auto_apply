@@ -138,3 +138,32 @@ def test_scoring_settings_have_defaults_and_limits(tmp_path):
     assert load_config(write(tmp_path, "data_dir: data\n")).scoring.meaning_threshold == 0.5
     with pytest.raises(ConfigError, match="scoring.skills_threshold: Input should be less than or equal to 1"):
         load_config(write(tmp_path, "data_dir: data\nscoring:\n  skills_threshold: 1.5\n"))
+
+
+AI_ROLE = "data_dir: data\nai:\n  evaluator:\n"
+
+
+@pytest.mark.parametrize(
+    ("role", "problem"),
+    [
+        ("    model: m\n    address: http://192.168.1.5:11434\n", "Ollama must run on this computer"),
+        ("    model: m\n    address: http://0.0.0.0:11434\n", "Ollama must run on this computer"),
+        ("    service: anthropic\n    model: m\n    address: http://api.anthropic.com\n    key_name: k\n", "https://"),
+        ("    service: anthropic\n    model: m\n", "needs key_name"),
+        ("    service: openai-compatible\n    model: m\n    key_name: k\n", "https://"),  # no default address
+        ("    model: rm -rf /\n", "String should match pattern"),
+        ("    model: m\n    thinking: off\n", "thinking: Input should be 'off'"),  # YAML reads a bare off as false
+    ],
+)
+def test_ai_role_settings_are_checked(tmp_path, role, problem):
+    with pytest.raises(ConfigError, match=problem):
+        load_config(write(tmp_path, AI_ROLE + role))
+
+
+def test_ai_roles_have_safe_defaults(tmp_path):
+    role = load_config(write(tmp_path, "data_dir: data\n")).ai.evaluator
+    assert (role.service, role.model, role.address, role.thinking) == (
+        "ollama", "gemma4:26b-a4b-it-q8_0", "http://127.0.0.1:11434", "off"
+    )  # fmt: skip
+    claude = load_config(write(tmp_path, AI_ROLE + "    service: anthropic\n    model: m\n    key_name: k\n"))
+    assert claude.ai.evaluator.address == "https://api.anthropic.com"

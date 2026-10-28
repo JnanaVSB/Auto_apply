@@ -5,13 +5,15 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from app.sources import BOARD_NAME
 from app.sources.boards import BOARDS
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+DEFAULT_ADDRESSES = {"ollama": "http://127.0.0.1:11434", "anthropic": "https://api.anthropic.com"}
 
 
 class ConfigError(Exception):
@@ -70,6 +72,47 @@ class ScoringSettings(BaseModel):
     extra_skills: list[str] = []  # tool names the O*NET skills list lacks, looked for in your resume and in job ads
 
 
+class AIRole(BaseModel):
+    """One role's AI model (the Evaluator now; the Writer and the council later). Never holds a key itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    service: Literal["ollama", "openai-compatible", "anthropic"] = "ollama"
+    model: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")]
+    address: str = ""  # Ollama and Anthropic have defaults; an OpenAI-compatible service needs its own
+    key_name: Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")] | None = None  # the key's name in the keychain
+    thinking: Literal["off", "low", "medium", "high"] = "off"
+    context: Annotated[int, Field(ge=2048, le=262144, strict=True)] = 16384  # Ollama's working size, in word-pieces
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_address(cls, values: object) -> object:
+        if isinstance(values, dict) and not values.get("address"):
+            return values | {"address": DEFAULT_ADDRESSES.get(values.get("service", "ollama"), "")}
+        return values
+
+    @model_validator(mode="after")
+    def _safe_address(self) -> "AIRole":
+        parts = urlsplit(self.address)
+        if self.service == "ollama":
+            if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS or parts.username or parts.password:
+                raise ValueError(
+                    "Ollama must run on this computer (address http://127.0.0.1:11434): it has no password, so it "
+                    "must never be reachable from elsewhere"
+                )
+        elif parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+            raise ValueError("a cloud service's address must start with https:// and hold no name or password")
+        elif self.key_name is None:
+            raise ValueError("a cloud service needs key_name: the name its key is saved under in the keychain")
+        return self
+
+
+class AISettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evaluator: AIRole = AIRole(model="gemma4:26b-a4b-it-q8_0")  # scores jobs (Stage B)
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -80,6 +123,7 @@ class Config(BaseModel):
     phonebook_every_days: Annotated[int, Field(ge=0, le=365, strict=True)] = 30  # dashboard schedule; 0 = off
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
     scoring: ScoringSettings = ScoringSettings()
+    ai: AISettings = AISettings()
 
 
 def load_config(path: Path | None = None) -> Config:

@@ -73,12 +73,14 @@ def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_
     assert not settings_file.with_name("config.yaml.new").exists()
 
 
-def test_saving_the_form_keeps_the_scoring_settings_it_does_not_show(client, settings_file):
+def test_saving_the_form_keeps_the_scoring_and_ai_settings_it_does_not_show(client, settings_file):
     with settings_file.open("a", encoding="utf-8") as file:
         file.write("scoring:\n  meaning_threshold: 0.7\n  extra_skills: [MuJoCo]\n")
+        file.write("ai:\n  evaluator:\n    model: qwen3.6:35b-a3b\n")
     assert "Saved." in save(client, collect_every_hours="6").text
-    scoring = load_config(settings_file).scoring
-    assert (scoring.meaning_threshold, scoring.extra_skills) == (0.7, ["MuJoCo"])
+    config = load_config(settings_file)
+    assert (config.scoring.meaning_threshold, config.scoring.extra_skills) == (0.7, ["MuJoCo"])
+    assert config.ai.evaluator.model == "qwen3.6:35b-a3b"
 
 
 @pytest.mark.parametrize(

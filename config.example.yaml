@@ -44,3 +44,15 @@ scoring:
   extra_skills: ["MuJoCo", "CARLA", "SLURM", "ROS", "ROS 2", "Gazebo", "Isaac Sim", "Isaac Lab", "PyBullet",
                  "Gymnasium", "Stable-Baselines3", "RLlib", "JAX", "CUDA", "scikit-learn", "OpenCV", "MATLAB",
                  "Hugging Face", "Weights & Biases", "MLflow"]
+
+# The AI model for each role. Phase 3b uses only the evaluator, which scores jobs on this computer through Ollama:
+# nothing leaves the laptop. service: ollama, openai-compatible or anthropic; a cloud service also needs key_name, the
+# name its key is saved under in your keychain (never the key itself). thinking: "off", "low", "medium" or "high"
+# (keep the quotes). context: Ollama's working size in word-pieces; the whole resume and job ad must fit in it.
+ai:
+  evaluator:
+    service: ollama
+    model: gemma4:26b-a4b-it-q8_0
+    address: http://127.0.0.1:11434
+    thinking: "off"
+    context: 16384

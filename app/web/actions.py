@@ -238,7 +238,7 @@ def settings_form() -> dict[str, str]:
 def save_settings(form: dict[str, str]) -> str | None:
     """Check the form's settings with the usual rules, then swap them in all at once; returns the problem, or None.
 
-    The data folder is kept exactly as written in the file; it is changed by hand only, and so are the scoring
+    The data folder is kept exactly as written in the file; it is changed by hand only, and so are the scoring and AI
     settings until the form shows them.
     """
     path = settings_file.CONFIG_PATH
@@ -262,7 +262,7 @@ def save_settings(form: dict[str, str]) -> str | None:
                 "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             },
             **{name: _whole(form.get(name, "")) for name in NUMBERS},
-        } | ({"scoring": old["scoring"]} if "scoring" in old else {})
+        } | {section: old[section] for section in ("scoring", "ai") if section in old}
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)
         load_config(new)  # the very rules used when data/config.yaml is read
