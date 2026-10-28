@@ -274,6 +274,17 @@ def list_jobs(conn: sqlcipher3.Connection, view: Filters, scoring: Scoring = DEF
     return page
 
 
+def job_ids(conn: sqlcipher3.Connection, view: Filters, scoring: Scoring, limit: int) -> list[int]:
+    """The first `limit` jobs matching `view`, in its order: what "Score these" scores."""
+    where, values = _where(view)
+    select = SCORED.format(columns="id")
+    rows = conn.execute(
+        f"{select} WHERE {where} ORDER BY {SORTS[view.sort]} LIMIT ?",  # noqa: S608 (fixed rules)
+        [*scoring.values(), *values, limit],
+    )
+    return [job_id for (job_id,) in rows]
+
+
 def counts(conn: sqlcipher3.Connection, scoring: Scoring = DEFAULT_SCORING) -> dict[str, int]:
     """Open jobs by scoring status (they add up to `open`), and how many passed the quick check."""
     columns = f"{STATUS}, count(*), coalesce(sum(a.passed), 0)"

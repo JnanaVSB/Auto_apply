@@ -1,0 +1,5 @@
+{# The scoring box; while scoring runs, HTMX reloads just this box every 2 seconds. #}
+<div id="score-progress"{% if scorer.running %} hx-get="/score/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  <p class="state">{{ {"idle": "No scoring has run since the dashboard opened.", "running": "Scoring… (you can leave this page; it keeps going, and pauses while a collection runs)", "done": "Finished.", "stopped": "Stopped.", "failed": "Could not finish."}[scorer.state] }}</p>
+  {% if scorer.lines %}<pre class="lines">{{ scorer.lines | join("\n") }}</pre>{% endif %}
+</div>

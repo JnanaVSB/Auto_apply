@@ -7,6 +7,7 @@ import sys
 import time
 from contextlib import closing
 from pathlib import Path
+from typing import NamedTuple
 
 import sqlcipher3
 
@@ -15,7 +16,7 @@ from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher
 from app.keychain import KeychainError
 from app.llm import ollama
-from app.resume import ResumeError, read_resume
+from app.resume import Resume, ResumeError, read_resume
 from app.scoring import files, queue, stage_a
 from app.scoring.meaning import Meaning
 
@@ -55,14 +56,26 @@ def setup(config: Config) -> bool:
     return ready
 
 
-def score(config: Config) -> None:
-    with closing(Fetcher()) as fetcher:
-        folder = files.ensure_files(fetcher)
+class Prepared(NamedTuple):
+    checker: stage_a.Checker
+    setup: str
+    resume: Resume
+
+
+def prepare(config: Config, fetcher: Fetcher, out: queue.Output = print) -> Prepared:
+    """What every scoring run needs, from the terminal or the dashboard: the files, the resume, the quick check."""
+    folder = files.ensure_files(fetcher, out)
     resume = read_resume(config.data_dir)
     keywords, extra = config.roles.keywords, config.scoring.extra_skills
     checker = stage_a.Checker(keywords, stage_a.skill_names(folder, extra), resume.text, Meaning.load(folder))
+    return Prepared(checker, stage_a.setup_fingerprint(resume, keywords, extra), resume)
+
+
+def score(config: Config) -> None:
+    with closing(Fetcher()) as fetcher:
+        prepared = prepare(config, fetcher)
     with closing(open_database(config.data_dir)) as conn:
-        queue.run(conn, config, checker, stage_a.setup_fingerprint(resume, keywords, extra), resume)
+        queue.run(conn, config, *prepared)
 
 
 def main(argv: list[str] | None = None) -> int:

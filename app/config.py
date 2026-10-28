@@ -72,6 +72,7 @@ class ScoringSettings(BaseModel):
     extra_skills: list[str] = []  # tool names the O*NET skills list lacks, looked for in your resume and in job ads
     minutes_per_day: Annotated[int, Field(ge=1, le=1440, strict=True)] = 120  # automatic AI scoring time per day
     ready_threshold: Annotated[int, Field(ge=0, le=100, strict=True)] = 70  # AI score from which a job is ready
+    automatic: bool = True  # while the dashboard is open, score whenever there is something to do
 
 
 class AIRole(BaseModel):

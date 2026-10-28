@@ -49,10 +49,19 @@ def today() -> str:
 
 def waiting(conn: sqlcipher3.Connection, model: str, setup: str, resume: str) -> list[int]:
     """The jobs to score automatically, in order."""
+    return [job_id for (job_id,) in conn.execute(WAITING, _ages(model, setup, resume))]
+
+
+def has_work(conn: sqlcipher3.Connection, model: str, setup: str, resume: str) -> bool:
+    """Whether a run would do anything: jobs to check quickly, or jobs waiting for the AI."""
+    checks = conn.execute(f"{stage_a.TO_CHECK} LIMIT 1", (setup,)).fetchone()  # noqa: S608 (fixed SQL)
+    return bool(checks or conn.execute(f"{WAITING} LIMIT 1", _ages(model, setup, resume)).fetchone())  # noqa: S608
+
+
+def _ages(model: str, setup: str, resume: str) -> dict:
     day = date.fromisoformat(today())
     week, month, oldest = (str(day - timedelta(days=days)) for days in AGE_GROUPS)
-    values = {"model": model, "setup": setup, "resume": resume, "oldest": oldest, "week": week, "month": month}
-    return [job_id for (job_id,) in conn.execute(WAITING, values)]
+    return {"model": model, "setup": setup, "resume": resume, "oldest": oldest, "week": week, "month": month}
 
 
 def used_today(conn: sqlcipher3.Connection) -> float:

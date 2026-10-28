@@ -17,7 +17,7 @@ import yaml
 
 from app import collect, db, jobs
 from app import config as settings_file
-from app.config import Config, ConfigError, load_config
+from app.config import AISettings, Config, ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import BOARD_NAME, SourceError, greenhouse
@@ -235,9 +235,31 @@ def _whole(text: str) -> int | str:
     return int(text) if re.fullmatch(r"[0-9]{1,9}", text) else text  # "²" is not a number
 
 
+def _decimal(text: str) -> float | str:
+    """A number like 0.5 typed in the form; anything else is kept as typed, so the settings check names it."""
+    text = text.strip()
+    return float(text) if re.fullmatch(r"[0-9]{1,3}(\.[0-9]{1,6})?", text) else text
+
+
 def _lines(text: str) -> list[str]:
     """One entry per line: spaces trimmed, empty lines left out, repeats kept once."""
     return list(dict.fromkeys(line.strip() for line in text.splitlines() if line.strip()))
+
+
+# The Scoring section's fields, and how each is read from the form. A field missing from the form keeps its value.
+SCORING_FIELDS = {
+    "automatic": lambda text: text == "on",
+    "minutes_per_day": _whole,
+    "ready_threshold": _whole,
+    "meaning_threshold": _decimal,
+    "skills_threshold": _decimal,
+    "extra_skills": _lines,
+}
+EVALUATOR_FIELDS = {
+    "ai_model": ("model", str.strip),
+    "ai_thinking": ("thinking", str),
+    "ai_context": ("context", _whole),
+}
 
 
 def settings_form() -> dict[str, str]:
@@ -253,14 +275,22 @@ def settings_form() -> dict[str, str]:
     } | {name: str(raw.get(name, Config.model_fields[name].default)) for name in NUMBERS}  # defaults from Config
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
+    scoring, defaults = raw.get("scoring") or {}, ScoringSettings()
+    evaluator = (raw.get("ai") or {}).get("evaluator") or {}
+    numbers = ("minutes_per_day", "ready_threshold", "meaning_threshold", "skills_threshold")
+    form |= {name: str(scoring.get(name, getattr(defaults, name))) for name in numbers}
+    form["automatic"] = "on" if scoring.get("automatic", defaults.automatic) else "off"
+    form["extra_skills"] = "\n".join(scoring.get("extra_skills") or [])
+    role = AISettings().evaluator
+    form |= {field: str(evaluator.get(name, getattr(role, name))) for field, (name, _) in EVALUATOR_FIELDS.items()}
     return form
 
 
 def save_settings(form: dict[str, str]) -> str | None:
     """Check the form's settings with the usual rules, then swap them in all at once; returns the problem, or None.
 
-    The data folder is kept exactly as written in the file; it is changed by hand only, and so are the scoring and AI
-    settings until the form shows them.
+    The data folder is kept exactly as written in the file; it is changed by hand only. So are the AI settings the
+    form does not show (a cloud service, its address and key name, other roles).
     """
     path = settings_file.CONFIG_PATH
     rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
@@ -283,7 +313,16 @@ def save_settings(form: dict[str, str]) -> str | None:
                 "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             },
             **{name: _whole(form.get(name, "")) for name in NUMBERS},
-        } | {section: old[section] for section in ("scoring", "ai") if section in old}
+        }
+        scoring = dict(old.get("scoring") or {}) | {
+            name: read(form[name]) for name, read in SCORING_FIELDS.items() if name in form
+        }
+        ai = dict(old.get("ai") or {})
+        evaluator = dict(ai.get("evaluator") or {}) | {
+            name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
+        }
+        ai |= {"evaluator": evaluator} if evaluator else {}
+        settings |= {name: section for name, section in (("scoring", scoring), ("ai", ai)) if section}
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)
         load_config(new)  # the very rules used when data/config.yaml is read

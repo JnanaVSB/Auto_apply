@@ -19,6 +19,22 @@
 
 {% include "collect_progress.html" %}
 
+<h2 id="scoring">Scoring</h2>
+<form method="post" action="/score">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <button type="submit"{% if scorer.running %} disabled{% endif %}>Score now</button>
+  <span class="muted">The quick check on new and changed jobs, then the AI score for those that passed, newest first,
+    the same as <code>python -m app.score</code>. Results are saved job by job.</span>
+</form>
+{% if score_refused %}<p class="error" role="alert">{{ score_refused }}</p>{% endif %}
+{% include "score_progress.html" %}
+{% if scoring %}
+<p>{% if scoring.automatic %}Automatic scoring is on: while the dashboard is open, it starts by itself whenever there is
+  something to score, up to {{ scoring.minutes_per_day }} minutes of AI time a day{% if scorer.failed_at %}; after a
+  failed run it waits 30 minutes before trying again{% endif %}.{% else %}Automatic scoring is off.{% endif %}
+  Change it on the <a href="/settings">Settings</a> page.</p>
+{% endif %}
+
 <h2>Automatic collection</h2>
 {% if settings_error %}
 <p class="error">{{ settings_error }}</p>

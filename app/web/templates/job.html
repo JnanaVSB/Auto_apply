@@ -60,6 +60,10 @@
     {% endfor %}
     {% if scoring.answer %}<button type="submit" name="label" value="clear">clear</button>{% endif %}
   </form>
+  <form method="post" action="/jobs/{{ job.id }}/score">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit">Score this job</button>
+  </form>
   <form method="post" action="/jobs/{{ job.id }}/prepare">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <input type="hidden" name="back" value="{{ back }}">

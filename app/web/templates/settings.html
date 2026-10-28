@@ -54,6 +54,41 @@
   <p class="hint">Each site is read on its own, all at the same time. A higher number makes collections faster but asks
     more of each site. Common Crawl is always read slowly.</p>
 
+  <h2>Scoring</h2>
+  <p class="hint">Nothing leaves this computer: the quick check and the AI both run here.
+    <strong>{{ ollama_line }}</strong></p>
+  <label>Automatic scoring while the dashboard is open
+    <select name="automatic">
+      {% for value, label in [("on", "on: score new, changed and waiting jobs by itself"), ("off", "off: only on request")] %}
+      <option value="{{ value }}"{% if form.automatic == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
+  <label>AI scoring time per day, in minutes (1 to 1440; then it continues the next day)
+    <input name="minutes_per_day" type="number" min="1" max="1440" step="1" value="{{ form.minutes_per_day }}"></label>
+  <label>Ready for preparation from this AI score (0 to 100)
+    <input name="ready_threshold" type="number" min="0" max="100" step="1" value="{{ form.ready_threshold }}"></label>
+  <p class="hint">The quick check passes a job with one of your keywords in its title, or with both of these reached.
+    The Answer key page shows how well they agree with your marks.</p>
+  <label>Meaning match needed (0 to 1)
+    <input name="meaning_threshold" type="number" min="0" max="1" step="0.01" value="{{ form.meaning_threshold }}"></label>
+  <label>Share of the job's skills your resume must have (0 to 1)
+    <input name="skills_threshold" type="number" min="0" max="1" step="0.01" value="{{ form.skills_threshold }}"></label>
+  <label>Extra skills the O*NET list lacks, one per line, written as job ads write them
+    <textarea name="extra_skills" rows="5">{{ form.extra_skills }}</textarea></label>
+
+  <h2>AI model</h2>
+  <p class="hint">The evaluator scores jobs with Ollama on this computer. Download a model first with
+    <code>ollama pull</code> and its name. Cloud services and their keys come in a later phase.</p>
+  <label>Model name <input name="ai_model" maxlength="100" value="{{ form.ai_model }}"></label>
+  <label>Thinking (off is fastest; scoring is a simple task)
+    <select name="ai_thinking">
+      {% for value in ["off", "low", "medium", "high"] %}
+      <option{% if form.ai_thinking == value %} selected{% endif %}>{{ value }}</option>
+      {% endfor %}
+    </select></label>
+  <label>Working size in word-pieces (2048 to 262144; the whole resume and job ad must fit)
+    <input name="ai_context" type="number" min="2048" max="262144" step="1" value="{{ form.ai_context }}"></label>
+
   <h2>Boards you stopped</h2>
   {% if stopped %}
   <p class="hint">Never read by a collection until you read them again. Nothing was deleted.</p>

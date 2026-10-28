@@ -85,6 +85,15 @@
   {% if page.total %}Showing {{ "{:,}".format(page.first) }}–{{ "{:,}".format(page.first + page.jobs | length - 1) }} of {{ "{:,}".format(page.total) }} jobs.{% else %}No jobs match these filters.{% endif %}
   {% if page.other_statuses %}<a href="{{ view.address(status=(), page=1) }}">+{{ "{:,}".format(page.other_statuses) }} with another status</a>{% endif %}
 </p>
+{% if page.total %}
+<form method="post" action="/score/these" class="score-these">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="back" value="{{ view.address(page=1) }}">
+  <button type="submit">Score these {{ number([page.total, SCORE_THESE] | min) }} jobs</button>
+  <span class="muted">{% if page.total > SCORE_THESE %}the first {{ SCORE_THESE }} in this order; {% endif %}any age, with
+    the chosen model; does not use up the day's scoring time</span>
+</form>
+{% endif %}
 
 {% if page.jobs %}
 <table class="jobs">

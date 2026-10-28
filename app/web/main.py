@@ -19,10 +19,12 @@ from starlette.exceptions import HTTPException
 from app import db
 from app.config import ConfigError, load_config
 from app.fetch import Fetcher
+from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
 from app.web import actions, queries, security
 from app.web.collector import Collector
+from app.web.scorer import Scorer
 
 HERE = Path(__file__).parent
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
@@ -39,7 +41,8 @@ templates.env.globals["US_LABELS"] = queries.US_LABELS
 templates.env.globals["BOARD_KINDS"] = [(kind, kind.title()) for kind in BOARDS]  # Source choices on the jobs page
 ANSWERS = ("yes", "maybe", "no", "clear")
 LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
-templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE}
+SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queue every job
+templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE, "SCORE_THESE": SCORE_THESE}
 
 
 def create_app(
@@ -53,14 +56,16 @@ def create_app(
             schedule = asyncio.create_task(_schedule(app))
             try:
                 yield
-            finally:  # the dashboard is closing: so are the schedule and any collection
+            finally:  # the dashboard is closing: so are the schedule, any collection and any scoring
                 schedule.cancel()
                 await asyncio.to_thread(app.state.collector.stop)
+                await asyncio.to_thread(app.state.scorer.stop)
                 app.state.collector.fetcher.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
+    app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
@@ -144,6 +149,29 @@ def create_app(
             return RedirectResponse(_back(form.get("back", "")), 303)
         return _to_job(job_id, form)
 
+    @app.post("/jobs/{job_id:int}/score")
+    async def score_job(request: Request, job_id: int) -> Response:
+        if queries.job(request.app.state.conn, _known(job_id)) is None:
+            raise HTTPException(404)
+        request.app.state.scorer.notice = request.app.state.scorer.start([job_id])
+        return RedirectResponse("/collect#scoring", 303)
+
+    @app.post("/score")
+    async def score_now(request: Request) -> Response:
+        request.app.state.scorer.notice = request.app.state.scorer.start()
+        return RedirectResponse("/collect#scoring", 303)  # so reloading the page never starts another run
+
+    @app.post("/score/these")
+    async def score_these(request: Request) -> Response:
+        view = queries.Filters.from_address(urlsplit(_back(request.state.form.get("back", ""))).query)
+        ids = queries.job_ids(request.app.state.conn, view, _scoring(), SCORE_THESE)
+        request.app.state.scorer.notice = request.app.state.scorer.start(ids) if ids else "No jobs to score."
+        return RedirectResponse("/collect#scoring", 303)
+
+    @app.get("/score/progress")
+    async def score_progress(request: Request) -> Response:
+        return _page(request, "score_progress.html", scorer=request.app.state.scorer)
+
     @app.post("/jobs/{job_id:int}/answer")
     async def answer(request: Request, job_id: int) -> Response:
         form = request.state.form
@@ -224,9 +252,10 @@ def create_app(
 
     @app.get("/collect")
     async def collect_page(request: Request) -> Response:
-        collector = request.app.state.collector
+        collector, scorer = request.app.state.collector, request.app.state.scorer
         notice, collector.notice = collector.notice, None  # shown once
-        return _collect_page(request, refused=notice)
+        score_notice, scorer.notice = scorer.notice, None
+        return _collect_page(request, refused=notice, score_refused=score_notice)
 
     @app.post("/collect")
     async def collect_now(request: Request) -> Response:
@@ -244,13 +273,13 @@ def create_app(
 
     @app.get("/settings")
     async def settings_page(request: Request) -> Response:
-        return _settings_page(request)
+        return await _settings_page(request)
 
     @app.post("/settings")
     async def save_settings(request: Request) -> Response:
         problem = actions.save_settings(request.state.form)
         typed = request.state.form if problem else None  # a refused save keeps what was typed
-        return _settings_page(request, problem=problem, typed=typed)
+        return await _settings_page(request, problem=problem, typed=typed)
 
     return app
 
@@ -259,10 +288,11 @@ async def _schedule(app: FastAPI) -> None:
     """The schedule's check, once a minute while the dashboard is open."""
     while True:
         await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
-        try:
-            app.state.collector.tick(app.state.conn)
-        except Exception as error:  # e.g. the database busy for a moment: try again next minute
-            log.error("Schedule check failed: %s", type(error).__name__)
+        for runner in (app.state.collector, app.state.scorer):  # collections first: scoring then sees one running
+            try:
+                runner.tick(app.state.conn)
+            except Exception as error:  # e.g. the database busy for a moment: try again next minute
+                log.error("Schedule check failed: %s", type(error).__name__)
 
 
 def _scoring() -> queries.Scoring:
@@ -278,16 +308,17 @@ def _scoring() -> queries.Scoring:
     return queries.Scoring(config.ai.evaluator.model, config.scoring.ready_threshold, resume)
 
 
-def _collect_page(request: Request, refused: str | None = None) -> HTMLResponse:
+def _collect_page(request: Request, refused: str | None = None, score_refused: str | None = None) -> HTMLResponse:
     try:
         config, settings_error = load_config(), None
-        every, refresh_every = config.collect_every_hours, config.phonebook_every_days
+        every, refresh_every, automatic = config.collect_every_hours, config.phonebook_every_days, config.scoring
     except ConfigError as error:
-        every, refresh_every, settings_error = 0, 0, str(error)
+        every, refresh_every, automatic, settings_error = 0, 0, None, str(error)
     conn = request.app.state.conn
     return _page(
         request, "collect.html", collector=request.app.state.collector, refused=refused, runs=queries.last_runs(conn),
         every=every, refresh_every=refresh_every, refreshes=queries.last_refreshes(conn), settings_error=settings_error,
+        scorer=request.app.state.scorer, score_refused=score_refused, scoring=automatic,
     )  # fmt: skip
 
 
@@ -307,16 +338,22 @@ def _boards_back(address: str) -> str:
     return address if address.startswith("/boards?") and len(address) <= 1000 else "/boards"
 
 
-def _settings_page(request: Request, problem: str | None = None, typed: dict[str, str] | None = None) -> HTMLResponse:
+async def _settings_page(
+    request: Request, problem: str | None = None, typed: dict[str, str] | None = None
+) -> HTMLResponse:
     try:
-        load_config()  # a settings file that breaks the rules is shown as a problem, never edited
+        config = load_config()  # a settings file that breaks the rules is shown as a problem, never edited
         form = actions.settings_form() | {name: value for name, value in (typed or {}).items() if name != "data_dir"}
     except ConfigError as error:
         return _page(request, "settings.html", file_problem=str(error))
     rows = sum(1 for name in form if actions.LIST_ROW.fullmatch(name)) + 1  # every list, plus one empty row
+    if config.ai.evaluator.service == "ollama":
+        _, ollama_line = await run_in_threadpool(ollama.status, config.ai.evaluator)  # waits up to 5 s for Ollama
+    else:  # a cloud service is never asked from here
+        ollama_line = "Phase 3b scores jobs only on this computer: set ai.evaluator.service to ollama."
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
-        rows=rows, stopped=queries.stopped_boards(request.app.state.conn),
+        rows=rows, stopped=queries.stopped_boards(request.app.state.conn), ollama_line=ollama_line,
     )  # fmt: skip
 
 
