@@ -653,6 +653,75 @@ def test_version_8_adds_the_phone_book_and_keeps_every_board(tmp_path, monkeypat
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
+def test_version_9_adds_scoring_and_keeps_every_job(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_8:
+        version_8.setattr(db, "UPGRADES", db.UPGRADES[:8])
+        version_8.setattr(db, "SCHEMA_VERSION", 8)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO jobs (id, apply_url, match_key, company, title, locations, us_location, remote, level, "
+                "sponsorship, terms, description, first_seen, last_seen, status) VALUES (1, 'https://acme.example/1', "
+                "'k', 'Acme', 'ML Intern', '[]', 'yes', 'unknown', 'intern', 'unknown', '[]', 'Train robots.', 'now', "
+                "'now', 'open')"
+            )
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT title, prepare_anyway FROM jobs").fetchall() == [("ML Intern", 0)]
+        for table in ("stage_a", "ai_scores", "answer_key", "scoring_days"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 (fixed names)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v8") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+
+
+def _scored_job(conn) -> None:
+    """One job with a quick check and an AI score, both up to date."""
+    conn.execute(
+        "INSERT INTO jobs (id, apply_url, match_key, company, title, locations, us_location, remote, level, "
+        "sponsorship, terms, description, first_seen, last_seen, status) VALUES (1, 'https://acme.example/1', 'k', "
+        "'Acme', 'ML Intern', '[]', 'yes', 'unknown', 'intern', 'unknown', '[]', 'Train robots.', 'now', 'now', 'open')"
+    )
+    conn.execute(
+        "INSERT INTO stage_a (job_id, setup, keywords, job_skills, shared_skills, meaning, title_only, passed, "
+        "checked_on) VALUES (1, 'fp', '[\"ML\"]', 4, '[\"Python\"]', 0.8, 0, 1, 'now')"
+    )
+    conn.execute("INSERT INTO ai_scores (job_id, model, score, resume, scored_on) VALUES (1, 'm', 80, 'fp', 'now')")
+
+
+@pytest.mark.parametrize(
+    ("update", "changed"),
+    [
+        ("description = 'Train more robots.'", 1),
+        ("title = 'ML Engineer Intern'", 1),
+        ("description = 'Train robots.', last_seen = 'later'", 0),  # a collection saving the same text
+        ("prepare_anyway = 1", 0),
+    ],
+)
+def test_changed_job_text_marks_its_results_out_of_date(data_dir, update, changed):
+    with closing(db.connect(data_dir)) as conn, conn:
+        _scored_job(conn)
+        conn.execute(f"UPDATE jobs SET {update} WHERE id = 1")  # noqa: S608 (fixed test values)
+        assert conn.execute("SELECT changed FROM stage_a").fetchone()[0] == changed
+        assert conn.execute("SELECT changed FROM ai_scores").fetchone()[0] == changed
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE ai_scores SET score = 101",
+        "UPDATE ai_scores SET score = NULL",  # neither a score nor why it failed
+        "UPDATE ai_scores SET failed = 'bad answer twice'",  # both a score and a failure
+        "INSERT INTO answer_key VALUES (1, 'perhaps', 'now')",
+    ],
+)
+def test_scoring_tables_refuse_impossible_values(data_dir, sql):
+    with closing(db.connect(data_dir)) as conn:
+        with conn:
+            _scored_job(conn)
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute(sql)
+
+
 def test_the_database_uses_wal_so_readers_never_wait(data_dir):
     with closing(db.connect(data_dir)) as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"

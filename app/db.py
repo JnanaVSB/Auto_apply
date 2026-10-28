@@ -246,6 +246,56 @@ UPGRADES = (
         continues INTEGER NOT NULL DEFAULT 0  -- 1 when it continued an unfinished round instead of starting one
     );
     """,
+    """
+    -- Phase 3b scoring. Nothing is deleted: a job's results are only replaced by newer ones for the same job. Its
+    -- status (ready, low score, ...) is worked out when shown, so a new threshold applies at once.
+    CREATE TABLE stage_a (  -- the quick check on this computer, one row per job
+        job_id INTEGER PRIMARY KEY REFERENCES jobs (id),
+        setup TEXT NOT NULL,  -- fingerprint of your resume, keywords, skills list and meaning model at the time
+        changed INTEGER NOT NULL DEFAULT 0,  -- 1 once the job's title or description changed (trigger below)
+        keywords TEXT NOT NULL,  -- JSON list of your keywords found
+        job_skills INTEGER NOT NULL,  -- skills from the list found in the ad
+        shared_skills TEXT NOT NULL,  -- JSON list of those also in your resume
+        meaning REAL NOT NULL,  -- meaning match, 0 to 1
+        title_only INTEGER NOT NULL,  -- the job had no description, so only its title was checked
+        trick TEXT,  -- a phrase like "ignore previous instructions" found in the ad; NULL when none
+        passed INTEGER NOT NULL,
+        checked_on TEXT NOT NULL
+    );
+    CREATE INDEX stage_a_queue ON stage_a (passed, changed);
+    CREATE TABLE ai_scores (  -- the local AI's score, one row per job per model
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        model TEXT NOT NULL,
+        score INTEGER CHECK (score BETWEEN 0 AND 100),  -- NULL when scoring failed
+        reasons TEXT NOT NULL DEFAULT '[]',  -- JSON list of up to 3 short strings
+        failed TEXT,  -- why the AI score failed, e.g. a bad answer twice; NULL when scored
+        odd TEXT,  -- why the score looks odd; NULL when it doesn't
+        resume TEXT NOT NULL,  -- fingerprint of the resume it read
+        changed INTEGER NOT NULL DEFAULT 0,  -- 1 once the job's title or description changed
+        scored_on TEXT NOT NULL,
+        PRIMARY KEY (job_id, model),
+        CHECK ((score IS NULL) != (failed IS NULL))  -- either a score or the reason it failed
+    );
+    CREATE INDEX ai_scores_model ON ai_scores (model, score);
+    CREATE TABLE answer_key (  -- your marks, used to choose the thresholds and the model
+        job_id INTEGER PRIMARY KEY REFERENCES jobs (id),
+        label TEXT NOT NULL CHECK (label IN ('yes', 'maybe', 'no')),
+        marked_on TEXT NOT NULL
+    );
+    CREATE TABLE scoring_days (
+        day TEXT PRIMARY KEY,  -- the date on this computer's clock
+        seconds REAL NOT NULL DEFAULT 0  -- automatic AI scoring time used that day ("Score these" does not count)
+    );
+    ALTER TABLE jobs ADD COLUMN prepare_anyway INTEGER NOT NULL DEFAULT 0;  -- you sent it on despite its score
+    -- A changed title or description makes the job's results out of date, without touching the collection code.
+    -- A later upgrade that rebuilds the jobs table must create this trigger again.
+    CREATE TRIGGER job_text_changed AFTER UPDATE OF title, description ON jobs
+        WHEN old.title IS NOT new.title OR old.description IS NOT new.description
+    BEGIN
+        UPDATE stage_a SET changed = 1 WHERE job_id = new.id;
+        UPDATE ai_scores SET changed = 1 WHERE job_id = new.id;
+    END;
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
