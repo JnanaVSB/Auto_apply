@@ -1,5 +1,12 @@
 {# The scoring box; while scoring runs, HTMX reloads just this box every 2 seconds. #}
 <div id="score-progress"{% if scorer.running %} hx-get="/score/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
   <p class="state">{{ {"idle": "No scoring has run since the dashboard opened.", "running": "Scoring… (you can leave this page; it keeps going, and pauses while a collection runs)", "done": "Finished.", "stopped": "Stopped.", "failed": "Could not finish."}[scorer.state] }}</p>
+  {% if scorer.running %}
+  <form method="post" action="/score/stop">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit"{% if scorer.stopping %} disabled{% endif %}>{{ "Stopping…" if scorer.stopping else "Stop scoring" }}</button>
+    <span class="muted">after the current job (up to a few minutes); everything finished stays saved</span>
+  </form>
+  {% endif %}
   {% if scorer.lines %}<pre class="lines">{{ scorer.lines | join("\n") }}</pre>{% endif %}
 </div>

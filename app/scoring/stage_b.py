@@ -32,11 +32,15 @@ SHAPE = {
 }
 MARKER = re.compile(r"<\s*(/?)\s*job\s*>", re.IGNORECASE)  # look-alikes of the markers, inside an ad
 MAX_REASONS, MAX_REASON = 3, 200
-NOT_ALLOWED = re.compile(r"https?:|www\.|[<>]", re.IGNORECASE)  # links and page code
+NOT_ALLOWED = re.compile(r"https?:|www\.", re.IGNORECASE)  # links
+LOOK_ALIKES = str.maketrans("<>", "\u2039\u203a")  # ‹ and ›: "has <2 years" stays readable, never page code
 COPIED = 20  # a whole reason this long found word for word in the ad was copied from it
 ODD_SCORE = 85
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+HAS_SCORE = "SELECT 1 FROM ai_scores WHERE job_id = ? AND model = ? AND score IS NOT NULL"
+SAVE_FAILURE = "INSERT OR REPLACE INTO ai_failures (job_id, model, failed, resume, tried_on) VALUES (?, ?, ?, ?, ?)"
+CLEAR_FAILURE = "DELETE FROM ai_failures WHERE job_id = ? AND model = ?"  # a new score replaces the failed try
 ADD_TIME = """INSERT INTO scoring_days (day, seconds) VALUES (?, ?)
     ON CONFLICT (day) DO UPDATE SET seconds = seconds + excluded.seconds"""
 Ask = Callable[..., str]
@@ -69,7 +73,7 @@ def checked(text: str) -> tuple[int, list[str]] | None:
         return None
     if not isinstance(reasons, list) or len(reasons) > MAX_REASONS or not all(isinstance(r, str) for r in reasons):
         return None
-    reasons = [CONTROL.sub("", reason).strip() for reason in reasons]
+    reasons = [CONTROL.sub("", reason).translate(LOOK_ALIKES).strip() for reason in reasons]
     if any(len(reason) > MAX_REASON or NOT_ALLOWED.search(reason) for reason in reasons):
         return None
     return score, reasons
@@ -128,11 +132,16 @@ def _odd(score: int, reasons: list[str], ad: str, quick: Check, settings: Scorin
 def save(
     conn: sqlcipher3.Connection, job_id: int, model: str, result: Score, resume_fingerprint: str, day: str | None = None
 ) -> None:
-    """One job's score for one model, replacing that model's older score for the job; with a `day`, its time counts
-    towards that day's scoring time. Saved together, never half-saved."""
+    """One job's result for one model. A score replaces that model's older result for the job; a failure is kept
+    apart when the job already has a score, so that score and its reasons stay. With a `day`, its time counts towards
+    that day's scoring time. Saved together, never half-saved."""
+    now = datetime.now(UTC).isoformat(timespec="seconds")
     with conn:
         if day:
             conn.execute(ADD_TIME, (day, result.seconds))
+        if result.failed and conn.execute(HAS_SCORE, (job_id, model)).fetchone():
+            conn.execute(SAVE_FAILURE, (job_id, model, result.failed, resume_fingerprint, now))
+            return
         conn.execute(
             SAVE,
             (
@@ -143,6 +152,7 @@ def save(
                 result.failed,
                 result.odd,
                 resume_fingerprint,
-                datetime.now(UTC).isoformat(timespec="seconds"),
+                now,
             ),
         )
+        conn.execute(CLEAR_FAILURE, (job_id, model))

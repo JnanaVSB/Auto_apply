@@ -168,6 +168,11 @@ def create_app(
         request.app.state.scorer.notice = request.app.state.scorer.start(ids) if ids else "No jobs to score."
         return RedirectResponse("/collect#scoring", 303)
 
+    @app.post("/score/stop")
+    async def stop_scoring(request: Request) -> Response:
+        request.app.state.scorer.cancel()
+        return RedirectResponse("/collect#scoring", 303)
+
     @app.get("/score/progress")
     async def score_progress(request: Request) -> Response:
         return _page(request, "score_progress.html", scorer=request.app.state.scorer)
@@ -300,7 +305,9 @@ def create_app(
 
     @app.post("/settings")
     async def save_settings(request: Request) -> Response:
-        problem = actions.save_settings(request.state.form)
+        problem, scorer = actions.save_settings(request.state.form), request.app.state.scorer
+        if not problem and scorer.automatic and not load_config().scoring.automatic:
+            scorer.cancel()  # automatic scoring switched off: its run stops after the current job
         typed = request.state.form if problem else None  # a refused save keeps what was typed
         return await _settings_page(request, problem=problem, typed=typed)
 
@@ -341,16 +348,20 @@ async def _installed() -> list[str]:
 
 
 def _collect_page(request: Request, refused: str | None = None, score_refused: str | None = None) -> HTMLResponse:
+    resume_problem = None
     try:
         config, settings_error = load_config(), None
         every, refresh_every, automatic = config.collect_every_hours, config.phonebook_every_days, config.scoring
+        read_resume(config.data_dir)
     except ConfigError as error:
         every, refresh_every, automatic, settings_error = 0, 0, None, str(error)
+    except ResumeError as error:  # why nothing scores, before anyone presses Score now
+        resume_problem = str(error)
     conn = request.app.state.conn
     return _page(
         request, "collect.html", collector=request.app.state.collector, refused=refused, runs=queries.last_runs(conn),
         every=every, refresh_every=refresh_every, refreshes=queries.last_refreshes(conn), settings_error=settings_error,
-        scorer=request.app.state.scorer, score_refused=score_refused, scoring=automatic,
+        scorer=request.app.state.scorer, score_refused=score_refused, scoring=automatic, resume_problem=resume_problem,
     )  # fmt: skip
 
 

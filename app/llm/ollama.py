@@ -3,14 +3,16 @@
 import httpx
 
 from app.config import AIRole
-from app.llm import LLMError, StopScoring, TooLong
+from app.llm import StopScoring, TooLong
 
 KEEP_LOADED = "10m"  # the model stays in memory between jobs for this long
 ANSWER_LIMIT = 1024  # word-pieces; with thinking on, the model needs more room
 THINKING_ANSWER_LIMIT = 4096
-CHARACTERS_PER_PIECE = 8  # any text has at least one word-piece per 8 characters; fewer read means a cut prompt
 OUT_OF_MEMORY = ("out of memory", "cudamalloc", "cuda error")
+TOO_LONG = ("exceed_context_size", "exceeds the available context size")  # its refusal while told not to cut
+DETAIL = 200  # characters of Ollama's own error text shown; it names the cause and never holds the texts sent
 STATUS_SECONDS = 5
+UNEXPECTED = "Ollama did not answer as expected: restart it with `ollama serve`."
 
 
 def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool) -> str:
@@ -21,6 +23,7 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
         "think": False if role.thinking == "off" else role.thinking,
         "stream": False,
         "keep_alive": KEEP_LOADED,
+        "truncate": False,  # refuse a too-long prompt instead of silently cutting its start, where the resume is
         "options": {
             "num_ctx": role.context,
             "temperature": 0.3 if retry else 0,
@@ -32,25 +35,43 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
     if reply.status_code == 404:
         raise StopScoring(f"The model {role.model} is not downloaded: run `ollama pull {role.model}`.")
     if reply.status_code != 200:
-        if any(sign in reply.text.lower() for sign in OUT_OF_MEMORY):
+        text = reply.text.lower()
+        if reply.status_code == 400 and any(sign in text for sign in TOO_LONG):  # only this job's texts are at fault
+            raise TooLong(
+                f"the texts (about {(len(system) + len(user)) // 4:,} word-pieces) do not fit the model's working "
+                f"size of {role.context:,}"
+            )
+        if any(sign in text for sign in OUT_OF_MEMORY):
             raise StopScoring(
                 "The AI model ran out of graphics memory: close programs using the graphics card, or choose a "
                 "smaller model."
             )
-        raise LLMError(f"Ollama refused the request (status {reply.status_code}).")
-    data = reply.json()
-    sent = len(system) + len(user)
-    if data.get("prompt_eval_count", 0) * CHARACTERS_PER_PIECE < sent:  # Ollama cuts long prompts without saying so
-        raise TooLong(
-            f"the texts (about {sent // 4:,} word-pieces) do not fit the model's working size of {role.context:,}"
+        detail = " ".join(reply.text.split())[:DETAIL]
+        raise StopScoring(  # any other refusal would refuse every job alike: memory, a crashed runner, a setting
+            f"Ollama refused the request (status {reply.status_code}: {detail}). Restart it with `ollama serve`, or "
+            "check the AI model settings."
         )
-    return data.get("message", {}).get("content", "")
+    try:
+        content = reply.json()["message"]["content"]
+    except (ValueError, TypeError, KeyError):
+        content = None
+    if not isinstance(content, str):
+        raise StopScoring(UNEXPECTED)
+    return content
 
 
 def _tags(role: AIRole, transport: httpx.BaseTransport | None) -> httpx.Response:
     """Ollama's list of downloaded models."""
     with httpx.Client(transport=transport, timeout=STATUS_SECONDS, follow_redirects=False, trust_env=False) as client:
         return client.get(f"{role.address}/api/tags")
+
+
+def _names(reply: httpx.Response) -> set[str] | None:
+    """The model names in Ollama's list; None when the reply is not such a list."""
+    try:
+        return {name for model in reply.json()["models"] if isinstance(name := model.get("name"), str)}
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
 
 
 def status(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[bool, str]:
@@ -61,18 +82,18 @@ def status(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[
         return False, "Ollama isn't running: start it with `ollama serve` (install it first if needed)."
     if reply.status_code != 200:
         return False, f"Ollama did not answer as expected (status {reply.status_code}): restart it with `ollama serve`."
-    names = {model.get("name") for model in reply.json().get("models", [])}
+    names = _names(reply)
+    if names is None:
+        return False, UNEXPECTED
     if role.model in names or f"{role.model}:latest" in names:
         return True, f"Ollama is running and the model {role.model} is downloaded."
     return False, f"Ollama is running, but the model {role.model} is not downloaded: run `ollama pull {role.model}`."
 
 
 def installed(role: AIRole, transport: httpx.BaseTransport | None = None) -> list[str]:
-    """The models downloaded in Ollama, by name; none when it does not answer."""
+    """The models downloaded in Ollama, by name; none when it does not answer as expected."""
     try:
         reply = _tags(role, transport)
     except httpx.TransportError:
         return []
-    if reply.status_code != 200:
-        return []
-    return sorted({name for model in reply.json().get("models", []) if isinstance(name := model.get("name"), str)})
+    return sorted(_names(reply) or ()) if reply.status_code == 200 else []

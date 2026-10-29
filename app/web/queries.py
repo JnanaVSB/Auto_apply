@@ -53,22 +53,26 @@ US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 # Only columns of the jobs_list index, so listing never reads the long descriptions.
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
-# Every jobs query joins each job's quick check and its score from the chosen model. The first two values of every
+# Every jobs query joins each job's quick check, its score from the chosen model and a failed new try (when a new
+# try failed, the older score stays). The first two values of every
 # query are that model and the ready threshold; a job's scoring status is worked out from them when it is shown.
 SCORED = """WITH chosen (model, threshold) AS (SELECT ?, ?)
     SELECT {columns} FROM jobs CROSS JOIN chosen LEFT JOIN stage_a a ON a.job_id = jobs.id
-    LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model"""
+    LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model
+    LEFT JOIN ai_failures f ON f.job_id = jobs.id AND f.model = chosen.model"""
 STATUS = """CASE WHEN jobs.prepare_anyway OR s.score >= chosen.threshold THEN 'ready'
     WHEN s.score IS NOT NULL THEN 'low' WHEN s.failed IS NOT NULL THEN 'failed' WHEN a.passed = 0 THEN 'quick'
     ELSE 'waiting' END"""
 ODD = "(s.odd IS NOT NULL OR a.trick IS NOT NULL)"
-SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, {STATUS} AS scoring,
+SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, s.changed AS ad_changed,
+    f.failed AS new_try_failed, {STATUS} AS scoring,
     jobs.prepare_anyway, (SELECT o.model || ': ' || o.score FROM ai_scores o WHERE o.job_id = jobs.id
         AND o.model != chosen.model AND o.score IS NOT NULL ORDER BY o.scored_on DESC LIMIT 1) AS other"""  # noqa: S608 (fixed text)
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
     added_by_you, check_location, location_by_you, not_interested"""
-JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume, a.keywords,
+JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume,
+    s.changed AS ad_changed, f.failed AS new_try_failed, f.tried_on AS new_try_on, a.keywords,
     a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on, jobs.prepare_anyway,
     (SELECT label FROM answer_key WHERE job_id = jobs.id) AS answer"""  # noqa: S608 (fixed text)
 OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE job_id = ? AND model != ?

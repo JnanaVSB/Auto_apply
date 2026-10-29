@@ -688,6 +688,28 @@ def _scored_job(conn) -> None:
     conn.execute("INSERT INTO ai_scores (job_id, model, score, resume, scored_on) VALUES (1, 'm', 80, 'fp', 'now')")
 
 
+FAILED_TRY = "INSERT INTO ai_failures (job_id, model, failed, resume, tried_on) VALUES (1, 'm', 'x', 'fp2', 'now')"
+
+
+def test_version_10_adds_failed_new_tries_and_keeps_every_score(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_9:
+        version_9.setattr(db, "UPGRADES", db.UPGRADES[:9])
+        version_9.setattr(db, "SCHEMA_VERSION", 9)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT score FROM ai_scores").fetchall() == [(80,)]
+        assert conn.execute("SELECT count(*) FROM ai_failures").fetchone()[0] == 0
+        with conn:
+            conn.execute(FAILED_TRY)
+            conn.execute("UPDATE jobs SET description = 'Train more robots.' WHERE id = 1")
+        assert conn.execute("SELECT changed FROM ai_failures").fetchone()[0] == 1  # the trigger covers it too
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v9") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+
+
 @pytest.mark.parametrize(
     ("update", "changed"),
     [
@@ -700,9 +722,11 @@ def _scored_job(conn) -> None:
 def test_changed_job_text_marks_its_results_out_of_date(data_dir, update, changed):
     with closing(db.connect(data_dir)) as conn, conn:
         _scored_job(conn)
+        conn.execute(FAILED_TRY)
         conn.execute(f"UPDATE jobs SET {update} WHERE id = 1")  # noqa: S608 (fixed test values)
         assert conn.execute("SELECT changed FROM stage_a").fetchone()[0] == changed
         assert conn.execute("SELECT changed FROM ai_scores").fetchone()[0] == changed
+        assert conn.execute("SELECT changed FROM ai_failures").fetchone()[0] == changed
 
 
 @pytest.mark.parametrize(

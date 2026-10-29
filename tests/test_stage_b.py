@@ -50,7 +50,6 @@ def score(ai, title="Robot Learning Engineer", description="Train robots with RL
         '{"score": 80, "reasons": ["a", "b", "c", "d"]}',
         '{"score": 80, "reasons": ["' + "x" * 201 + '"]}',
         '{"score": 80, "reasons": ["Apply at https://evil.example"]}',
-        '{"score": 80, "reasons": ["<b>great</b>"]}',
         '{"score": 80, "reasons": [7]}',
     ],
 )
@@ -60,6 +59,8 @@ def test_answers_outside_the_agreed_shape_are_refused(answer):
 
 def test_a_good_answer_is_accepted_and_cleaned():
     assert stage_b.checked('{"score": 0, "reasons": ["Good\\u0000 fit. ", ""]}') == (0, ["Good fit.", ""])
+    answer = '{"score": 40, "reasons": ["Needs 5+ years; has <2.", "<b>great</b>"]}'
+    assert stage_b.checked(answer) == (40, ["Needs 5+ years; has \u20392.", "\u2039b\u203agreat\u2039/b\u203a"])
 
 
 def test_the_whole_resume_and_ad_are_sent_with_markers_inside_the_ad_neutralised():
@@ -150,3 +151,16 @@ def test_a_score_and_its_time_are_saved_together(conn):
     stage_b.save(conn, job, "other", stage_b.Score(40, [], None, None, 1.5), "resume-fp", "2026-10-28")
     stage_b.save(conn, job, "m", stage_b.Score(50, [], None, None, 9.0), "resume-fp")  # "Score these": not counted
     assert conn.execute("SELECT day, seconds FROM scoring_days").fetchall() == [("2026-10-28", 6.0)]
+
+
+def test_a_failed_new_try_keeps_the_older_score_until_a_new_score_arrives(conn):
+    job = add_job(conn, "Robot Learning Engineer")
+    stage_b.save(conn, job, "m", stage_b.Score(82, ["Strong RL match."], None, None, 1.0), "old-resume")
+    stage_b.save(conn, job, "m", stage_b.Score(None, [], "AI score failed twice", None, 1.0), "new-resume")
+    score = "SELECT score, reasons, failed, resume FROM ai_scores"
+    assert conn.execute(score).fetchall() == [(82, json.dumps(["Strong RL match."]), None, "old-resume")]
+    failures = "SELECT failed, resume FROM ai_failures"
+    assert conn.execute(failures).fetchall() == [("AI score failed twice", "new-resume")]
+    stage_b.save(conn, job, "m", stage_b.Score(64, [], None, None, 1.0), "new-resume")
+    assert conn.execute(score).fetchall() == [(64, "[]", None, "new-resume")]
+    assert conn.execute("SELECT count(*) FROM ai_failures").fetchone()[0] == 0  # replaced by the new score

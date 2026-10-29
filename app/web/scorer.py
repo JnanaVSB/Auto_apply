@@ -19,7 +19,7 @@ from app.scoring import files, queue, stage_a
 
 STOP_WAIT_SECONDS = 5  # how long closing the dashboard waits for scoring to stop after its current job
 RETRY_AFTER = timedelta(minutes=30)  # automatic scoring waits this long after a failed run
-STOPPED = "Stopped because the dashboard was closed. Every job scored before that is saved."
+STOPPED = "Stopped. Every job scored before that is saved."
 log = logging.getLogger("app.web")
 
 
@@ -31,6 +31,7 @@ class Scorer:
     state: str = "idle"  # idle, running, done, stopped or failed
     failed_at: datetime | None = None  # when the last run failed: automatic scoring waits RETRY_AFTER
     notice: str | None = None  # why the last request did not start; shown once on the Collect page
+    automatic: bool = False  # the current or last run was started by automatic scoring
     _thread: threading.Thread | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
     _starting: threading.Lock = field(default_factory=threading.Lock)
@@ -39,13 +40,18 @@ class Scorer:
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self, job_ids: list[int] | None = None, model: str | None = None) -> str | None:
+    @property
+    def stopping(self) -> bool:
+        return self.running and self._stop.is_set()
+
+    def start(self, job_ids: list[int] | None = None, model: str | None = None, automatic: bool = False) -> str | None:
         """Score the waiting jobs, or just `job_ids` (with `model` instead of the chosen one, to compare models);
         returns why it could not start, or None."""
         with self._starting:
             if self.running:
                 return score.BUSY
-            self.lines, self.state = [], "running"
+            self._stop.clear()  # a Stop pressed for an earlier run does not stop this one
+            self.lines, self.state, self.automatic = [], "running", automatic
             self._thread = threading.Thread(target=self._run, args=(job_ids, model), daemon=True)
             self._thread.start()
         return None
@@ -78,9 +84,13 @@ class Scorer:
         if self._stop.is_set():
             raise KeyboardInterrupt  # what Ctrl+C does to the command: what is finished stays saved
 
+    def cancel(self) -> None:
+        """The Stop scoring button: scoring stops after its current job; everything finished stays saved."""
+        self._stop.set()
+
     def stop(self) -> None:
         """Called when the dashboard closes: scoring stops after its current job."""
-        self._stop.set()
+        self.cancel()
         if self._thread is not None:
             self._thread.join(STOP_WAIT_SECONDS)
 
@@ -107,7 +117,7 @@ class Scorer:
         except ConfigError:
             return  # shown on the Settings page; nothing starts until it is fixed
         if self.due(conn, config):
-            self.start()
+            self.start(automatic=True)
 
 
 def _with_model(config: Config, model: str | None) -> Config:

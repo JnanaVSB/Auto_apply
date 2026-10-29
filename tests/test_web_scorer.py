@@ -244,3 +244,55 @@ def test_bad_scoring_settings_are_refused_and_nothing_changes(client, settings_p
     text = client.post("/settings", data=scoring_form(**changes) | {"csrf_token": csrf(client)}).text
     assert "Not saved" in text and problem in text
     assert settings_path.read_bytes() == before
+
+
+def test_the_stop_button_stops_scoring_and_the_next_run_is_not_stopped(client, run):
+    run.release.clear()
+    client.post("/score", data={"csrf_token": csrf(client)})
+    assert "Stop scoring" in client.get("/score/progress").text
+    reply = client.post("/score/stop", data={"csrf_token": csrf(client)}, follow_redirects=False)
+    assert reply.headers["location"] == "/collect#scoring"
+    wait_until_idle(app_scorer(client))
+    assert app_scorer(client).state == "stopped" and scorer.STOPPED in app_scorer(client).lines
+    client.post("/score", data={"csrf_token": csrf(client)})  # the earlier Stop does not stop this run
+    assert app_scorer(client).running and not app_scorer(client).stopping
+    run.release.set()
+    wait_until_idle(app_scorer(client))
+    assert app_scorer(client).state == "done"
+
+
+def test_switching_automatic_scoring_off_stops_only_an_automatic_run(client, conn, run, ready, settings_path,
+                                                                    monkeypatch):  # fmt: skip
+    monkeypatch.setattr(scorer, "load_config", lambda: ready)
+    run.release.clear()
+    client.post("/score", data={"csrf_token": csrf(client)})  # started by you: it keeps going
+    client.post("/settings", data=scoring_form() | {"csrf_token": csrf(client)})  # automatic: off
+    assert app_scorer(client).running and not app_scorer(client).stopping
+    run.release.set()
+    wait_until_idle(app_scorer(client))
+    run.release.clear()
+    app_scorer(client).tick(conn)  # started by automatic scoring
+    client.post("/settings", data=scoring_form() | {"csrf_token": csrf(client)})
+    wait_until_idle(app_scorer(client))
+    assert app_scorer(client).state == "stopped"
+
+
+def test_the_collect_page_says_why_nothing_can_be_scored(client, data_dir, monkeypatch):
+    monkeypatch.setattr(main, "load_config", lambda: settings(data_dir))
+    assert "Scoring can't start: Resume not found: save your LaTeX resume as" in client.get("/collect").text
+    (data_dir / RESUME_FILE).write_bytes(FAKE_RESUME)
+    assert "Scoring can" not in client.get("/collect").text
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/score", "/score/these", "/score/stop", "/jobs/{job}/score", "/jobs/{job}/prepare", "/jobs/{job}/answer",
+     "/answer-key/score"],
+)  # fmt: skip
+def test_every_scoring_button_needs_the_anti_forgery_token(client, conn, run, path):
+    with conn:
+        job = add_job(conn, "ML Intern")
+    data = {"value": "1", "label": "yes", "model": "m", "back": "/"}  # everything but the token
+    assert client.post(path.format(job=job), data=data).status_code == 403
+    assert run.calls == [] and not app_scorer(client).running
+    assert conn.execute("SELECT prepare_anyway, (SELECT count(*) FROM answer_key) FROM jobs").fetchone() == (0, 0)

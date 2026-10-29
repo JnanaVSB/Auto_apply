@@ -168,3 +168,60 @@ def test_stopping_keeps_every_finished_job(conn):
     ai = FakeAI()
     run(conn, ai)
     assert len(ai.titles) == 1  # the next run continues with the rest
+
+
+def test_three_jobs_failing_the_same_way_stop_the_run_and_stay_waiting(conn):
+    for number in range(4):
+        add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
+    with pytest.raises(llm.StopScoring, match="3 jobs in a row failed the same way") as stopped:
+        run(conn, lambda *args, **kwargs: "not JSON")
+    assert "not in the agreed shape" in str(stopped.value)
+    assert conn.execute("SELECT count(*) FROM ai_scores").fetchone()[0] == 0  # nothing marked failed
+    ai = FakeAI()
+    run(conn, ai)
+    assert len(ai.titles) == 4  # all four are scored next time
+
+
+def test_failures_are_saved_once_the_next_job_goes_differently(conn):
+    add_job(conn, "RL Intern 1", description="Taxes.", date_posted=posted(1))
+    add_job(conn, "RL Intern 2", description="Taxes.", date_posted=posted(1))
+    add_job(conn, "RL Robot Engineer", description="Robots.", date_posted=posted(20))  # scored last: older
+
+    def taxes_fail(role, system, user, shape, *, retry):
+        return '{"score": 90, "reasons": []}' if "Robot" in user else "not JSON"
+
+    tally, _ = run(conn, taxes_fail)
+    assert (tally.scored, tally.failed, tally.ready) == (3, 2, 1)
+    saved = conn.execute("SELECT count(failed), count(score) FROM ai_scores").fetchone()
+    assert saved == (2, 1)
+
+
+def test_scoring_chosen_jobs_quick_checks_only_those(conn):
+    chosen = add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+    for number in range(3):
+        add_job(conn, f"RL Analyst {number}", description="Taxes.", date_posted=posted(1))
+    ai = FakeAI()
+    run(conn, ai, job_ids=[chosen])
+    assert ai.titles == ["RL Intern"]
+    assert conn.execute("SELECT job_id FROM stage_a").fetchall() == [(chosen,)]  # not every open job
+
+
+def test_a_failed_new_try_is_not_repeated_until_the_resume_or_ad_changes(conn):
+    job = add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+    run(conn, FakeAI())
+    new_resume = Resume(RESUME, "new-resume-fp")
+    tries = []
+
+    def bad(*args, **kwargs):
+        tries.append(1)
+        return "not JSON"
+
+    for _ in range(2):  # the failed new try is made once, not again on the next run
+        queue.run(conn, CONFIG, checker(), SETUP, new_resume, ask=bad, out=lambda line: None)
+    assert len(tries) == 2  # one job, two tries, one run
+    assert conn.execute("SELECT score FROM ai_scores").fetchone()[0] == 30  # the older score stays
+    with conn:
+        conn.execute("UPDATE jobs SET description = 'Robots now.' WHERE id = ?", (job,))
+    ai = FakeAI()
+    queue.run(conn, CONFIG, checker(), SETUP, new_resume, ask=ai, out=lambda line: None)
+    assert ai.titles == ["RL Intern"]  # its ad changed: tried again

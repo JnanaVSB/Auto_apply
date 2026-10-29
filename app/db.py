@@ -296,6 +296,28 @@ UPGRADES = (
         UPDATE ai_scores SET changed = 1 WHERE job_id = new.id;
     END;
     """,
+    """
+    -- A failed new try on a job that already has a score never replaces that score: it is noted here instead, and
+    -- the older score and its reasons stay shown until a new score replaces both.
+    CREATE TABLE ai_failures (  -- the latest failed new try, one row per job per model
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        model TEXT NOT NULL,
+        failed TEXT NOT NULL,  -- why it failed
+        resume TEXT NOT NULL,  -- fingerprint of the resume it read
+        changed INTEGER NOT NULL DEFAULT 0,  -- 1 once the job's title or description changed
+        tried_on TEXT NOT NULL,
+        PRIMARY KEY (job_id, model)
+    );
+    -- The same trigger, now also for ai_failures. A later upgrade that rebuilds the jobs table must create it again.
+    DROP TRIGGER job_text_changed;
+    CREATE TRIGGER job_text_changed AFTER UPDATE OF title, description ON jobs
+        WHEN old.title IS NOT new.title OR old.description IS NOT new.description
+    BEGIN
+        UPDATE stage_a SET changed = 1 WHERE job_id = new.id;
+        UPDATE ai_scores SET changed = 1 WHERE job_id = new.id;
+        UPDATE ai_failures SET changed = 1 WHERE job_id = new.id;
+    END;
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

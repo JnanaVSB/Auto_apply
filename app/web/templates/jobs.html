@@ -123,6 +123,8 @@
         {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
         {% if job.title_only %}<span class="mark">title only</span>{% endif %}
         {% if job.older %}<span class="mark">scored with an older resume</span>{% endif %}
+        {% if job.ad_changed %}<span class="mark">the ad changed since</span>{% endif %}
+        {% if job.new_try_failed %}<span class="mark warn">a new try failed</span>{% endif %}
         {% if low %}
         {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
         <form method="post" action="/jobs/{{ job.id }}/prepare" class="inline">

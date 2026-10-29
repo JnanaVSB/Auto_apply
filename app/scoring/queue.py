@@ -19,13 +19,15 @@ AGE_GROUPS = (7, 30, 90)  # days since posting: 0-7 first, then 8-30, then 31-90
 COLLECTION_HOURS = 6  # an unfinished collection record older than this was left by a crash or a power cut
 PAUSE_CHECK_SECONDS = 10
 PROGRESS_EVERY = 25
+SAME_FAILURES = 3  # jobs in a row failing the same way: the cause is Ollama or a setting, not the jobs
 POSTED = "coalesce(j.date_posted, substr(j.first_seen, 1, 10))"
 # Open jobs that passed an up-to-date quick check and have no up-to-date score from this model: none yet, or one made
-# before the ad changed or with an older resume. A failed score is tried again only then, never every day.
+# before the ad changed or with an older resume. A failed try is tried again only then, never every day.
 WAITING = f"""SELECT j.id FROM jobs j JOIN stage_a a ON a.job_id = j.id
     LEFT JOIN ai_scores s ON s.job_id = j.id AND s.model = :model
+    LEFT JOIN ai_failures f ON f.job_id = j.id AND f.model = :model AND NOT f.changed AND f.resume = :resume
     WHERE j.status = 'open' AND a.passed AND NOT a.changed AND a.setup = :setup AND {POSTED} >= :oldest
-        AND (s.job_id IS NULL OR s.changed OR s.resume != :resume)
+        AND (s.job_id IS NULL OR s.changed OR s.resume != :resume) AND f.job_id IS NULL
     ORDER BY CASE WHEN {POSTED} >= :week THEN 0 WHEN {POSTED} >= :month THEN 1 ELSE 2 END, a.meaning DESC, j.id"""  # noqa: S608 (fixed SQL)
 JOB = """SELECT j.title, j.description, a.keywords, a.job_skills, a.shared_skills, a.meaning
     FROM jobs j JOIN stage_a a ON a.job_id = j.id WHERE j.id = ? AND j.status = 'open'"""
@@ -101,7 +103,9 @@ def run(
     """The quick check on every open job that needs it, then the AI score.
 
     Without `job_ids`, the waiting jobs in queue order, within the scoring time per day. With `job_ids` ("Score
-    these"), just those jobs, in that order, of any age, without using up the day's time.
+    these"), just those jobs, quick check included, in that order, of any age, without using up the day's time.
+    A failed job is saved only once the next job goes differently: SAME_FAILURES in a row stop the run and stay
+    waiting.
     """
 
     def pause_or_stop() -> None:
@@ -109,10 +113,10 @@ def run(
         wait_for_collections(conn, stop, out)
 
     settings, role = config.scoring, config.ai.evaluator
-    stage_a.run(conn, checker, setup, settings, pause_or_stop, out)
+    stage_a.run(conn, checker, setup, settings, pause_or_stop, out, only=job_ids)
     ids = waiting(conn, role.model, setup, resume.fingerprint) if job_ids is None else job_ids
     limit = settings.minutes_per_day * 60
-    tally = Tally()
+    tally, held = Tally(), []  # held: failed jobs in a row, with the same reason
     if ids:
         out(f"AI scoring with {role.model}: {len(ids):,} jobs waiting...")
     for number, job_id in enumerate(ids, 1):
@@ -126,13 +130,34 @@ def run(
         title, description, keywords, job_skills, shared, meaning = row
         quick = stage_a.Check(json.loads(keywords), job_skills, json.loads(shared), meaning, False, None)
         result = stage_b.score_job(role, resume.text, title, description, quick, settings, ask=ask)
-        stage_b.save(conn, job_id, role.model, result, resume.fingerprint, today() if job_ids is None else None)
+        if held and result.failed != held[-1][1].failed:
+            _save(conn, held, role.model, resume.fingerprint, job_ids is None)
+            held = []
+        if result.failed:
+            held.append((job_id, result))
+            if len(held) == SAME_FAILURES:
+                raise llm.StopScoring(
+                    f"{SAME_FAILURES} jobs in a row failed the same way, so the cause is most likely Ollama or the AI "
+                    "model settings, not the jobs; they stay not scored yet. Restart Ollama with `ollama serve` and "
+                    f"try again. ({result.failed})"
+                )
+        else:
+            _save(conn, [(job_id, result)], role.model, resume.fingerprint, job_ids is None)
         tally = _count(tally, result, settings.ready_threshold)
         if number % PROGRESS_EVERY == 0:
             out(f"  {number:,} of {len(ids):,} scored")
+    _save(conn, held, role.model, resume.fingerprint, job_ids is None)
     if ids:
         out(_summary(tally, settings.ready_threshold, len(ids), used_today(conn), limit))
     return tally
+
+
+def _save(
+    conn: sqlcipher3.Connection, results: list[tuple[int, stage_b.Score]], model: str, resume: str, daily: bool
+) -> None:
+    """Each job's result; with `daily`, its time counts towards today's scoring time."""
+    for job_id, result in results:
+        stage_b.save(conn, job_id, model, result, resume, today() if daily else None)
 
 
 def _count(tally: Tally, result: stage_b.Score, ready_threshold: int) -> Tally:

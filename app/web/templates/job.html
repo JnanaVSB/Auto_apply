@@ -42,9 +42,12 @@
 <p><strong>{{ scoring.label }}</strong>{% if scoring.score is not none %}: {{ scoring.score }} of 100{% endif %}
   {% if scoring.prepare_anyway %}<span class="mark">prepare anyway (set by you)</span>{% endif %}
   {% if scoring.older %}<span class="mark">scored with an older resume</span>{% endif %}
+  {% if scoring.ad_changed %}<span class="mark">the ad changed since</span>{% endif %}
   {% if scoring.answer %}<span class="mark">your answer key: {{ scoring.answer }}</span>{% endif %}</p>
 {% if scoring.reasons %}<ul class="reasons">{% for reason in scoring.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
 {% if scoring.failed %}<p class="error">{{ scoring.failed }}</p>{% endif %}
+{% if scoring.new_try_failed %}<p class="error">A new try on {{ scoring.new_try_on[:10] }} failed: {{ scoring.new_try_failed }}.
+  The score shown is the older one.</p>{% endif %}
 {% if scoring.odd %}<p><span class="mark warn">score looks odd</span> {{ scoring.odd }}</p>{% endif %}
 <p class="muted">Model {{ scoring.model }}{% if scoring.scored_on %}, scored {{ scoring.scored_on[:10] }}{% endif %}.
   {% for model, score, failed, on in scoring.others %}{% if loop.first %}Other models:{% endif %}

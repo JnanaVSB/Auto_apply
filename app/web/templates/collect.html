@@ -27,6 +27,7 @@
     the same as <code>python -m app.score</code>. Results are saved job by job.</span>
 </form>
 {% if score_refused %}<p class="error" role="alert">{{ score_refused }}</p>{% endif %}
+{% if resume_problem %}<p class="error">Scoring can't start: {{ resume_problem }}</p>{% endif %}
 {% include "score_progress.html" %}
 {% if scoring %}
 <p>{% if scoring.automatic %}Automatic scoring is on: while the dashboard is open, it starts by itself whenever there is

@@ -173,3 +173,21 @@ def test_prepare_anyway_can_be_undone_on_the_job_page(client, conn, five):
 def test_unknown_jobs_and_labels_are_refused(client, five, path, data, status):
     reply = client.post(path.format(job=five["Low"]), data={"csrf_token": csrf(client)} | data)
     assert reply.status_code == status
+
+
+def test_a_changed_ad_and_a_failed_new_try_are_marked(client, conn, five):
+    failed = "AI score failed twice (no answer within 120 seconds; then no answer within 120 seconds)"
+    with conn:
+        conn.execute("UPDATE ai_scores SET changed = 1 WHERE job_id = ?", (five["Low"],))
+        conn.execute(
+            "INSERT INTO ai_failures (job_id, model, failed, resume, tried_on) VALUES (?, ?, ?, 'resume-now', "
+            "'2026-10-29T09:00:00+00:00')",
+            (five["Low"], MODEL, failed),
+        )
+    page = queries.list_jobs(conn, queries.Filters.from_address("f=1&status=open"), CHOSEN)
+    marked = {job["title"]: (job["ad_changed"], job["new_try_failed"]) for job in page.jobs if job["score"]}
+    assert marked == {"Low": (1, failed), "Ready": (0, None)}
+    assert "the ad changed since" in client.get("/").text
+    text = client.get(f"/jobs/{five['Low']}").text
+    assert "40 of 100" in text and "Different field." in text  # the older score and its reasons stay
+    assert f"A new try on 2026-10-29 failed: {failed}." in text and "the ad changed since" in text

@@ -31,8 +31,8 @@ def fake(*replies):
     return httpx.MockTransport(answer), requests
 
 
-def ollama_reply(content='{"score": 80, "reasons": []}', read=1000):
-    return httpx.Response(200, json={"message": {"content": content}, "prompt_eval_count": read})
+def ollama_reply(content='{"score": 80, "reasons": []}'):
+    return httpx.Response(200, json={"message": {"content": content}, "prompt_eval_count": 1000})
 
 
 @pytest.fixture
@@ -53,6 +53,7 @@ def test_ollama_request_and_answer():
         False,
         False,
     )
+    assert body["truncate"] is False  # Ollama refuses a too-long prompt instead of cutting it
     assert body["options"] == {"num_ctx": 16384, "temperature": 0, "seed": 1, "num_predict": 1024}
     assert [message["role"] for message in body["messages"]] == ["system", "user"]
 
@@ -73,9 +74,22 @@ def test_ollama_retry_is_a_little_less_strict():
             llm.StopScoring,
             "ran out of graphics memory",
         ),
-        (httpx.Response(500, json={"error": "something else"}), llm.LLMError, "Ollama refused the request"),
+        (
+            httpx.Response(500, json={"error": "model requires more system memory (15.2 GiB) than is available"}),
+            llm.StopScoring,
+            r"Ollama refused the request \(status 500: .*more system memory .*\)\. Restart it",
+        ),
+        (httpx.Response(500, text="llama runner process has terminated"), llm.StopScoring, "runner process"),
+        (httpx.Response(400, json={"error": "think value not supported"}), llm.StopScoring, "status 400"),
+        (
+            httpx.Response(400, json={"error": "request (10013 tokens) exceeds the available context size"}),
+            llm.TooLong,
+            "do not fit the model's working size of 16,384",
+        ),
+        (httpx.Response(200, text="<html>not Ollama</html>"), llm.StopScoring, "did not answer as expected"),
+        (httpx.Response(200, json=["not", "an", "answer"]), llm.StopScoring, "did not answer as expected"),
+        (httpx.Response(200, json={"done": True}), llm.StopScoring, "did not answer as expected"),
         (httpx.ReadTimeout("slow"), llm.TimedOut, "no answer within 120 seconds"),
-        (ollama_reply(read=10), llm.TooLong, "do not fit the model's working size of 16,384"),  # Ollama cut it
     ],
 )
 def test_ollama_problems_name_the_cause_and_the_fix(reply, error, message):
@@ -142,6 +156,8 @@ def test_missing_key_is_named_and_nothing_is_sent():
             "run `ollama pull gemma4:26b-a4b-it-q8_0`",
         ),
         (httpx.ConnectError("refused"), False, "start it with `ollama serve`"),
+        (httpx.Response(200, text="not JSON"), False, "did not answer as expected"),
+        (httpx.Response(200, json={"models": ["no names"]}), False, "did not answer as expected"),
     ],
 )
 def test_ollama_status_says_what_to_do(reply, ready, line):
@@ -158,6 +174,7 @@ def test_ollama_status_says_what_to_do(reply, ready, line):
         (httpx.Response(200, json={"models": [{"name": "qwen3.6:35b-a3b"}, {"name": "gemma4:26b-a4b-it-qat"}]}),
          ["gemma4:26b-a4b-it-qat", "qwen3.6:35b-a3b"]),
         (httpx.Response(500), []),
+        (httpx.Response(200, text="not JSON"), []),
         (httpx.ConnectError("refused"), []),
     ],
 )  # fmt: skip

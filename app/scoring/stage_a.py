@@ -142,8 +142,10 @@ def run(
     settings: ScoringSettings,
     stop: Callable[[], None] = lambda: None,
     out: Callable[[str], None] = print,
+    only: list[int] | None = None,
 ) -> int:
-    """Check every open job without an up-to-date check, newest first; returns how many were checked.
+    """Check every open job without an up-to-date check (or just those of `only`), newest first; returns how many
+    were checked.
 
     Saved BATCH jobs at a time, all-or-nothing, so an interrupted run loses at most one batch. `stop` is called
     between batches and raises to stop.
@@ -152,6 +154,9 @@ def run(
     with conn:  # the thresholds may have changed since the last run
         conn.execute(f"UPDATE stage_a SET passed = ({PASSES}) WHERE passed IS NOT ({PASSES})", rule)  # noqa: S608 (fixed SQL)
     ids = [job_id for (job_id,) in conn.execute(TO_CHECK, (setup,))]
+    if only is not None:  # "Score this job" and the like: not a full pass over every job
+        wanted = set(only)
+        ids = [job_id for job_id in ids if job_id in wanted]
     if ids:
         out(f"Quick check: {len(ids):,} jobs to check, newest first...")
     for start in range(0, len(ids), BATCH):
