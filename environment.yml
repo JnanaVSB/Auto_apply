@@ -21,6 +21,7 @@ dependencies:
   - numpy=2.5.4  # job scoring: maths for the meaning match
   - onnxruntime=1.31.0=*_0_cpu  # job scoring: runs the meaning model on the processor (not the 280 MB GPU build)
   - tokenizers=0.23.3  # job scoring: splits text into the word-pieces the meaning model reads
+  - tectonic=0.17.0=*_0  # turns the app's own LaTeX resume into a PDF on this computer
   - pytest=9.1.1
   - ruff=0.16.10
   - pip:
