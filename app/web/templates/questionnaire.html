@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Questionnaire{% endblock %}
+{% macro text(section, name, label, length=100, type="text") %}
+<label>{{ label }} <input name="{{ section }}.{{ name }}" type="{{ type }}" maxlength="{{ length }}" value="{{ values[section].get(name) or '' }}"></label>
+{% endmacro %}
+{% macro choice(section, name, label, options, blank=true) %}
+<label>{{ label }}
+  <select name="{{ section }}.{{ name }}">
+    {% if blank %}<option value="">(no answer)</option>{% endif %}
+    {% for option in options %}
+    <option{% if values[section].get(name) == option %} selected{% endif %}>{{ option }}</option>
+    {% endfor %}
+  </select>
+</label>
+{% endmacro %}
+{% macro tick(section, name, label) %}
+<label class="tick"><input name="{{ section }}.{{ name }}" type="checkbox" value="1"{% if values[section].get(name) %} checked{% endif %}> {{ label }}</label>
+{% endmacro %}
+{% block content %}
+<h1>Questionnaire</h1>
+<p class="hint">Your standard answers for application forms. Every field is optional. They are kept in your encrypted
+  database and are not sent to any AI.{% if saved_on %} Last saved {{ saved_on }} (UTC).{% endif %}</p>
+{% if problem %}<p class="error" role="alert">Not saved: {{ problem }}</p>{% endif %}
+{% if stale %}<p class="error" role="alert">Your saved answers break a rule of this version of the app; nothing was
+  changed. Fix this and save: {{ stale }}</p>{% endif %}
+{% if saved %}<p class="result" role="status">Saved.</p>{% endif %}
+<form method="post" action="/questionnaire" class="stacked" data-unsaved>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+
+  <h2>Contact</h2>
+  <p class="hint">Never sent to any AI. The resume PDF's header is filled in from here.</p>
+  {{ text("contact", "full_name", "Full name") }}
+  {{ text("contact", "preferred_name", "Preferred name") }}
+  {{ text("contact", "email", "Email", 200, "email") }}
+  {{ text("contact", "phone", "Phone", 30, "tel") }}
+  {{ text("contact", "city", "City") }}
+  {{ text("contact", "state", "State") }}
+  {{ text("contact", "country", "Country") }}
+  {{ text("contact", "street", "Street address (optional)", 200) }}
+  {{ text("contact", "linkedin", "LinkedIn (https://...)", 300, "url") }}
+  {{ text("contact", "github", "GitHub (https://...)", 300, "url") }}
+  {{ text("contact", "portfolio", "Portfolio (https://...)", 300, "url") }}
+  {{ text("contact", "scholar", "Google Scholar (https://...)", 300, "url") }}
+  {{ text("contact", "other_link", "Other link (https://...)", 300, "url") }}
+
+  <h2>Work authorization</h2>
+  {{ choice("work", "authorized_us", "Authorized to work in the USA", ["yes", "no"]) }}
+  {{ choice("work", "status", "Status", STATUSES) }}
+  {{ text("work", "status_other", "Status, if other") }}
+  {{ choice("work", "sponsorship_now", "Sponsorship needed now", ["yes", "no"]) }}
+  {{ choice("work", "sponsorship_future", "Sponsorship needed in the future", ["yes", "no"]) }}
+  {{ text("work", "permit_end", "Work-permit end date (optional)", 10, "date") }}
+
+  <h2>Availability</h2>
+  {{ text("availability", "earliest_start", "Earliest start date", 10, "date") }}
+  {{ text("availability", "notice_period", "Notice period") }}
+  {{ choice("availability", "relocate", "Willing to relocate", ["yes", "no", "depends"]) }}
+  <fieldset>
+    <legend>Work mode (tick every one you accept)</legend>
+    {{ tick("availability", "remote", "remote") }}
+    {{ tick("availability", "hybrid", "hybrid") }}
+    {{ tick("availability", "on_site", "on-site") }}
+  </fieldset>
+  <label>Preferred locations, one per line
+    <textarea name="availability.locations" rows="3" maxlength="2000">{{ values.availability.get("locations") or "" }}</textarea></label>
+
+  <h2>Salary</h2>
+  {{ text("salary", "minimum", "Expected minimum", 12, "number") }}
+  {{ text("salary", "maximum", "Expected maximum", 12, "number") }}
+  {{ choice("salary", "per", "Per", ["year", "hour"], blank=false) }}
+  {{ text("salary", "currency", "Currency (3 letters)", 3) }}
+  {{ tick("salary", "prefer_to_discuss", "I prefer to discuss salary") }}
+
+  <h2>Education quick facts</h2>
+  {{ text("education", "highest_degree", "Highest degree") }}
+  {{ text("education", "graduation", "Graduation month", 7, "month") }}
+  {{ text("education", "gpa", "GPA (optional, e.g. 3.8 / 4.0)", 20) }}
+
+  <h2>EEO (voluntary)</h2>
+  {{ choice("eeo", "gender", "Gender", GENDERS, blank=false) }}
+  {{ choice("eeo", "race", "Race / ethnicity", RACES, blank=false) }}
+  {{ choice("eeo", "veteran", "Veteran status", VETERAN, blank=false) }}
+  {{ choice("eeo", "disability", "Disability status", DISABILITY, blank=false) }}
+
+  <h2>Other common questions</h2>
+  {{ choice("other", "over_18", "18 or older", ["yes", "no"]) }}
+  {{ text("other", "clearance", "Security clearance (none, or its level)") }}
+  {{ text("other", "heard_about", "How you heard about jobs") }}
+
+  <h2>More answers</h2>
+  <p class="hint">Any other question you often see, with your answer (up to {{ MAX_PAIRS }}). Clear both boxes to
+    remove one.</p>
+  {% for pair in values.more + [{}] %}
+  <div class="list-row">
+    <label>Question <input name="more.question.{{ loop.index0 }}" maxlength="300" value="{{ pair.get('question') or '' }}"></label>
+    <label>Answer <textarea name="more.answer.{{ loop.index0 }}" rows="2" maxlength="2000">{{ pair.get("answer") or "" }}</textarea></label>
+  </div>
+  {% endfor %}
+
+  <p><button type="submit" class="primary">Save</button></p>
+</form>
+<p><a href="/questionnaire/download">Download as file</a> (questionnaire.yaml, with your saved answers; keep it
+  somewhere safe: it is not encrypted).</p>
+<script src="/static/unsaved.js" defer></script>
+{% endblock %}

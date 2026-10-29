@@ -40,6 +40,7 @@ table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: center; margin: 0.5rem 0 1rem; }
 .stacked { display: grid; gap: 0.5rem; max-width: 40rem; }
 .stacked label { display: grid; gap: 0.2rem; }
+.stacked label.tick { display: flex; gap: 0.4rem; align-items: center; }
 .result { border-left: 3px solid var(--accent); padding: 0.25rem 0.75rem; }
 .lines { white-space: pre-wrap; background: var(--line); padding: 0.5rem 0.75rem; border-radius: 4px; max-height: 30rem;
   overflow-y: auto; }

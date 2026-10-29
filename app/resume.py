@@ -38,6 +38,19 @@ class Resume:
 
 
 def read_resume(data_dir: Path) -> Resume:
+    return from_latex(read_latex(data_dir))
+
+
+def from_latex(latex: str) -> Resume:
+    """The resume read from its LaTeX, so a page that also needs the LaTeX reads the file only once."""
+    text = plain_text(latex)
+    if len(text) < MIN_CHARACTERS:
+        raise ResumeError(f"Your resume looks empty (almost no text after removing LaTeX); check {WHERE}.")
+    return Resume(text, hashlib.sha256(text.encode()).hexdigest())
+
+
+def read_latex(data_dir: Path) -> str:
+    """resume.tex as it is written, after the checks every reader shares (missing, unreadable, over 1 MB)."""
     try:
         with (data_dir / RESUME_FILE).open("rb") as file:
             raw = file.read(MAX_BYTES + 1)
@@ -47,10 +60,7 @@ def read_resume(data_dir: Path) -> Resume:
         raise ResumeError(f"Could not read {WHERE} ({error.strerror or type(error).__name__}).") from None
     if len(raw) > MAX_BYTES:
         raise ResumeError(f"{WHERE} is over {MAX_BYTES // 2**20} MB, which does not look like a resume.")
-    text = plain_text(raw.decode("utf-8-sig", errors="replace"))  # odd bytes become a placeholder, never a crash
-    if len(text) < MIN_CHARACTERS:
-        raise ResumeError(f"Your resume looks empty (almost no text after removing LaTeX); check {WHERE}.")
-    return Resume(text, hashlib.sha256(text.encode()).hexdigest())
+    return raw.decode("utf-8-sig", errors="replace")  # odd bytes become a placeholder, never a crash
 
 
 def plain_text(latex: str) -> str:

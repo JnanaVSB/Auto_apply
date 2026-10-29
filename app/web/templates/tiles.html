@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Tiles{% endblock %}
+{% macro box(row, number, name, label, length=300) %}
+<label>{{ label }} <input name="tile.{{ number }}.{{ name }}" maxlength="{{ length }}" value="{{ row.get(name, '') }}"></label>
+{% endmacro %}
+{% macro lines(row, number, name, label, rows=4) %}
+<label>{{ label }} <textarea name="tile.{{ number }}.{{ name }}" rows="{{ rows }}">{{ row.get(name, "") }}</textarea></label>
+{% endmacro %}
+{% macro tile_text(tile) %}{{ tile.facts.get("name", "") }}{% for name in ["rest", "right", "second", "second_right"] if tile.facts.get(name) %} · {{ tile.facts[name] }}{% endfor %}{% if tile.facts.get("skills") %}: {{ tile.facts.skills | join(", ") }}{% endif %}{% for bullet in tile.bullets %}<br>• {{ bullet }}{% endfor %}{% endmacro %}
+{% block content %}
+<h1>Tiles</h1>
+<p class="hint">Your resume cut into tiles: one per entry, with its fixed facts (the AI can never change them) and
+  its bullets. Only confirmed tiles are used. <code>resume.tex</code> is only read, never changed.</p>
+{% if resume_problem %}
+<p class="error" role="alert">{{ resume_problem }}</p>
+{% else %}
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+{% if problem %}<p class="error" role="alert">Not confirmed: {{ problem }}</p>{% endif %}
+<p><strong>
+  {% if current %}Confirmed on {{ confirmed.confirmed_on }} (UTC).
+  {% elif confirmed %}Your resume changed since you confirmed on {{ confirmed.confirmed_on }} (UTC): check and confirm again.
+  {% else %}Not confirmed yet: check the tiles below, then press Confirm tiles.{% endif %}
+</strong></p>
+{% if contact_empty %}
+<p class="error">The PDF's header comes from your Questionnaire: fill in its <a href="/questionnaire">Contact section</a>.</p>
+{% elif contact_missing %}
+<p class="error">Your resume's header doesn't show the {{ contact_missing | join(", ") }} in your
+  <a href="/questionnaire">Questionnaire</a>. The PDF uses the Questionnaire's.</p>
+{% endif %}
+{% if reading_problem %}<p class="error">{{ reading_problem }}</p>{% endif %}
+
+{% if changes %}
+<h2>What changed since you confirmed</h2>
+<p class="hint">Redo any correction you made before; your earlier tiles are kept either way.</p>
+<ul class="changes">
+  {% for change, old, new in changes %}
+  <li>{% if change == "new" %}<span class="mark">new tile</span> {{ tile_text(new) }}
+    {% elif change == "gone" %}<span class="mark warn">no longer in your resume</span> {{ tile_text(old) }}
+    {% else %}<span class="mark">changed</span> before: {{ tile_text(old) }}<br>now: {{ tile_text(new) }}{% endif %}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if unplaced %}
+<h2>Unplaced text</h2>
+<p class="hint">Text the app couldn't put in a tile. Copy anything that belongs into a tile's boxes.</p>
+{% for section, text in unplaced %}<p class="lines">{% if section %}<strong>{{ section }}:</strong> {% endif %}{{ text }}</p>{% endfor %}
+{% endif %}
+
+<form method="post" action="/tiles" class="stacked" data-unsaved>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="resume" value="{{ resume }}">
+  {% for row in rows + [{}] %}
+  {% set number = loop.index0 %}
+  <fieldset class="tile">
+    <legend>{% if row %}Tile {{ loop.index }}{% else %}New tile (fill in to add one){% endif %}</legend>
+    <input type="hidden" name="tile.{{ number }}.id" value="{{ row.get('id', '') }}">
+    <div class="list-row">
+      <label>Kind
+        <select name="tile.{{ number }}.kind">
+          {% for kind in kinds %}<option{% if row.get('kind', 'other') == kind %} selected{% endif %}>{{ kind }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Position <input name="tile.{{ number }}.position" type="number" min="1" max="999" value="{{ row.get('position', loop.index) }}"></label>
+    </div>
+    {{ box(row, number, "section", "Section heading") }}
+    {{ box(row, number, "name", "Name (bold)") }}
+    {{ box(row, number, "rest", "Rest of the line") }}
+    {{ box(row, number, "right", "Right side (date or note)") }}
+    <details{% if row.get('second') or row.get('second_right') or row.get('link') or row.get('skills') or not row %} open{% endif %}>
+      <summary>More fields</summary>
+      {{ box(row, number, "second", "Second line") }}
+      {{ box(row, number, "second_right", "Second line's right side") }}
+      {{ box(row, number, "link", "Link (https://...)") }}
+      {{ lines(row, number, "skills", "Skills, one per line (skills tiles only)") }}
+    </details>
+    {{ lines(row, number, "bullets", "Bullets, one per line", 6) }}
+    {% if row %}<label class="tick"><input name="tile.{{ number }}.drop" type="checkbox" value="1"{% if row.get('drop') %} checked{% endif %}> Leave this tile out</label>{% endif %}
+  </fieldset>
+  {% endfor %}
+  <p><button type="submit" class="primary">Confirm tiles</button></p>
+</form>
+<script src="/static/unsaved.js" defer></script>
+{% endif %}
+{% endblock %}

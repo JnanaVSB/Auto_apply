@@ -22,7 +22,7 @@ from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
-from app.web import actions, answer_key, queries, security
+from app.web import actions, answer_key, prepare, queries, security
 from app.web.collector import Collector
 from app.web.scorer import Scorer
 
@@ -311,6 +311,7 @@ def create_app(
         typed = request.state.form if problem else None  # a refused save keeps what was typed
         return await _settings_page(request, problem=problem, typed=typed)
 
+    prepare.add_routes(app, _page, data_dir)
     return app
 
 
