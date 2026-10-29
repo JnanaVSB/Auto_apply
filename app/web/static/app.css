@@ -13,11 +13,13 @@ a { color: var(--accent); }
 button, input, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px;
   background: var(--bg); color: var(--text); }
 button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
 .login { display: grid; gap: 0.5rem; max-width: 22rem; }
 .error { color: var(--error); }
 .hint { color: var(--muted); }
 .filters fieldset { display: inline-block; border: 1px solid var(--line); border-radius: 4px; margin: 0 0.5rem 0.5rem 0;
   padding: 0.25rem 0.6rem; }
+.filters .apply { margin-top: 0.75rem; }
 .filters label { margin-right: 0.6rem; white-space: nowrap; }
 .summary, .muted { color: var(--muted); }
 table.jobs { width: 100%; border-collapse: collapse; }
