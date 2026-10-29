@@ -193,11 +193,16 @@ def new_id(kind: str, name: str, taken: set[str]) -> str:
     return tile_id
 
 
-def header_text(latex: str) -> str:
-    """The resume's header as plain words: its settings part and everything before its first section."""
+def header_latex(latex: str) -> str:
+    """The resume's header as written: its settings part and everything before its first section."""
     preamble, _, body = COMMENT.sub(r"\1", latex).partition(r"\begin{document}")
     start = SECTION.search(body)
-    return f"{_plain(preamble)} {_plain(body[: start.start()] if start else body)}".strip()
+    return f"{preamble}\n{body[: start.start()] if start else body}"
+
+
+def header_text(latex: str) -> str:
+    """The resume's header as plain words."""
+    return _plain(header_latex(latex))
 
 
 def _with_ids(tiles: list[dict]) -> list[Tile]:

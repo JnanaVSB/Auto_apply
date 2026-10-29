@@ -5,10 +5,13 @@ from pathlib import Path
 
 import sqlcipher3
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException
 
 from app import questionnaire
-from app.documents import tile_sets
+from app.config import ConfigError, load_config
+from app.documents import latex, pdf, tile_sets
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import ResumeError, from_latex, read_latex
 
@@ -50,7 +53,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
     @app.get("/tiles")
     async def tiles_page(request: Request) -> Response:
         view = _tiles_view(request.app.state.conn, data_dir)
-        notice = {"confirmed": "Tiles confirmed.", "unchanged": "Nothing changed, so nothing was saved."}
+        notice = {
+            "confirmed": "Tiles confirmed.", "unchanged": "Nothing changed, so nothing was saved.",
+            "built": "Master PDF built.",
+        }  # fmt: skip
         return page(
             request, "tiles.html", **view, notice=next((notice[n] for n in notice if n in request.query_params), None)
         )
@@ -69,6 +75,29 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             )
         return RedirectResponse(f"/tiles?{'confirmed' if set_id else 'unchanged'}=1", 303)  # reloading never confirms
 
+    @app.post("/tiles/pdf")
+    async def build_master(request: Request) -> Response:
+        """The master PDF: your confirmed tiles in your original wording, with the Questionnaire's contact header."""
+        conn = request.app.state.conn
+        view, contact = _tiles_view(conn, data_dir), questionnaire.load(conn)[0]["contact"]
+        try:
+            if not view.get("current"):
+                raise pdf.PdfError("Confirm your tiles first: the master PDF is made from your confirmed tiles.")
+            if not contact.get("full_name"):
+                raise pdf.PdfError(pdf.NO_NAME)
+            source = latex.resume(contact, view["confirmed"].tiles)
+            await run_in_threadpool(pdf.build_master, data_dir, view["confirmed"].set_id, source)  # up to minutes
+        except pdf.PdfError as error:
+            return page(request, "tiles.html", **view, problem=str(error))
+        return RedirectResponse("/tiles?built=1", 303)
+
+    @app.get("/documents/master/resume-v{set_id:int}.pdf")
+    async def master_pdf(set_id: int) -> Response:
+        path = pdf.master(data_dir, set_id)  # a whole number only: never a path from the address bar
+        if not path.is_file():
+            raise HTTPException(404)
+        return FileResponse(path, media_type="application/pdf", filename=path.name, content_disposition_type="inline")
+
 
 def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path) -> dict:
     """What the Tiles page shows: your confirmed tiles if made from the current resume, else a fresh reading."""
@@ -81,6 +110,10 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path) -> dict:
     current = confirmed is not None and confirmed.resume == resume
     tiles = confirmed.tiles if current else reading.tiles
     contact = questionnaire.load(conn)[0]["contact"]
+    try:
+        one_page = load_config().documents.one_page
+    except ConfigError:  # shown on the Settings page; the default meanwhile
+        one_page = True
     return {
         "resume": resume, "confirmed": confirmed, "current": current, "kinds": PREFIXES,
         "rows": [tile_sets.as_row(tile, position) for position, tile in enumerate(tiles, 1)],
@@ -88,4 +121,5 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path) -> dict:
         "unplaced": reading.unplaced, "reading_problem": reading.problem,
         "contact_empty": not any(contact.get(field) for field, _ in tile_sets.CONTACT),
         "contact_missing": tile_sets.contact_check(contact, header_text(latex)),
+        "pdf": pdf.built(pdf.master(data_dir, confirmed.set_id)) if current else None, "one_page": one_page,
     }  # fmt: skip

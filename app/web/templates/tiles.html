@@ -28,6 +28,22 @@
   <a href="/questionnaire">Questionnaire</a>. The PDF uses the Questionnaire's.</p>
 {% endif %}
 {% if reading_problem %}<p class="error">{{ reading_problem }}</p>{% endif %}
+{% if current %}
+<h2>Master PDF</h2>
+<p class="hint">All your confirmed tiles in your original wording, built on this computer. The first build downloads
+  Tectonic's LaTeX files once (about 40 MB, under a minute).</p>
+{% if pdf %}
+<p><a href="/documents/master/resume-v{{ confirmed.set_id }}.pdf" target="_blank" rel="noopener">View master PDF</a>
+  ({{ pdf.pages }} page{{ "" if pdf.pages == 1 else "s" }})
+  {% if one_page and pdf.pages > 1 %}<span class="mark warn">over one page: {{ pdf.pages }} pages</span>{% endif %}</p>
+{% if pdf.missing %}<p class="error">These characters can't be shown by the font and were left out:
+  {{ pdf.missing | join(" ") }}</p>{% endif %}
+{% endif %}
+<form method="post" action="/tiles/pdf">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <button type="submit">{% if pdf %}Build it again{% else %}Build master PDF{% endif %}</button>
+</form>
+{% endif %}
 
 {% if changes %}
 <h2>What changed since you confirmed</h2>

@@ -59,3 +59,7 @@ ai:
     address: http://127.0.0.1:11434
     thinking: "off"
     context: 16384
+
+# Resume PDFs, built on this computer by Tectonic.
+documents:
+  one_page: true  # the resume must fit on one page; a longer one is marked "over one page" (false: allow more)

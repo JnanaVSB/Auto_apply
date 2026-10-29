@@ -77,10 +77,11 @@ def test_saving_the_form_keeps_the_scoring_and_ai_settings_it_does_not_show(clie
     with settings_file.open("a", encoding="utf-8") as file:
         file.write("scoring:\n  meaning_threshold: 0.7\n  extra_skills: [MuJoCo]\n")
         file.write("ai:\n  evaluator:\n    model: qwen3.6:35b-a3b\n")
+        file.write("documents:\n  one_page: false\n")
     assert "Saved." in save(client, collect_every_hours="6").text
     config = load_config(settings_file)
     assert (config.scoring.meaning_threshold, config.scoring.extra_skills) == (0.7, ["MuJoCo"])
-    assert config.ai.evaluator.model == "qwen3.6:35b-a3b"
+    assert config.ai.evaluator.model == "qwen3.6:35b-a3b" and config.documents.one_page is False
 
 
 @pytest.mark.parametrize(

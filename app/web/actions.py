@@ -322,7 +322,10 @@ def save_settings(form: dict[str, str]) -> str | None:
             name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
         }
         ai |= {"evaluator": evaluator} if evaluator else {}
-        settings |= {name: section for name, section in (("scoring", scoring), ("ai", ai)) if section}
+        documents = dict(old.get("documents") or {})  # not on the form yet: kept as written
+        settings |= {
+            name: section for name, section in (("scoring", scoring), ("ai", ai), ("documents", documents)) if section
+        }
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)
         load_config(new)  # the very rules used when data/config.yaml is read

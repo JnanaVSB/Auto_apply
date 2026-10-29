@@ -4,10 +4,11 @@ import re
 
 import pytest
 from helpers import csrf, log_in
+from test_pdf import fake_tectonic
 from test_tile_sets import form_of
 from test_tiles import RESUME_CLS
 
-from app.documents import tile_sets
+from app.documents import pdf, tile_sets
 from app.documents.tiles import read_tiles
 
 
@@ -82,3 +83,21 @@ def test_your_corrections_are_shown_while_the_resume_is_unchanged(client):
     confirm(client, tile_7_name="Toy Driver, renamed")
     text = client.get("/tiles").text
     assert 'value="Toy Driver, renamed"' in text and 'value="Toy Driver"' not in text
+
+
+def test_the_master_pdf_is_built_from_confirmed_tiles_and_shown(client, tmp_path, monkeypatch):
+    program = fake_tectonic(tmp_path)  # 2 pages, one missing character
+    monkeypatch.setattr(pdf, "tectonic", lambda: program)
+    assert "Confirm your tiles first" in client.post("/tiles/pdf", data={"csrf_token": csrf(client)}).text
+    confirm(client)
+    assert "Fill in the Questionnaire" in client.post("/tiles/pdf", data={"csrf_token": csrf(client)}).text
+    client.post("/questionnaire", data={"contact.full_name": "Alex Example", "csrf_token": csrf(client)})
+    answer = client.post("/tiles/pdf", data={"csrf_token": csrf(client)}, follow_redirects=False)
+    assert answer.headers["location"] == "/tiles?built=1"
+    text = client.get("/tiles?built=1").text
+    assert "Master PDF built." in text and "(2 pages)" in text and "over one page: 2 pages" in text and "☃" in text
+    shown = client.get(re.search(r'href="(/documents/master/resume-v[0-9]+\.pdf)"', text)[1])
+    assert shown.headers["content-type"] == "application/pdf" and shown.content == b"%PDF-fake"
+    assert shown.headers["content-disposition"].startswith("inline")
+    assert client.get("/documents/master/resume-v999.pdf").status_code == 404
+    assert client.get("/documents/master/resume-v..%2F..%2Fapp.db.pdf").status_code == 404

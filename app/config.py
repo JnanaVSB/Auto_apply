@@ -116,6 +116,12 @@ class AISettings(BaseModel):
     evaluator: AIRole = AIRole(model="gemma4:26b-a4b-it-q8_0")  # scores jobs (Stage B)
 
 
+class DocumentSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    one_page: bool = True  # the resume must fit on one page; a longer PDF is marked "over one page"
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -127,6 +133,7 @@ class Config(BaseModel):
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()
+    documents: DocumentSettings = DocumentSettings()
 
 
 def load_config(path: Path | None = None) -> Config:
