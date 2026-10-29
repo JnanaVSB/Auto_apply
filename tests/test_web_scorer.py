@@ -127,6 +127,14 @@ def test_a_failed_run_says_why_and_pauses_automatic_scoring(client, run, data_di
     assert app_scorer(client).failed_at is not None
 
 
+def test_ollama_text_in_a_stopped_run_is_shown_as_plain_text(client, run):
+    run.error = llm.StopScoring("Ollama refused the request (status 500: <script>alert(1)</script>).")
+    client.post("/score", data={"csrf_token": csrf(client)})
+    wait_until_idle(app_scorer(client))
+    text = client.get("/collect").text
+    assert "status 500: &lt;script&gt;alert(1)&lt;/script&gt;" in text and "<script>alert" not in text
+
+
 def test_closing_the_dashboard_stops_scoring_and_keeps_what_is_done(client, run):
     run.release.clear()
     client.post("/score", data={"csrf_token": csrf(client)})

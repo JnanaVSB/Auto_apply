@@ -32,11 +32,16 @@ SUGGEST = """SELECT j.id, j.title, j.company, a.meaning FROM jobs j JOIN stage_a
     WHERE j.status = 'open' AND j.not_interested = 0 AND NOT a.changed AND a.meaning >= ? AND a.meaning < ?
         AND j.id NOT IN (SELECT job_id FROM answer_key)
     ORDER BY j.date_posted IS NULL, j.date_posted DESC, j.id DESC LIMIT ?"""
-# Scores made with your current resume, from every model, on the jobs you marked.
-AI_AGREEMENT = f"""SELECT s.model, k.label, count(s.score), count(s.failed),
-        {", ".join(f"coalesce(sum(s.score >= {threshold}), 0)" for threshold in AI_THRESHOLDS)}
-    FROM answer_key k JOIN ai_scores s ON s.job_id = k.job_id
-    WHERE NOT s.changed AND s.resume = ? GROUP BY s.model, k.label ORDER BY s.model"""  # noqa: S608 (fixed numbers)
+# Scores made with your current resume, from every model, on the jobs you marked; a failed new try with it counts as
+# failed, unless that model also has a current score for the job.
+AI_AGREEMENT = f"""SELECT r.model, k.label, count(r.score), count(r.failed),
+        {", ".join(f"coalesce(sum(r.score >= {threshold}), 0)" for threshold in AI_THRESHOLDS)}
+    FROM answer_key k JOIN (
+        SELECT job_id, model, score, failed FROM ai_scores WHERE NOT changed AND resume = :resume
+        UNION ALL SELECT job_id, model, NULL, failed FROM ai_failures f WHERE NOT changed AND resume = :resume
+            AND NOT EXISTS (SELECT 1 FROM ai_scores s WHERE s.job_id = f.job_id AND s.model = f.model
+                AND NOT s.changed AND s.resume = :resume)
+    ) r ON r.job_id = k.job_id GROUP BY r.model, k.label ORDER BY r.model"""  # noqa: S608 (fixed numbers)
 QUICK_AGREEMENT = f"""SELECT k.label, count(*), coalesce(sum({PASSES}), 0)
     FROM answer_key k JOIN stage_a a ON a.job_id = k.job_id WHERE NOT a.changed GROUP BY k.label"""  # noqa: S608
 # Open jobs that passed the quick check, by the way they passed, and how the chosen model scored them.
@@ -83,7 +88,7 @@ def ai_agreement(conn: sqlcipher3.Connection, resume: str | None) -> dict[str, d
     """For each model, and each of your labels: how many of those jobs it scored, failed, and passed at each
     threshold. Only scores made with your current resume count; none without a usable resume."""
     found: dict[str, dict[str, Counts]] = {}
-    for model, label, scored, failed, *passes in conn.execute(AI_AGREEMENT, (resume,)):
+    for model, label, scored, failed, *passes in conn.execute(AI_AGREEMENT, {"resume": resume}):
         found.setdefault(model, {})[label] = Counts(scored, failed, tuple(passes))
     return found
 

@@ -36,6 +36,7 @@ NOT_ALLOWED = re.compile(r"https?:|www\.", re.IGNORECASE)  # links
 LOOK_ALIKES = str.maketrans("<>", "\u2039\u203a")  # ‹ and ›: "has <2 years" stays readable, never page code
 COPIED = 20  # a whole reason this long found word for word in the ad was copied from it
 ODD_SCORE = 85
+BY_HAND = ": check this job by hand"
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
 HAS_SCORE = "SELECT 1 FROM ai_scores WHERE job_id = ? AND model = ? AND score IS NOT NULL"
@@ -108,7 +109,7 @@ def score_job(
             odd = _odd(score, reasons, ad, quick, settings)
             return Score(score, reasons, None, odd, time.monotonic() - started)
         problems.append("the answer was not in the agreed shape")
-    failed = f"AI score failed twice ({'; then '.join(problems)}): check this job by hand"
+    failed = f"AI score failed twice ({'; then '.join(problems)}){BY_HAND}"
     return Score(None, [], failed, None, time.monotonic() - started)
 
 

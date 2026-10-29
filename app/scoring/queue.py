@@ -104,8 +104,8 @@ def run(
 
     Without `job_ids`, the waiting jobs in queue order, within the scoring time per day. With `job_ids` ("Score
     these"), just those jobs, quick check included, in that order, of any age, without using up the day's time.
-    A failed job is saved only once the next job goes differently: SAME_FAILURES in a row stop the run and stay
-    waiting.
+    A failed job is saved only once the next job goes differently. SAME_FAILURES in a row stop the run: the first is
+    saved as failed, so that a repeat moves on, and the others stay waiting; the time of all of them counts.
     """
 
     def pause_or_stop() -> None:
@@ -115,13 +115,14 @@ def run(
     settings, role = config.scoring, config.ai.evaluator
     stage_a.run(conn, checker, setup, settings, pause_or_stop, out, only=job_ids)
     ids = waiting(conn, role.model, setup, resume.fingerprint) if job_ids is None else job_ids
+    daily = job_ids is None  # the queue's own run: its time counts towards the scoring time per day
     limit = settings.minutes_per_day * 60
     tally, held = Tally(), []  # held: failed jobs in a row, with the same reason
     if ids:
         out(f"AI scoring with {role.model}: {len(ids):,} jobs waiting...")
     for number, job_id in enumerate(ids, 1):
         pause_or_stop()
-        if job_ids is None and used_today(conn) >= limit:
+        if daily and used_today(conn) + _seconds(held) >= limit:  # held failures' time counts too
             out(f"Today's scoring time ({_clock(limit)}) is used up; scoring continues tomorrow.")
             break
         row = conn.execute(JOB, (job_id,)).fetchone()
@@ -131,22 +132,27 @@ def run(
         quick = stage_a.Check(json.loads(keywords), job_skills, json.loads(shared), meaning, False, None)
         result = stage_b.score_job(role, resume.text, title, description, quick, settings, ask=ask)
         if held and result.failed != held[-1][1].failed:
-            _save(conn, held, role.model, resume.fingerprint, job_ids is None)
+            _save(conn, held, role.model, resume.fingerprint, daily)
             held = []
         if result.failed:
             held.append((job_id, result))
             if len(held) == SAME_FAILURES:
+                _save(conn, held[:1], role.model, resume.fingerprint, daily)
+                if daily:
+                    with conn:
+                        conn.execute(stage_b.ADD_TIME, (today(), _seconds(held[1:])))
+                reason = result.failed.removesuffix(stage_b.BY_HAND)
                 raise llm.StopScoring(
-                    f"{SAME_FAILURES} jobs in a row failed the same way, so the cause is most likely Ollama or the AI "
-                    "model settings, not the jobs; they stay not scored yet. Restart Ollama with `ollama serve` and "
-                    f"try again. ({result.failed})"
+                    f"{SAME_FAILURES} jobs in a row failed the same way: {reason}. The cause is most likely Ollama or "
+                    "the AI model settings, not the jobs. The first job is saved as failed; the other "
+                    f"{SAME_FAILURES - 1} stay not scored yet. Restart Ollama with `ollama serve` and try again."
                 )
         else:
-            _save(conn, [(job_id, result)], role.model, resume.fingerprint, job_ids is None)
+            _save(conn, [(job_id, result)], role.model, resume.fingerprint, daily)
         tally = _count(tally, result, settings.ready_threshold)
         if number % PROGRESS_EVERY == 0:
             out(f"  {number:,} of {len(ids):,} scored")
-    _save(conn, held, role.model, resume.fingerprint, job_ids is None)
+    _save(conn, held, role.model, resume.fingerprint, daily)
     if ids:
         out(_summary(tally, settings.ready_threshold, len(ids), used_today(conn), limit))
     return tally
@@ -158,6 +164,10 @@ def _save(
     """Each job's result; with `daily`, its time counts towards today's scoring time."""
     for job_id, result in results:
         stage_b.save(conn, job_id, model, result, resume, today() if daily else None)
+
+
+def _seconds(results: list[tuple[int, stage_b.Score]]) -> float:
+    return sum(result.seconds for _, result in results)
 
 
 def _count(tally: Tally, result: stage_b.Score, ready_threshold: int) -> Tally:

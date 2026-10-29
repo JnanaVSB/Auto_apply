@@ -170,16 +170,37 @@ def test_stopping_keeps_every_finished_job(conn):
     assert len(ai.titles) == 1  # the next run continues with the rest
 
 
-def test_three_jobs_failing_the_same_way_stop_the_run_and_stay_waiting(conn):
-    for number in range(4):
-        add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
-    with pytest.raises(llm.StopScoring, match="3 jobs in a row failed the same way") as stopped:
-        run(conn, lambda *args, **kwargs: "not JSON")
-    assert "not in the agreed shape" in str(stopped.value)
-    assert conn.execute("SELECT count(*) FROM ai_scores").fetchone()[0] == 0  # nothing marked failed
+def test_three_jobs_failing_the_same_way_stop_the_run_and_a_repeat_moves_on(conn, monkeypatch):
+    jobs = [add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1)) for number in range(5)]
+    ticks = iter(range(0, 1000, 5))  # every job takes 5 seconds
+    monkeypatch.setattr(queue.stage_b.time, "monotonic", lambda: next(ticks))
+    for repeat in (1, 2):
+        with pytest.raises(llm.StopScoring) as stopped:
+            run(conn, lambda *args, **kwargs: "not JSON")
+        assert str(stopped.value).startswith(
+            "3 jobs in a row failed the same way: AI score failed twice (the answer was not in the agreed shape; then "
+            "the answer was not in the agreed shape). The cause is most likely Ollama"
+        )
+        assert "check this job by hand" not in str(stopped.value)
+        failed = conn.execute("SELECT job_id FROM ai_scores WHERE failed IS NOT NULL ORDER BY job_id").fetchall()
+        assert failed == [(job,) for job in jobs[:repeat]]  # only the first of the 3 is saved, as failed
+        assert queue.used_today(conn) == 15 * repeat  # all 3 jobs' time counts
     ai = FakeAI()
     run(conn, ai)
-    assert len(ai.titles) == 4  # all four are scored next time
+    assert ai.titles == ["RL Intern 2", "RL Intern 3", "RL Intern 4"]  # the other two of the 3 waited
+
+
+def test_held_failures_are_saved_when_the_days_time_is_used_up(conn, monkeypatch):
+    for number in range(3):
+        add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
+    with conn:
+        conn.execute("INSERT INTO scoring_days VALUES (?, 57)", (TODAY,))  # 3 seconds left of 1 minute
+    ticks = iter(range(0, 1000, 5))  # every job takes 5 seconds
+    monkeypatch.setattr(queue.stage_b.time, "monotonic", lambda: next(ticks))
+    tally, lines = run(conn, lambda *args, **kwargs: "not JSON")
+    assert tally.failed == 1 and "Today's scoring time (0:01:00) is used up; scoring continues tomorrow." in lines
+    assert conn.execute("SELECT count(failed) FROM ai_scores").fetchone()[0] == 1  # the held failure is saved
+    assert queue.used_today(conn) == 62
 
 
 def test_failures_are_saved_once_the_next_job_goes_differently(conn):

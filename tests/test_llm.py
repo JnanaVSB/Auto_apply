@@ -146,26 +146,41 @@ def test_missing_key_is_named_and_nothing_is_sent():
     assert requests == []
 
 
+DOWNLOADED = httpx.Response(200, json={"models": [{"name": "gemma4:26b-a4b-it-q8_0"}]})
+
+
+def version(number):
+    return httpx.Response(200, json={"version": number})
+
+
 @pytest.mark.parametrize(
-    ("reply", "ready", "line"),
+    ("replies", "ready", "line"),
     [
-        (httpx.Response(200, json={"models": [{"name": "gemma4:26b-a4b-it-q8_0"}]}), True, "is downloaded"),
-        (
-            httpx.Response(200, json={"models": [{"name": "qwen3:14b"}]}),
-            False,
-            "run `ollama pull gemma4:26b-a4b-it-q8_0`",
-        ),
-        (httpx.ConnectError("refused"), False, "start it with `ollama serve`"),
-        (httpx.Response(200, text="not JSON"), False, "did not answer as expected"),
-        (httpx.Response(200, json={"models": ["no names"]}), False, "did not answer as expected"),
+        ((DOWNLOADED, version("0.32.15")), True, "is downloaded"),
+        ((DOWNLOADED, version("1.0.2-rc1")), True, "is downloaded"),
+        ((httpx.Response(200, json={"models": [{"name": "qwen3:14b"}]}), version("0.32.15")), False,
+         "run `ollama pull gemma4:26b-a4b-it-q8_0`"),
+        ((httpx.ConnectError("refused"),), False, "start it with `ollama serve`"),
+        ((httpx.Response(200, text="not JSON"),), False, "did not answer as expected"),
+        ((httpx.Response(200, json={"models": ["no names"]}),), False, "did not answer as expected"),
+        ((DOWNLOADED, version("0.31.2")), False, "Ollama 0.31.2 is older than 0.32.15: update it"),
+        ((DOWNLOADED, version("0.32.9")), False, "Ollama 0.32.9 is older than 0.32.15"),
+        # a version that cannot be read, or 0.0.0 (built from source code), is unknown: nothing is blocked
+        ((DOWNLOADED, httpx.Response(404)), True, "is downloaded"),
+        ((DOWNLOADED, version(32)), True, "is downloaded"),
+        ((DOWNLOADED, version("dev")), True, "is downloaded"),
+        ((DOWNLOADED, version("0.0.0")), True, "is downloaded"),
+        ((DOWNLOADED, httpx.ReadTimeout("slow")), True, "is downloaded"),
     ],
-)
-def test_ollama_status_says_what_to_do(reply, ready, line):
+)  # fmt: skip
+def test_ollama_status_says_what_to_do(replies, ready, line):
     from app.llm import ollama
 
-    transport, _ = fake(reply)
+    transport, requests = fake(*replies)
     found, text = ollama.status(LOCAL, transport)
     assert found == ready and line in text
+    paths = ["/api/tags", "/api/version"][: len(replies)]
+    assert [str(request.url) for request in requests] == [f"http://127.0.0.1:11434{path}" for path in paths]
 
 
 @pytest.mark.parametrize(

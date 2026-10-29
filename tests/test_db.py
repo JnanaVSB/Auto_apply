@@ -668,8 +668,10 @@ def test_version_9_adds_scoring_and_keeps_every_job(tmp_path, monkeypatch):
             )
     with closing(db.connect(path)) as conn:
         assert conn.execute("SELECT title, prepare_anyway FROM jobs").fetchall() == [("ML Intern", 0)]
-        for table in ("stage_a", "ai_scores", "answer_key", "scoring_days"):
+        for table in ("stage_a", "ai_scores", "answer_key", "scoring_days", "ai_failures"):
             assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 (fixed names)
+        trigger = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'job_text_changed'").fetchone()[0]
+        assert "UPDATE ai_failures SET changed = 1" in trigger
     with _open_as_is(path / f"{db.DB_FILE}.bak-v8") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
 

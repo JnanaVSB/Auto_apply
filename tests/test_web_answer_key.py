@@ -55,6 +55,23 @@ def test_ai_agreement_counts_only_current_scores_per_model_and_label(conn, jobs)
     assert answer_key.ai_agreement(conn, None) == {}  # no usable resume: no score counts
 
 
+def test_a_failed_new_try_with_the_current_resume_counts_as_failed(conn, jobs):
+    failure = (
+        "INSERT INTO ai_failures (job_id, model, failed, resume, changed, tried_on) VALUES (?, ?, 'x', ?, ?, 'now')"
+    )
+    with conn:
+        conn.execute(
+            "UPDATE ai_scores SET resume = 'resume-before' WHERE job_id = ? AND model = ?", (jobs["Yes"], MODEL)
+        )
+        conn.execute(failure, (jobs["Yes"], MODEL, "resume-now", 0))  # counts as failed
+        conn.execute(failure, (jobs["Yes RL"], MODEL, "resume-now", 0))  # its current score counts instead
+        conn.execute(failure, (jobs["No"], OTHER, "resume-now", 1))  # the ad changed since: not counted
+        conn.execute(failure, (jobs["No changed"], OTHER, "resume-before", 0))  # an older resume: not counted
+    found = answer_key.ai_agreement(conn, "resume-now")
+    assert found[MODEL]["yes"] == Counts(1, 1, (1, 1, 1, 1))
+    assert found[OTHER] == {"yes": Counts(1, 0, (1, 1, 0, 0))}
+
+
 def test_quick_agreement_at_each_meaning_threshold(conn, jobs):
     found = answer_key.quick_agreement(conn, ScoringSettings(meaning_threshold=0.52))
     assert list(found) == [0.45, 0.50, 0.52, 0.55, 0.60, 0.65]  # your own setting is always a row

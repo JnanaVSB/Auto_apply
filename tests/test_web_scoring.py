@@ -175,7 +175,8 @@ def test_unknown_jobs_and_labels_are_refused(client, five, path, data, status):
     assert reply.status_code == status
 
 
-def test_a_changed_ad_and_a_failed_new_try_are_marked(client, conn, five):
+def test_a_changed_ad_and_a_failed_new_try_are_marked(client, conn, five, monkeypatch):
+    monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     failed = "AI score failed twice (no answer within 120 seconds; then no answer within 120 seconds)"
     with conn:
         conn.execute("UPDATE ai_scores SET changed = 1 WHERE job_id = ?", (five["Low"],))
@@ -187,7 +188,13 @@ def test_a_changed_ad_and_a_failed_new_try_are_marked(client, conn, five):
     page = queries.list_jobs(conn, queries.Filters.from_address("f=1&status=open"), CHOSEN)
     marked = {job["title"]: (job["ad_changed"], job["new_try_failed"]) for job in page.jobs if job["score"]}
     assert marked == {"Low": (1, failed), "Ready": (0, None)}
-    assert "the ad changed since" in client.get("/").text
+    assert "the ad changed since" in client.get("/").text and "a new try failed" in client.get("/").text
     text = client.get(f"/jobs/{five['Low']}").text
     assert "40 of 100" in text and "Different field." in text  # the older score and its reasons stay
     assert f"A new try on 2026-10-29 failed: {failed}." in text and "the ad changed since" in text
+    with conn:
+        conn.execute("UPDATE ai_failures SET resume = 'resume-before'")  # the resume changed again since that try
+    page = queries.list_jobs(conn, queries.Filters.from_address("f=1&status=open"), CHOSEN)
+    assert not any(job["new_try_failed"] for job in page.jobs)
+    assert "a new try failed" not in client.get("/").text
+    assert "A new try on" not in client.get(f"/jobs/{five['Low']}").text

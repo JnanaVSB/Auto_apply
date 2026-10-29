@@ -54,8 +54,8 @@ US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
 # Every jobs query joins each job's quick check, its score from the chosen model and a failed new try (when a new
-# try failed, the older score stays). The first two values of every
-# query are that model and the ready threshold; a job's scoring status is worked out from them when it is shown.
+# try failed, the older score stays). The first two values of every query are that model and the ready threshold; a
+# job's scoring status is worked out from them when it is shown.
 SCORED = """WITH chosen (model, threshold) AS (SELECT ?, ?)
     SELECT {columns} FROM jobs CROSS JOIN chosen LEFT JOIN stage_a a ON a.job_id = jobs.id
     LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model
@@ -65,16 +65,16 @@ STATUS = """CASE WHEN jobs.prepare_anyway OR s.score >= chosen.threshold THEN 'r
     ELSE 'waiting' END"""
 ODD = "(s.odd IS NOT NULL OR a.trick IS NOT NULL)"
 SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, s.changed AS ad_changed,
-    f.failed AS new_try_failed, {STATUS} AS scoring,
+    f.failed AS new_try_failed, f.resume AS new_try_resume, {STATUS} AS scoring,
     jobs.prepare_anyway, (SELECT o.model || ': ' || o.score FROM ai_scores o WHERE o.job_id = jobs.id
         AND o.model != chosen.model AND o.score IS NOT NULL ORDER BY o.scored_on DESC LIMIT 1) AS other"""  # noqa: S608 (fixed text)
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
     added_by_you, check_location, location_by_you, not_interested"""
 JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume,
-    s.changed AS ad_changed, f.failed AS new_try_failed, f.tried_on AS new_try_on, a.keywords,
-    a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on, jobs.prepare_anyway,
-    (SELECT label FROM answer_key WHERE job_id = jobs.id) AS answer"""  # noqa: S608 (fixed text)
+    s.changed AS ad_changed, f.failed AS new_try_failed, f.resume AS new_try_resume, f.tried_on AS new_try_on,
+    a.keywords, a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on,
+    jobs.prepare_anyway, (SELECT label FROM answer_key WHERE job_id = jobs.id) AS answer"""  # noqa: S608 (fixed text)
 OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE job_id = ? AND model != ?
     ORDER BY scored_on DESC"""
 SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
@@ -269,7 +269,7 @@ def list_jobs(conn: sqlcipher3.Connection, view: Filters, scoring: Scoring = DEF
     found = [dict(zip(names, row, strict=True)) for row in rows]
     for job in found:
         job["locations"], job["reasons"] = json.loads(job["locations"]), json.loads(job["reasons"] or "[]")
-        job["older"] = bool(scoring.resume and job["resume"] and job["resume"] != scoring.resume)
+        _resume_marks(job, scoring)
     page = Page(found, total, number, pages)
     if view.status:
         where, values = _where(view, status=False)
@@ -346,9 +346,16 @@ def job_scoring(conn: sqlcipher3.Connection, job_id: int, scoring: Scoring = DEF
     for name in ("reasons", "keywords", "shared_skills"):
         found[name] = json.loads(found[name] or "[]")
     found["label"], found["model"] = SCORING_LABELS[found["status"]], scoring.model
-    found["older"] = bool(scoring.resume and found["resume"] and found["resume"] != scoring.resume)
+    _resume_marks(found, scoring)
     found["others"] = conn.execute(OTHER_SCORES, (job_id, scoring.model)).fetchall()
     return found
+
+
+def _resume_marks(job: dict, scoring: Scoring) -> None:
+    """Marks that depend on the current resume: scored with an older one, and a failed new try made with this one."""
+    job["older"] = bool(scoring.resume and job["resume"] and job["resume"] != scoring.resume)
+    if job.pop("new_try_resume") != scoring.resume:  # a try with another resume no longer applies
+        job["new_try_failed"] = None
 
 
 def _board_state(stopped: str | None, retired: str | None, read: str | None) -> str:
