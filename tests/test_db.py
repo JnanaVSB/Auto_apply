@@ -712,6 +712,43 @@ def test_version_10_adds_failed_new_tries_and_keeps_every_score(tmp_path, monkey
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
+def test_version_11_adds_documents_and_keeps_every_job(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_10:
+        version_10.setattr(db, "UPGRADES", db.UPGRADES[:10])
+        version_10.setattr(db, "SCHEMA_VERSION", 10)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT title, prepare_requested_on FROM jobs").fetchall() == [("ML Intern", None)]
+        assert conn.execute("SELECT score FROM ai_scores").fetchall() == [(80,)]
+        for table in ("questionnaire", "tile_sets", "tiles"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 (fixed names)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v10") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+
+
+TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts) VALUES (1, '{}', {}, '{}', 'Work', '{{}}')"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        TILE.format("hob-1", 2, "hobby"),
+        TILE.format("exp-2", 1, "experience"),  # the same place as the first tile
+        "INSERT INTO questionnaire VALUES (2, '{}', 'now')",  # only one set of answers
+    ],
+)
+def test_document_tables_refuse_impossible_values(data_dir, sql):
+    with closing(db.connect(data_dir)) as conn:
+        with conn:
+            conn.execute("INSERT INTO tile_sets VALUES (1, 'fp', 'now')")
+            conn.execute(TILE.format("exp-1", 1, "experience"))
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute(sql)
+
+
 @pytest.mark.parametrize(
     ("update", "changed"),
     [

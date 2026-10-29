@@ -318,6 +318,33 @@ UPGRADES = (
         UPDATE ai_failures SET changed = 1 WHERE job_id = new.id;
     END;
     """,
+    """
+    -- Phase 4a documents. Nothing is deleted: confirming tiles again adds a new set and keeps the older ones, so a
+    -- resume prepared from older tiles can always be traced back to them.
+    CREATE TABLE questionnaire (
+        id INTEGER PRIMARY KEY CHECK (id = 1),  -- one set of your standard answers
+        answers TEXT NOT NULL,  -- JSON, checked by the app before saving
+        saved_on TEXT NOT NULL
+    );
+    CREATE TABLE tile_sets (  -- one row each time you press "Confirm tiles"
+        id INTEGER PRIMARY KEY,
+        resume TEXT NOT NULL,  -- fingerprint of the resume the tiles were read from
+        confirmed_on TEXT NOT NULL
+    );
+    CREATE TABLE tiles (
+        set_id INTEGER NOT NULL REFERENCES tile_sets (id),
+        tile_id TEXT NOT NULL,  -- stable id from the kind and fixed facts, e.g. exp-3f2a
+        position INTEGER NOT NULL,  -- order on your master resume
+        kind TEXT NOT NULL CHECK (kind IN ('experience', 'project', 'education', 'publication', 'skills', 'award',
+            'summary', 'other')),
+        section TEXT NOT NULL,  -- the heading it appears under, e.g. Research Experience
+        facts TEXT NOT NULL,  -- JSON object: the fixed facts the Writer can never change
+        bullets TEXT NOT NULL DEFAULT '[]',  -- JSON list of the bullets' text
+        PRIMARY KEY (set_id, tile_id),
+        UNIQUE (set_id, position)
+    );
+    ALTER TABLE jobs ADD COLUMN prepare_requested_on TEXT;  -- when you pressed Prepare; NULL until you do
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
