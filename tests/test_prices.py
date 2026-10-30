@@ -15,10 +15,12 @@ OWN = AIRole(service="openai-compatible", model="my-model", address="https://mod
 def test_the_list_is_dated_and_names_its_models():
     assert prices.checked() == "2026-10-30"
     assert prices.models("anthropic") == {
-        "claude-opus-5-5": "Claude Opus 5.5", "claude-sonnet-5-5": "Claude Sonnet 5.5",
-        "claude-haiku-5-5": "Claude Haiku 5.5",
+        "claude-opus-5-5": ("Claude Opus 5.5", (4, 0.2, 20)), "claude-sonnet-5-5": ("Claude Sonnet 5.5", (2, 0.1, 10)),
+        "claude-haiku-5-5": ("Claude Haiku 5.5", (0.1, 0.01, 0.5)),
     }  # fmt: skip
-    assert prices.models("openai") == {"gpt-6.1-sol": "GPT-6.1 Sol", "gpt-6.1-terra": "GPT-6.1 Terra"}
+    assert prices.models("openai") == {
+        "gpt-6.1-sol": ("GPT-6.1 Sol", (2, 0.1, 10)), "gpt-6.1-terra": ("GPT-6.1 Terra", (1, 0.05, 5))
+    }  # fmt: skip
 
 
 @pytest.mark.parametrize(

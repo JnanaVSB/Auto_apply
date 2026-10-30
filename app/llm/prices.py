@@ -28,9 +28,11 @@ def checked() -> str:
     return _list()["checked"]
 
 
-def models(service: str) -> dict[str, str]:
-    """The ready-made models of "anthropic" or "openai": their names as the app sends them, and as people say them."""
-    return {model: found["name"] for model, found in _list()["models"].items() if found["service"] == service}
+def models(service: str) -> dict[str, tuple[str, Price]]:
+    """The ready-made models of "anthropic" or "openai", by the name the app sends: the name people say, and the
+    normal price."""
+    listed = _list()["models"].items()
+    return {model: (found["name"], Price(*found["normal"])) for model, found in listed if found["service"] == service}
 
 
 def price(role: AIRole, prompt_tokens: int = 0, half: bool = False) -> Price | None:

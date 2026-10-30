@@ -301,3 +301,43 @@ def test_your_own_address_without_a_key_is_sent_no_key(fake_keychain):
     assert llm.call(OWN, "rules", "texts", SHAPE, transport=transport).text == "{}"
     assert str(requests[0].url) == "http://192.168.1.5:8000/v1/chat/completions"
     assert "Authorization" not in requests[0].headers
+
+
+@pytest.mark.parametrize(
+    ("role", "reply", "works", "line"),
+    [
+        (CLAUDE, httpx.Response(200, json={"id": "claude-sonnet-5-5"}), True, "Anthropic accepted the key and knows"),
+        (CLAUDE, httpx.Response(401), False, "Anthropic refused the key (status 401)"),
+        (CLAUDE, httpx.Response(404), False, "does not know the model 'claude-sonnet-5-5'"),
+        (OPENAI, httpx.Response(200, json={"data": [{"id": "gpt-6.1-sol"}]}), True, "OpenAI accepted the request"),
+        (OPENAI, httpx.Response(200, json={"data": [{"id": "gpt-6.1-terra"}]}), False, "does not list the model"),
+        (OPENAI, httpx.Response(200, text="<html>"), False, "did not answer as expected"),
+        (OWN, httpx.Response(404), False, "192.168.1.5 answers, but doesn't list its models"),
+        (OPENAI, httpx.Response(404), False, "OpenAI does not know the model"),
+        (CLAUDE, httpx.ConnectError("no route"), False, "Could not reach api.anthropic.com"),
+        (OWN, httpx.ReadTimeout("slow"), False, "Could not reach 192.168.1.5"),
+    ],
+)
+def test_the_free_check_says_whether_the_model_can_be_used(keys, role, reply, works, line):
+    transport, requests = fake(reply)
+    found, text = llm.check(role, transport)
+    assert found == works and line in text and FAKE_KEY not in text
+    assert requests[0].method == "GET" and requests[0].content == b""  # nothing of yours is sent
+
+
+def test_the_free_check_asks_the_right_address_with_the_key(keys):
+    transport, requests = fake(*[httpx.Response(200, json={"data": [{"id": "my-model"}]})] * 3)
+    for role in (CLAUDE, OPENAI, OWN):
+        llm.check(role, transport)
+    assert [str(request.url) for request in requests] == [
+        "https://api.anthropic.com/v1/models/claude-sonnet-5-5", "https://api.openai.com/v1/models",
+        "http://192.168.1.5:8000/v1/models",
+    ]  # fmt: skip
+    assert requests[0].headers["x-api-key"] == FAKE_KEY and requests[1].headers["Authorization"] == f"Bearer {FAKE_KEY}"
+    assert "Authorization" not in requests[2].headers  # your own address without a key
+
+
+def test_the_free_check_without_a_saved_key_sends_nothing():
+    transport, requests = fake()
+    found, text = llm.check(CLAUDE, transport)
+    assert not found and "No key is saved in the keychain under the name 'anthropic'" in text and requests == []

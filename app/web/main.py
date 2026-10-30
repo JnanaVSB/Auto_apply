@@ -22,7 +22,7 @@ from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
-from app.web import actions, answer_key, prepare, queries, security
+from app.web import actions, answer_key, prepare, queries, security, writer_settings
 from app.web.collector import Collector
 from app.web.scorer import Scorer
 
@@ -315,6 +315,7 @@ def create_app(
         return await _settings_page(request, problem=problem, typed=typed)
 
     prepare.add_routes(app, _page, data_dir, lambda: _scoring())  # looked up at each call, as the routes above do
+    writer_settings.add_routes(app, _page)
     return app
 
 

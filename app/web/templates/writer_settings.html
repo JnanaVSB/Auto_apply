@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Writer settings{% endblock %}
+{% macro thinking(chosen, levels=["off", "low", "medium", "high"]) %}
+  <label>Thinking
+    <select name="thinking">
+      {% for value in levels %}<option{% if chosen == value %} selected{% endif %}>{{ value }}</option>{% endfor %}
+    </select></label>
+{% endmacro %}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% block content %}
+<h1>Writer settings</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if file_problem %}
+<p class="error" role="alert">{{ file_problem }}</p>
+<p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
+{% else %}
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if saved %}<p class="result" role="status">{{ saved }}</p>{% endif %}
+{% for line in warnings %}<p class="error">{{ line }}</p>{% endfor %}
+
+<h2>Which model writes your resumes</h2>
+{% if writer is none %}
+<p>None chosen yet: choose one below. Prepare works once a Writer is chosen.</p>
+{% elif kind == "local" %}
+<p>In use: <strong>{{ writer.model }}</strong> on this laptop (free), thinking {{ writer.thinking }}, working size {{ "{:,}".format(writer.context) }}.</p>
+{% elif kind == "own" %}
+<p>In use: <strong>{{ writer.model }}</strong> at your own address <code>{{ writer.address }}</code>{% if writer.key_name %} with the key "{{ writer.key_name }}"{% endif %}, thinking {{ writer.thinking }}.</p>
+{% else %}
+<p>In use: <strong>{{ models[kind][writer.model][0] if writer.model in models[kind] else writer.model }}</strong> from {{ "Anthropic" if kind == "anthropic" else "OpenAI" }} with the key "{{ writer.key_name }}", thinking {{ writer.thinking }}.</p>
+{% endif %}
+<form method="post" action="/settings/writer/test" class="inline">{{ csrf_field() }}
+  <button type="submit"{% if writer is none %} disabled{% endif %}>Test</button></form>
+<span class="hint">Free: it only asks whether the model can be used, and sends nothing of yours.</span>
+{% if test %}<p class="{{ 'result' if test[0] else 'error' }}" role="status">{{ test[1] }}</p>{% endif %}
+
+<h3>On this laptop (Ollama)</h3>
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="kind" value="local">
+  <p class="hint">Free, and nothing leaves the laptop. The same model and working size as scoring avoid slow switching.</p>
+  {% if installed %}
+  <label>Model
+    <select name="model">
+      {% for name in installed %}<option{% if values.local.model == name %} selected{% endif %}>{{ name }}</option>{% endfor %}
+    </select></label>
+  {% else %}
+  <p class="error">Ollama isn't running or has no models: start it with <code>ollama serve</code>, then reload this page.</p>
+  {% endif %}
+  {{ thinking(values.local.thinking) }}
+  <label>Working size in word-pieces (2048 to 262144)
+    <input name="context" type="number" min="2048" max="262144" step="1" value="{{ values.local.context }}"></label>
+  <button type="submit"{% if not installed %} disabled{% endif %}>Use this</button>
+</form>
+
+{% for service, label in [("anthropic", "Anthropic (Claude)"), ("openai", "OpenAI")] %}
+<h3>{{ label }}</h3>
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="kind" value="{{ service }}">
+  <p class="hint">Paid, at the normal price; counted within your limits. Uses the key "{{ service }}" (Keys below).
+    Prices per 1M tokens (read / written), checked {{ checked }}.</p>
+  <label>Model
+    <select name="model">
+      {% for model, (name, price) in models[service].items() %}
+      <option value="{{ model }}"{% if values[service].model == model %} selected{% endif %}>{{ name }}: ${{ price.input }} / ${{ price.output }}</option>
+      {% endfor %}
+    </select></label>
+  {{ thinking(values[service].thinking, ["low", "medium", "high"] if service == "anthropic" else ["off", "low", "medium", "high"]) }}
+  <button type="submit">Use this</button>
+</form>
+{% endfor %}
+
+<h3>Your own address</h3>
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="kind" value="own">
+  <p class="hint">A server you host or rent that accepts OpenAI-style requests. Use only hosts you are allowed to use
+    (never the ASU network). https://, or http:// on a private network written as numbers (e.g. http://192.168.1.5:8000/v1).</p>
+  <label>Address <input name="address" type="url" maxlength="300" value="{{ values.own.address }}"></label>
+  <label>Model name, as your server knows it <input name="model" maxlength="100" value="{{ values.own.model }}"></label>
+  {{ thinking(values.own.thinking) }}
+  <label class="tick"><input type="checkbox" name="needs_key" value="on"{% if values.own.needs_key %} checked{% endif %}> This address needs a key (saved under "own-address" in Keys below)</label>
+  <p class="hint">Prices per 1M tokens, if you know them (both, or leave both empty: costs are then not counted).</p>
+  <label>Price for text read, $ <input name="price_input" inputmode="decimal" maxlength="12" value="{{ values.own.price_input }}"></label>
+  <label>Price for text written, $ <input name="price_output" inputmode="decimal" maxlength="12" value="{{ values.own.price_output }}"></label>
+  <label class="tick"><input type="checkbox" name="confirm" value="on"> I confirm that my entries (contact details hidden) and the job ads will be sent to this address</label>
+  <button type="submit">Use this</button>
+</form>
+
+<h2>Keys</h2>
+<p class="hint">Kept only in your computer's keychain: never shown again, never written to a file.</p>
+{% for name, label in names.items() %}
+<form method="post" action="/settings/keys/{{ name }}" class="actions">{{ csrf_field() }}
+  <strong>{{ label }}</strong>
+  <span>{{ "saved" if keys[name] else ("not saved" if keys[name] is false else "the keychain can't be read") }}</span>
+  <label>Key <input name="key" type="password" autocomplete="off" maxlength="500"></label>
+  <button type="submit">Save key</button>
+  {% if keys[name] %}<button type="submit" name="remove" value="1">Remove key</button>{% endif %}
+</form>
+{% endfor %}
+
+<h2>Spending and resume</h2>
+<form method="post" action="/settings/limits" class="stacked">{{ csrf_field() }}
+  <p class="hint">A paid call is sent only if its largest possible cost still fits within both limits. Set the same
+    monthly limit on your Anthropic and OpenAI accounts too.</p>
+  <label>Daily limit, $ (1 to 500)
+    <input name="daily" inputmode="decimal" maxlength="12" value="{{ limits.daily if limits else spending.daily }}"></label>
+  <label>Monthly limit, $ (1 to 5000)
+    <input name="monthly" inputmode="decimal" maxlength="12" value="{{ limits.monthly if limits else spending.monthly }}"></label>
+  <label>One-page resume
+    <select name="one_page">
+      {% for value, label in [("on", "on: a longer resume is marked \"over one page\""), ("off", "off: allow more pages")] %}
+      <option value="{{ value }}"{% if (limits.one_page if limits else ("on" if one_page else "off")) == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
+  <button type="submit">Save</button>
+</form>
+{% endif %}
+{% endblock %}

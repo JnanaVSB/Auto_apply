@@ -18,6 +18,23 @@ def most_output(role: AIRole, limit: int | None) -> int:
     return (limit or ANSWER_LIMIT) + (0 if role.thinking == "off" else THINKING_ROOM)
 
 
+def check(client: httpx.Client, role: AIRole, key: str | None) -> tuple[bool, str]:
+    """Asks for the service's list of models, which OpenAI-style services give for free."""
+    name = urlsplit(role.address).hostname if role.own else "OpenAI"
+    reply = client.get(f"{role.address}/models", headers={"Authorization": f"Bearer {key}"} if key else {})
+    if reply.status_code == 404 and role.own:
+        return False, f"{name} answers, but doesn't list its models: your first Prepare will show whether it works."
+    if reply.status_code != 200:
+        return False, str(refused(name, reply.status_code, role.model))
+    try:
+        names = {model.get("id") for model in reply.json()["data"]}
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False, f"{name} did not answer as expected: check the address (it usually ends in /v1)."
+    if role.model not in names:
+        return False, f"{name} does not list the model '{role.model}': check the model name."
+    return True, f"{name} accepted the request and knows the model {role.model}."
+
+
 def answer(
     client: httpx.Client, role: AIRole, key: str | None, system: str, user: str, schema: dict, retry: bool,
     limit: int | None,

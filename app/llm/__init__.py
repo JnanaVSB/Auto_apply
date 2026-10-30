@@ -15,6 +15,7 @@ from app.config import AIRole
 from app.keychain import get_secret
 
 TIMEOUT_SECONDS = 120  # per answer; the first answer of the day also loads the model (about 20 s)
+CHECK_SECONDS = 10
 
 
 class Usage(NamedTuple):
@@ -93,6 +94,24 @@ def call(
             raise StopScoring(
                 f"Could not reach {urlsplit(role.address).hostname}: check your internet connection."
             ) from None
+
+
+def check(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[bool, str]:
+    """Whether the role's model can be used, and one line saying so or giving the fix. Free: it only asks whether
+    the model exists for your key, and sends nothing of yours."""
+    if role.service == "ollama":
+        from app.llm import ollama
+
+        return ollama.status(role, transport)
+    try:
+        key = None if role.key_name is None else _key(role)
+    except StopScoring as error:
+        return False, str(error)
+    with httpx.Client(transport=transport, timeout=CHECK_SECONDS, follow_redirects=False, trust_env=False) as client:
+        try:
+            return _service(role).check(client, role, key)
+        except httpx.TransportError:  # time-outs too
+            return False, f"Could not reach {urlsplit(role.address).hostname}: check the address and your connection."
 
 
 def most_output(role: AIRole, answer_limit: int | None = None) -> int:

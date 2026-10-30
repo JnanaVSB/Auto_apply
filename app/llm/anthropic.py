@@ -20,6 +20,15 @@ def most_output(role: AIRole, limit: int | None) -> int:
     return (limit or ANSWER_LIMIT) + THINKING_ROOM
 
 
+def check(client: httpx.Client, role: AIRole, key: str) -> tuple[bool, str]:
+    reply = client.get(
+        f"{role.address}/v1/models/{role.model}", headers={"x-api-key": key, "anthropic-version": API_VERSION}
+    )
+    if reply.status_code != 200:
+        return False, str(refused("Anthropic", reply.status_code, role.model))
+    return True, f"Anthropic accepted the key and knows the model {role.model}."
+
+
 def answer(
     client: httpx.Client, role: AIRole, key: str, system: str, user: str, schema: dict, retry: bool, limit: int | None
 ) -> Reply:

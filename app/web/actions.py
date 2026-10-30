@@ -8,6 +8,7 @@ their own database connection.
 import re
 import threading
 import unicodedata
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -289,41 +290,19 @@ def settings_form() -> dict[str, str]:
 def save_settings(form: dict[str, str]) -> str | None:
     """Check the form's settings with the usual rules, then swap them in all at once; returns the problem, or None.
 
-    The data folder is kept exactly as written in the file; it is changed by hand only. So are the AI settings the
-    form does not show (a cloud service, its address and key name, other roles).
+    The data folder is kept exactly as written in the file; it is changed by hand only. So are the settings the form
+    does not show (the Writer page's, a cloud evaluator's address and key name).
     """
+    return update_settings(lambda old: _from_form(old, form))
+
+
+def update_settings(change: Callable[[dict], dict]) -> str | None:
+    """The settings file as `change` makes it from the file as written, checked with the usual rules, then swapped in
+    all at once; returns the problem, or None."""
     path = settings_file.CONFIG_PATH
-    rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
     new = path.with_name(f"{path.name}.new")
     try:
-        old = yaml.safe_load(path.read_text(encoding="utf-8"))
-        settings = {
-            "data_dir": old["data_dir"],
-            "roles": {
-                "simplify_categories": _lines(form.get("simplify_categories", "")),
-                "keywords": _lines(form.get("keywords", "")),
-            },
-            "sources": {
-                "simplify_lists": [
-                    {"url": form[f"list_url_{number}"].strip(), "level": form.get(f"list_level_{number}", "")}
-                    for number in rows
-                    if form[f"list_url_{number}"].strip()
-                ],
-                "extra_boards": _lines(form.get("extra_boards", "")),
-                "phonebook_lists": _lines(form.get("phonebook_lists", "")),
-            },
-            **{name: _whole(form.get(name, "")) for name in NUMBERS},
-        }
-        scoring = dict(old.get("scoring") or {}) | {
-            name: read(form[name]) for name, read in SCORING_FIELDS.items() if name in form
-        }
-        ai = dict(old.get("ai") or {})
-        evaluator = dict(ai.get("evaluator") or {}) | {
-            name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
-        }
-        ai |= {"evaluator": evaluator} if evaluator else {}
-        kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending")}  # not on the form yet
-        settings |= {name: section for name, section in {"scoring": scoring, "ai": ai, **kept}.items() if section}
+        settings = change(yaml.safe_load(path.read_text(encoding="utf-8")))
         new.write_text(SETTINGS_HEADER + yaml.safe_dump(settings, sort_keys=False, allow_unicode=True), "utf-8")
         new.chmod(0o600)
         load_config(new)  # the very rules used when data/config.yaml is read
@@ -337,3 +316,34 @@ def save_settings(form: dict[str, str]) -> str | None:
     finally:
         new.unlink(missing_ok=True)
     return None
+
+
+def _from_form(old: dict, form: dict[str, str]) -> dict:
+    rows = sorted(int(match[1]) for match in map(LIST_ROW.fullmatch, form) if match)  # every list on the form
+    settings = {
+        "data_dir": old["data_dir"],
+        "roles": {
+            "simplify_categories": _lines(form.get("simplify_categories", "")),
+            "keywords": _lines(form.get("keywords", "")),
+        },
+        "sources": {
+            "simplify_lists": [
+                {"url": form[f"list_url_{number}"].strip(), "level": form.get(f"list_level_{number}", "")}
+                for number in rows
+                if form[f"list_url_{number}"].strip()
+            ],
+            "extra_boards": _lines(form.get("extra_boards", "")),
+            "phonebook_lists": _lines(form.get("phonebook_lists", "")),
+        },
+        **{name: _whole(form.get(name, "")) for name in NUMBERS},
+    }
+    scoring = dict(old.get("scoring") or {}) | {
+        name: read(form[name]) for name, read in SCORING_FIELDS.items() if name in form
+    }
+    ai = dict(old.get("ai") or {})
+    evaluator = dict(ai.get("evaluator") or {}) | {
+        name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
+    }
+    ai |= {"evaluator": evaluator} if evaluator else {}
+    kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending")}  # on the Writer page
+    return settings | {name: section for name, section in {"scoring": scoring, "ai": ai, **kept}.items() if section}
