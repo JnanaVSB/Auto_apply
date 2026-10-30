@@ -22,10 +22,12 @@ from app.resume import ResumeError, read_latex
 KIND = "resume"  # the cover letter is its own kind
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
-LATEST = """SELECT id, version, status, problem, sources, draft, flags, created_on FROM preparations
-    WHERE job_id = ? AND kind = ? ORDER BY version DESC LIMIT 1"""
-START = """INSERT INTO preparations (job_id, kind, version, sources, writer, status, created_on) VALUES (?, ?,
-    (SELECT coalesce(max(version), 0) + 1 FROM preparations WHERE job_id = ? AND kind = ?), ?, ?, 'writing', ?)"""
+NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, created_on FROM preparations
+    WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
+LATEST, LAST_DONE = NEWEST.format(""), NEWEST.format("AND status = 'done'")
+START = """INSERT INTO preparations (job_id, kind, version, based_on, feedback, sources, writer, status, created_on)
+    VALUES (?, ?, (SELECT coalesce(max(version), 0) + 1 FROM preparations WHERE job_id = ? AND kind = ?), ?, ?, ?, ?,
+    'writing', ?)"""
 FINISH = "UPDATE preparations SET status = ?, problem = ?, draft = ?, flags = ?, finished_on = ? WHERE id = ?"
 FIRST_SEND = """INSERT INTO steps (preparation_id, service, model, status, cost, reserved, day, sent_on)
     VALUES (?, ?, ?, 'sent', ?, ?, ?, ?)"""
@@ -39,24 +41,31 @@ INTERRUPT = """UPDATE steps SET status = 'interrupted', cost = cost + reserved, 
 LEFT_WRITING = "SELECT id FROM preparations WHERE status = 'writing'"
 VERSION = "SELECT job_id, version, sources, draft FROM preparations WHERE id = ?"
 NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
-VERSIONS = """SELECT p.id, p.version, p.status, p.created_on,
+VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,
     coalesce(sum(coalesce(s.cost, 0) + s.reserved), 0), coalesce(max(s.id IS NOT NULL AND s.cost IS NULL), 0)
     FROM preparations p LEFT JOIN steps s ON s.preparation_id = p.id WHERE p.job_id = ? AND p.kind = ?
     GROUP BY p.id ORDER BY p.version DESC"""
 ERROR = 300  # characters of a failed try's reason kept with its step
 CLOSED = "Interrupted: the dashboard closed while the Writer was working"
+NO_BASE = "There is no finished version to change yet: press Prepare first."
+CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
 
 
-def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> dict | None:
+def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST) -> dict | None:
     """The job's newest version of its resume (or cover letter), or None."""
-    rows = conn.execute(LATEST, (job_id, kind))
+    rows = conn.execute(query, (job_id, kind))
     row = rows.fetchone()
     return dict(zip([column[0] for column in rows.description], row, strict=True)) if row else None
 
 
+def last_done(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> dict | None:
+    """The job's newest finished version: what Request changes builds on."""
+    return latest(conn, job_id, kind, LAST_DONE)
+
+
 def versions(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> list[dict]:
     """Every version of the job's resume, newest first, with what it cost (and whether some was not counted)."""
-    names = ("id", "version", "status", "created_on", "cost", "uncounted")
+    names = ("id", "version", "status", "created_on", "feedback", "cost", "uncounted")
     return [dict(zip(names, row, strict=True)) for row in conn.execute(VERSIONS, (job_id, kind))]
 
 
@@ -74,16 +83,22 @@ def outdated(conn: sqlcipher3.Connection, job_id: int, version: dict) -> bool:
     return json.loads(version["sources"]) != [{"source": source, "set": _set(conn, source)} for source in sources]
 
 
-def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int) -> int:
-    """One press of Prepare for one job's resume; returns the new version's id. Needs a Writer in the settings."""
+def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: str = "") -> int:
+    """One press of Prepare for one job's resume, or of Request changes with your words (a new version built on the
+    newest finished one); returns the new version's id. Needs a Writer in the settings."""
     role, sources = config.ai.writer, writer_sources.of_job(conn, job_id)[0]
     sets = [{"source": source, "set": _set(conn, source)} for source in sources]
+    base = last_done(conn, job_id) if feedback else None
     with conn:
         preparation = conn.execute(START, (
-            job_id, KIND, job_id, KIND, json.dumps(sets), role.model_dump_json(), _now()
+            job_id, KIND, job_id, KIND, base and base["id"], feedback or None, json.dumps(sets),
+            role.model_dump_json(), _now(),
         )).lastrowid  # fmt: skip
     try:
-        status, problem, result = _write(conn, config, role, job_id, sources, preparation)
+        if feedback and (base is None or outdated(conn, job_id, base)):
+            status, problem, result = "stopped", NO_BASE if base is None else CHANGED.format(base["version"]), None
+        else:
+            status, problem, result = _write(conn, config, role, job_id, sources, preparation, base, feedback)
     except Exception as error:  # never left "writing": the version can be retried
         _finish(conn, preparation, "by_hand", f"Something went wrong ({type(error).__name__}): press Retry.")
         raise
@@ -154,19 +169,20 @@ def recover(conn: sqlcipher3.Connection) -> None:
 
 
 def _write(
-    conn: sqlcipher3.Connection, config: Config, role: AIRole, job_id: int, sources: list, preparation: int
-) -> tuple[str, str | None, writer.Checked | None]:
+    conn: sqlcipher3.Connection, config: Config, role: AIRole, job_id: int, sources: list, preparation: int,
+    base: dict | None, feedback: str,
+) -> tuple[str, str | None, writer.Checked | None]:  # fmt: skip
     title, company, locations, description = conn.execute(JOB, (job_id,)).fetchone()
     found = writer.entries(conn, sources)
     try:
         shield = shield_for(conn, config, found)
-        system, user = writer.request(
-            title, company, ", ".join(json.loads(locations)), description or "", found, shield
-        )
+        previous = json.loads(base["draft"]) if base else None
+        system, user = writer.request(title, company, ", ".join(json.loads(locations)), description or "", found,
+                                      shield, previous, feedback + _too_long(config, job_id, base))  # fmt: skip
     except (privacy.PrivacyError, ResumeError) as error:
         return "stopped", str(error), None
     except privacy.PrivacyStop as stop:
-        return "stopped", f"Privacy check stopped this: {stop}. Edit that entry, then press Prepare again.", None
+        return "stopped", f"Privacy check stopped this: {stop}. Change that, then try again.", None
     step, problems, text = None, [], user
     for retry in (False, True):
         largest = spending.largest(role, system + text, writer.ANSWER_LIMIT)
@@ -222,6 +238,14 @@ def _ended(
             status, *usage, cost, json.dumps(answer, ensure_ascii=False) if answer else None,
             str(error)[:ERROR] if error else None, _now(), step,
         ))  # fmt: skip
+
+
+def _too_long(config: Config, job_id: int, base: dict | None) -> str:
+    """For a change to a version whose PDF went over one page (with the one-page setting on): a note saying so."""
+    built = pdf.built(pdf.tailored(config.data_dir, job_id, base["version"])) if base else None
+    if built is None or built.pages <= 1 or not config.documents.one_page:
+        return ""
+    return f"\n(The previous version was {built.pages} pages: it must fit on one page.)"
 
 
 def _stopped(error: Exception) -> str:

@@ -42,7 +42,7 @@
         <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
       </form>
       {% endif %}
-      <button type="button" disabled title="comes in the next part of the Writer">Request changes</button>
+      {% if found.changeable and found.place is none %}<a class="button" href="/jobs/{{ job.id }}#preparation">Request changes</a>{% endif %}
       <form method="post" action="/ready/{{ job.id }}/skip">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input type="hidden" name="value" value="1">

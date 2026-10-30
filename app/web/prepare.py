@@ -18,7 +18,7 @@ from app.config import ConfigError, load_config
 from app.council import runs
 from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
-from app.resume import ResumeError, from_latex, read_latex
+from app.resume import CONTROL, ResumeError, from_latex, read_latex
 from app.scoring import ready
 from app.web import actions, drafts, queries
 
@@ -36,6 +36,8 @@ PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
 SKIPPED = 'You skipped this job: turn off "Not interested" on its page first, then press Prepare.'
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
+BUSY_JOB = "The Writer is still working on this job: send your changes when it's done."
+MAX_FEEDBACK = 2000
 
 
 def add_routes(
@@ -186,8 +188,9 @@ def add_routes(
             problem = "writer"
         else:
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
-            if runs.writable(conn, job_id, runs.latest(conn, job_id)):
-                request.app.state.preparer.start(job_id)
+            if runs.writable(conn, job_id, latest := runs.latest(conn, job_id)):  # Retry a change: the same words
+                failed = latest is not None and latest["status"] in ("stopped", "by_hand")
+                request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "")
             problem = None
         back = f"/jobs/{job_id}" if request.state.form.get("back") == "job" else "/ready"  # the page it was pressed on
         return RedirectResponse(f"{back}?problem={problem}" if problem else back, 303)
@@ -203,6 +206,30 @@ def add_routes(
     @app.get("/jobs/{job_id:int}/preparation")
     async def preparation_box(request: Request, job_id: int) -> Response:
         """The job page's Ready to Apply box, loaded by the page itself."""
+        return box(request, job_id)
+
+    @app.post("/jobs/{job_id:int}/request-changes")
+    async def request_changes(request: Request, job_id: int) -> Response:
+        """Your words to the Writer: a new version built on the newest finished one. Answers with the job's box."""
+        conn, preparer = request.app.state.conn, request.app.state.preparer
+        words = " ".join(CONTROL.sub("", request.state.form.get("feedback", "")).split())
+        base, latest = runs.last_done(conn, queries.known(job_id)), runs.latest(conn, job_id)
+        if not _writer_chosen():
+            problem = NO_WRITER
+        elif preparer.place(job_id) is not None or (latest and latest["status"] == "writing"):
+            problem = BUSY_JOB
+        elif base is None:
+            problem = runs.NO_BASE
+        elif runs.outdated(conn, job_id, base):
+            problem = runs.CHANGED.format(base["version"])
+        elif not words or len(words) > MAX_FEEDBACK:
+            problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
+        else:
+            preparer.start(job_id, words)
+            problem = None
+        return box(request, job_id, problem, words if problem else "")
+
+    def box(request: Request, job_id: int, change_problem: str | None = None, typed: str = "") -> HTMLResponse:
         conn, current = request.app.state.conn, scoring()
         job = queries.job(conn, queries.known(job_id))
         if job is None:
@@ -214,7 +241,7 @@ def add_routes(
             request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
             own=own, files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
             versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=_writer_chosen(),
-            one_page=_one_page(),
+            one_page=_one_page(), change_problem=change_problem, typed=typed,
             missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip

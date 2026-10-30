@@ -25,9 +25,10 @@ VERSION += "WHERE job_id = ? AND kind = 'resume' AND version = ?"
 def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) -> dict:
     """What the Ready page and the job's box show: the newest version, the Writer's place, what the PDF build found,
     the cost so far, and whether Prepare would write a new version."""
-    latest = runs.latest(conn, job_id)
+    latest, base = runs.latest(conn, job_id), runs.last_done(conn, job_id)
     done = latest is not None and latest["status"] == "done"
     return {
+        "base": base, "changeable": base is not None and not runs.outdated(conn, job_id, base),
         "latest": latest, "place": preparer.place(job_id), "outdated": done and runs.outdated(conn, job_id, latest),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(conn, job_id, latest),

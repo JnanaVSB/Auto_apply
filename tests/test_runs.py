@@ -179,7 +179,7 @@ def test_a_privacy_stop_names_the_entry_and_sends_nothing(conn, data_dir, job, n
     tile_sets.confirm(conn, [LAB, leaky], "fingerprint-2")
     runs.prepare(conn, config(data_dir), job)
     assert version(conn)["problem"] == (
-        "Privacy check stopped this: a phone number in entry 'Fake Drone'. Edit that entry, then press Prepare again."
+        "Privacy check stopped this: a phone number in entry 'Fake Drone'. Change that, then try again."
     )
     assert one(conn, "SELECT count(*) FROM steps") == (0,)
 
@@ -286,3 +286,63 @@ def test_each_version_lists_its_cost(conn, data_dir, job, writer_answers, built)
         (3, "stopped", 0), (2, "by_hand", 1), (1, "done", 0)
     ]  # fmt: skip
     assert (found[2]["cost"], found[1]["cost"], found[0]["cost"]) == (pytest.approx(0.018), 0, 0)
+
+
+def test_a_change_is_a_new_version_built_on_the_last_finished_one(conn, data_dir, job, writer_answers):
+    calls, replies = writer_answers
+    replies.extend([GOOD, GOOD])
+    runs.prepare(conn, config(data_dir), job)
+    runs.prepare(conn, config(data_dir), job, "Lead with the lab.")
+    found = version(conn)
+    assert (found["version"], found["status"], found["feedback"]) == (2, "done", "Lead with the lab.")
+    assert one(conn, "SELECT based_on FROM preparations WHERE version = 2") == (1,)
+    assert "<previous>\n" in calls[1]["user"] and calls[1]["user"].endswith(
+        "<feedback>\nLead with the lab.\n</feedback>"
+    )
+    assert runs.versions(conn, job)[0]["feedback"] == "Lead with the lab."
+    replies.extend([BAD, BAD, GOOD])
+    runs.prepare(conn, config(data_dir), job, "Shorter.")  # version 3 fails...
+    runs.prepare(conn, config(data_dir), job, "Shorter.")  # ...so version 4 builds on version 2, the last finished one
+    assert one(conn, "SELECT based_on FROM preparations WHERE version = 4") == (
+        one(conn, "SELECT id FROM preparations WHERE version = 2")[0],
+    )
+
+
+def test_a_change_to_a_version_over_one_page_says_so(conn, data_dir, job, writer_answers):
+    calls, replies = writer_answers
+    replies.extend([GOOD, GOOD])
+    runs.prepare(conn, config(data_dir), job)
+    runs.pdf.tailored(data_dir, job, 1).parent.mkdir(parents=True, exist_ok=True)
+    runs.pdf.tailored(data_dir, job, 1).write_bytes(b"%PDF")
+    runs.pdf.tailored(data_dir, job, 1).with_suffix(".json").write_text('{"pages": 2, "missing": []}', "utf-8")
+    runs.prepare(conn, config(data_dir), job, "Tighter wording.")
+    assert calls[1]["user"].endswith(
+        "Tighter wording.\n(The previous version was 2 pages: it must fit on one page.)\n</feedback>"
+    )
+
+
+def test_a_change_needs_a_finished_version_from_the_current_entries(conn, data_dir, job, writer_answers):
+    calls, replies = writer_answers
+    runs.prepare(conn, config(data_dir), job, "Shorter.")
+    assert (
+        version(conn)["problem"] == "There is no finished version to change yet: press Prepare first." and calls == []
+    )
+    replies.append(GOOD)
+    runs.prepare(conn, config(data_dir), job)
+    tile_sets.confirm(conn, [LAB], "fingerprint-2")
+    runs.prepare(conn, config(data_dir), job, "Shorter.")
+    assert (
+        version(conn)["problem"].startswith("Your entries changed since version 2: press Prepare") and len(calls) == 1
+    )
+
+
+def test_a_privacy_stop_in_your_words_sends_nothing(conn, data_dir, job, writer_answers):
+    calls, replies = writer_answers
+    replies.append(GOOD)
+    runs.prepare(conn, config(data_dir), job)
+    runs.prepare(conn, config(data_dir), job, "Add my number 555-010-0123.")
+    assert (
+        version(conn)["problem"]
+        == "Privacy check stopped this: a phone number in your feedback. Change that, then try again."
+    )
+    assert len(calls) == 1

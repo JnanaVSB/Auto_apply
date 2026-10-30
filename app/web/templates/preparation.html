@@ -36,14 +36,22 @@
     <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
   </form>
   {% endif %}
-  <button type="button" disabled title="comes in the next part of the Writer">Request changes</button>
+  {% if changeable and place is none and not (latest and latest.status == "writing") %}
+  <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML" class="stacked">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept)
+      <textarea name="feedback" rows="3" maxlength="2000" placeholder="For example: shorter, it is two pages; lead with the drone project">{{ typed }}</textarea></label>
+    <button type="submit">Send to the Writer</button>
+  </form>
+  {% endif %}
+  {% if change_problem %}<p class="error" role="alert">{{ change_problem }}</p>{% endif %}
   {% if versions %}
   <table class="versions">
     <thead><tr><th>Version</th><th>Written</th><th>Status</th><th>Cost</th></tr></thead>
     <tbody>
     {% for found in versions %}
     <tr><td>{% if found.status == "done" %}<a href="/jobs/{{ job_id }}/changes?version={{ found.version }}">{{ found.version }}</a>{% else %}{{ found.version }}{% endif %}</td>
-      <td>{{ found.created_on[:10] }}</td><td>{{ labels[found.status] }}</td>
+      <td>{{ found.created_on[:10] }}{% if found.feedback %}<br><span class="muted">you asked: {{ found.feedback }}</span>{% endif %}</td><td>{{ labels[found.status] }}</td>
       <td>{{ "at least " if found.uncounted }}${{ "%.2f" | format(found.cost) }}</td></tr>
     {% endfor %}
     </tbody>

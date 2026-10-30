@@ -29,6 +29,9 @@ Answer only with JSON of this shape: {"entries": [{"id": "E1", "bullets": [{"tex
 "skills": []}], "notes": "..."}. "from" lists the numbers of the original bullets a new bullet is based on. A skills
 entry has no bullets and lists only skills from its own list; any other entry has no skills. An entry marked "keep as
 written" has no bullets in your answer."""
+REVISION = """This is a revision. Your previous version is between <previous> and </previous>, and the candidate's own
+request about it between <feedback> and </feedback>: follow that request wherever it doesn't break a rule above. Answer
+with the whole resume again, in the same shape."""
 SHAPE = {
     "type": "object",
     "properties": {
@@ -69,7 +72,7 @@ FACT_LABELS = {
     "name": "name", "rest": "details", "right": "right side", "second": "second line",
     "second_right": "second line's right side", "link": "link",
 }  # fmt: skip
-MARKER = re.compile(r"<\s*(/?)\s*(job|entries)\s*>", re.IGNORECASE)  # look-alikes of the markers, inside your text
+MARKER = re.compile(r"<\s*(/?)\s*(job|entries|previous|feedback)\s*>", re.I)  # marker look-alikes in your text
 LOOK_ALIKES = str.maketrans("<>", "‹›")  # in the job ad: ‹ and ›
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 DASHES = re.compile(r"[‐-―-]+")
@@ -112,9 +115,11 @@ def in_order(sources: list[tuple]) -> list[Entry]:
 
 
 def request(
-    title: str, company: str, location: str, description: str, entries: list[Entry], shield: Shield
-) -> tuple[str, str]:
-    """The Writer's instructions and its data. Raises PrivacyStop naming the kind of item and the entry it is in."""
+    title: str, company: str, location: str, description: str, entries: list[Entry], shield: Shield,
+    previous: dict | None = None, feedback: str = "",
+) -> tuple[str, str]:  # fmt: skip
+    """The Writer's instructions and its data; for a revision also its previous version (a draft) and your request.
+    Raises PrivacyStop naming the kind of item and the entry it is in (or your feedback)."""
     blocks = []
     for entry in entries:
         try:
@@ -123,12 +128,41 @@ def request(
             raise PrivacyStop(f"{stop} in entry '{entry.tile.facts.get('name') or entry.label}'") from None
     ad = shield.hide(f"Title: {title}\nCompany: {company}\nLocation: {location}\n\n{description}")
     instructions = f"{SKILL_FILE.read_text(encoding='utf-8').strip()}\n\n{RULES}"
-    return instructions, f"<job>\n{ad.translate(LOOK_ALIKES)}\n</job>\n\n<entries>\n{'\n\n'.join(blocks)}\n</entries>"
+    user = f"<job>\n{ad.translate(LOOK_ALIKES)}\n</job>\n\n<entries>\n{'\n\n'.join(blocks)}\n</entries>"
+    if previous is None:
+        return instructions, user
+    try:
+        asked = shield.outgoing(_harmless(feedback))
+    except PrivacyStop as stop:
+        raise PrivacyStop(f"{stop} in your feedback") from None
+    return f"{instructions}\n\n{REVISION}", (
+        f"{user}\n\n<previous>\n{shield.outgoing(_previous(previous, entries))}\n</previous>\n\n"
+        f"<feedback>\n{asked}\n</feedback>"
+    )
 
 
 def again(user: str, problem: str) -> str:
     """The data again, for the one retry after a bad answer: the model is told what was wrong."""
     return f"{user}\n\nYour previous answer was refused: {problem}. Answer again in full, following every rule."
+
+
+def _harmless(text: str) -> str:
+    """Marker look-alikes in your text, such as </entries>, can't end or start a part: [/entries]."""
+    return MARKER.sub(lambda marker: f"[{marker[1]}{marker[2]}]", text)
+
+
+def _previous(draft: dict, entries: list[Entry]) -> str:
+    """A draft as the Writer wrote it, by the labels it is given now: bullets with what they are based on, skills."""
+    labels = {(entry.source, entry.tile.tile_id): entry.label for entry in entries}
+    lines = []
+    for item in draft["entries"]:
+        label = labels[(item["source"], item["tile_id"])]
+        if item["skills"]:
+            lines.append(f"{label} skills: {', '.join(item['skills'])}")
+        else:
+            lines += [f"{label}:", *(f"- {bullet['text']} (from {', '.join(map(str, bullet['from']))})"
+                                     for bullet in item["bullets"])]  # fmt: skip
+    return _harmless("\n".join(lines))
 
 
 def _block(entry: Entry) -> str:
@@ -144,7 +178,7 @@ def _block(entry: Entry) -> str:
     else:
         lines.append('Bullets (in your answer "skills": []):')
         lines += [f"{number}: {bullet}" for number, bullet in enumerate(tile.bullets)]
-    return MARKER.sub(lambda marker: f"[{marker[1]}{marker[2]}]", "\n".join(lines))
+    return _harmless("\n".join(lines))
 
 
 def kept_as_written(tile: Tile) -> bool:

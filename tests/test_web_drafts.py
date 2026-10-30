@@ -52,7 +52,8 @@ def job(conn, data_dir, tmp_path, monkeypatch):
 def client(client, monkeypatch):
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     client.started = []
-    monkeypatch.setattr(client.app.state.preparer, "start", client.started.append)
+    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="": client.started.append(
+        (job, words) if words else job))  # fmt: skip
     log_in(client)
     return client
 
@@ -160,3 +161,48 @@ def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, mo
     assert "<td>2026-01-01</td>" in client.get("/usage?by=year").text
     assert 'aria-current="page" href="/usage?by=day"' in client.get("/usage?by=century").text
     assert 'href="/usage"' in text  # in the menu
+
+
+def ask(client, job, words):
+    return client.post(f"/jobs/{job}/request-changes", data={"csrf_token": csrf(client), "feedback": words}).text
+
+
+def test_request_changes_sends_your_words_to_the_writer(client, conn, job):
+    assert "Request changes to version" not in client.get(f"/jobs/{job}/preparation").text  # nothing to change yet
+    assert "There is no finished version to change yet" in ask(client, job, "Shorter.") and client.started == []
+    version(conn, job)
+    assert "Request changes to version 1" in client.get(f"/jobs/{job}/preparation").text
+    assert f'href="/jobs/{job}#preparation">Request changes' in client.get("/ready").text
+    text = ask(client, job, "  Lead with   the lab.\x07 ")
+    assert client.started == [(job, "Lead with the lab.")] and 'id="preparation"' in text  # the box comes back
+
+
+@pytest.mark.parametrize(
+    ("words", "problem"),
+    [("", "Type what you&#39;d like changed"), ("x" * 2001, "at most 2,000 characters")],
+)
+def test_request_changes_needs_your_words(client, conn, job, words, problem):
+    version(conn, job)
+    text = ask(client, job, words)
+    assert problem in text and client.started == []
+
+
+def test_request_changes_waits_for_the_writer_and_current_entries(client, conn, job, monkeypatch):
+    version(conn, job)
+    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: 1)
+    assert "The Writer is still working on this job" in ask(client, job, "Shorter.")
+    assert "Request changes to version" not in client.get(f"/jobs/{job}/preparation").text
+    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
+    tile_sets.confirm(conn, PROFILE[:2], CHOSEN.resume)  # your entries changed
+    assert "Your entries changed since version 1" in ask(client, job, "Shorter.") and client.started == []
+
+
+def test_retry_after_a_failed_change_sends_the_same_words(client, conn, job):
+    version(conn, job)
+    with conn:
+        failed = version(conn, job, 2, "by_hand", "Writer failed twice (x): check by hand, or press Retry.")
+        conn.execute("UPDATE preparations SET feedback = 'Lead with the lab.' WHERE id = ?", (failed,))
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "you asked: Lead with the lab." in text and ">Retry</button>" in text
+    client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client)})
+    assert client.started == [(job, "Lead with the lab.")]
