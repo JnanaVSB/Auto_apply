@@ -72,7 +72,7 @@ def test_a_good_first_answer_is_saved_with_its_cost(conn, data_dir, job, writer_
     runs.prepare(conn, config(data_dir), job)
     found = version(conn)
     assert (found["version"], found["status"], found["problem"]) == (1, "done", None)
-    assert json.loads(found["draft"])["entries"][0]["tile_id"] == "exp-1"
+    assert [item["tile_id"] for item in json.loads(found["draft"])["entries"]] == ["sum-1", "exp-1", "edu-1"]
     assert one(conn, STEP) == ("done", 1, 2000, 500, pytest.approx(0.018), 0, None)
     assert json.loads(found["sources"]) == [{"source": "profile", "set": 1}]
     saved = json.loads(one(conn, "SELECT writer FROM preparations")[0])

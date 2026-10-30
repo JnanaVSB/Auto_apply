@@ -64,6 +64,7 @@ SHAPE = {
 ANSWER_LIMIT, TIMEOUT_SECONDS = 8192, 600  # owner choice I: room for a whole resume; the local model writes slowly
 MAX_BULLET, MAX_BULLETS, MAX_NOTES = 1000, 40, 2000  # only against a broken answer (the Resume Profile's box sizes)
 KEEP_AS_WRITTEN = {"publication"}  # chosen or left out only; so is any entry without bullets
+ALWAYS = {"education", "summary"}  # on every version (owner choice): put back as written if the Writer leaves one out
 FACT_LABELS = {
     "name": "name", "rest": "details", "right": "right side", "second": "second line",
     "second_right": "second line's right side", "link": "link",
@@ -173,8 +174,18 @@ def checked(text: str, entries: list[Entry], shield: Shield) -> Checked:
             raise BadAnswer(f"{entry.label} is used twice")
         entry = _as_seen(entry, shield)
         chosen[entry.label] = (entry, _bullets(entry, item["bullets"]), _skills(entry, item["skills"]))
+    _no_twins([entry for entry, _, _ in chosen.values()])
+    twins = {_twin(entry) for entry, _, _ in chosen.values()}
+    for entry in entries:  # education and the summary the Writer left out, unless the same one is already there
+        if entry.tile.kind in ALWAYS and entry.label not in chosen and _twin(entry) not in twins:
+            twins.add(_twin(entry))
+            seen = _as_seen(entry, shield)
+            chosen[entry.label] = (
+                seen,
+                [{"text": text, "from": [number]} for number, text in enumerate(seen.tile.bullets)],
+                [],
+            )
     picked = [chosen[entry.label] for entry in entries if entry.label in chosen]  # your resume's order
-    _no_twins([entry for entry, _, _ in picked])
     draft = [
         {"source": entry.source, "tile_id": entry.tile.tile_id, "bullets": bullets, "skills": skills}
         for entry, bullets, skills in picked
@@ -254,11 +265,14 @@ def _no_twins(chosen: list[Entry]) -> None:
     """The same experience twice (same kind, name and dates, e.g. from your Profile and an uploaded CV) is refused."""
     seen: dict[tuple, str] = {}
     for entry in chosen:
-        facts = entry.tile.facts
-        key = (entry.tile.kind, *(_same(facts.get(name, "")) for name in ("name", "right", "second_right")))
-        if key in seen:
+        if (key := _twin(entry)) in seen:
             raise BadAnswer(f"{seen[key]} and {entry.label} are the same {entry.tile.kind}: use only one of them")
         seen[key] = entry.label
+
+
+def _twin(entry: Entry) -> tuple:
+    """What makes two entries the same: kind, name and dates, ignoring capitals, spaces and the kind of dash."""
+    return (entry.tile.kind, *(_same(entry.tile.facts.get(name, "")) for name in ("name", "right", "second_right")))
 
 
 def _same(text: str) -> str:

@@ -5,6 +5,7 @@ entry has a label (E1, E2, ...), fixed facts that you can never change, and numb
 
 What to do:
 - Choose the entries that show this candidate is a strong fit for this job, and leave out the ones that don't help.
+  Always keep every education entry and the summary (you may rewrite their bullets).
 - In each chosen entry, choose the bullets that matter most for this job, put them in the best order, and rewrite
   them to show the work, skills and results this job asks for, using the job ad's own words where they are true.
 - You may merge two original bullets into one, or split one into two. Every new bullet says which original bullets
