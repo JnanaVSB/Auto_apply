@@ -107,3 +107,29 @@ def test_the_master_pdf_is_built_from_confirmed_tiles_and_shown(client, tmp_path
     assert shown.headers["content-disposition"].startswith("inline")
     assert client.get("/documents/master/resume-v999.pdf").status_code == 404
     assert client.get("/documents/master/resume-v..%2F..%2Fapp.db.pdf").status_code == 404
+
+
+def test_uploaded_files_are_read_confirmed_and_removed_on_their_own(client, conn):
+    upload = {"file.0.name": "robotics-cv.tex", "file.0.latex": RESUME_CLS.replace("Toy Driver", "Kite")}
+    answer = client.post("/resume-profile/upload", data=upload | {"csrf_token": csrf(client)}, follow_redirects=False)
+    assert answer.headers["location"] == "/resume-profile?uploaded=1"
+    file_id = conn.execute("SELECT id FROM resume_files").fetchone()[0]
+    assert f'href="/resume-profile?file={file_id}">robotics-cv</a>' in client.get("/resume-profile").text
+    text = client.get(f"/resume-profile?file={file_id}").text
+    assert 'value="Kite"' in text and "Remove this file" in text and "Master PDF" not in text
+    form = form_of(read_tiles(upload["file.0.latex"]).tiles) | {"resume": resume_of(text), "file": str(file_id)}
+    answer = client.post("/resume-profile", data=form | {"csrf_token": csrf(client)}, follow_redirects=False)
+    assert answer.headers["location"] == f"/resume-profile?file={file_id}&confirmed=1"
+    assert tile_sets.latest(conn, file_id).tiles[-1].facts["name"] == "Kite" and tile_sets.latest(conn) is None
+    client.post(f"/resume-profile/files/{file_id}/remove", data={"csrf_token": csrf(client)})
+    assert client.get(f"/resume-profile?file={file_id}").status_code == 404
+    assert "robotics-cv" not in client.get("/resume-profile").text
+
+
+def test_a_refused_upload_says_why_and_only_the_upload_address_takes_a_big_form(client):
+    big = {"file.0.name": "cv.tex", "file.0.latex": RESUME_CLS + "%" * 200_000, "csrf_token": csrf(client)}
+    assert "uploaded" in client.post("/resume-profile/upload", data=big, follow_redirects=False).headers["location"]
+    empty = {"file.0.name": "empty.tex", "file.0.latex": "hi", "csrf_token": csrf(client)}
+    assert "Not uploaded: empty: looks empty" in client.post("/resume-profile/upload", data=empty).text
+    assert client.post("/questionnaire", data=big).status_code == 413  # every other page keeps the small limit
+    assert client.get("/resume-profile?file=abc").status_code == 404

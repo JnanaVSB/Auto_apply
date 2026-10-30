@@ -3,9 +3,10 @@
 import pytest
 from helpers import add_job, csrf, log_in, one
 from test_tiles import RESUME_CLS
+from test_uploads import OTHER, form
 from test_web_scoring import CHOSEN, scored
 
-from app.documents import tile_sets
+from app.documents import tile_sets, uploads, writer_sources
 from app.documents.tiles import read_tiles
 from app.scoring import ready
 from app.web import main
@@ -46,7 +47,7 @@ def test_only_open_ready_jobs_from_the_current_resume_are_listed(client, jobs):
     assert ">Fresh</a>" in text and ">Anyway</a>" in text and "Strong RL match." in text and "2 jobs ready." in text
     for name in ("Older", "Low", "Gone", "Skipped"):
         assert f">{name}</a>" not in text
-    assert "confirm your resume profile first" in text
+    assert "confirm first: Profile" in text and "uses: Profile" in text
 
 
 def test_prepare_needs_confirmed_tiles_from_the_current_resume(client, conn, jobs):
@@ -54,7 +55,7 @@ def test_prepare_needs_confirmed_tiles_from_the_current_resume(client, conn, job
     confirm_tiles(conn, "resume-before")  # tiles from an older resume don't count
     assert press(client, jobs["Fresh"]).headers["location"] == "/ready?problem=tiles"
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Fresh"]) == (None,)
-    assert "Confirm your resume profile first" in client.get("/ready?problem=tiles").text
+    assert "Confirm the entries of every source this job uses first" in client.get("/ready?problem=tiles").text
 
 
 def test_prepare_queues_a_ready_job_once(client, conn, jobs):
@@ -82,7 +83,7 @@ def test_skip_hides_the_job_and_undo_brings_it_back(client, conn, jobs):
 
 
 def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
-    assert "confirm your resume profile first" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
+    assert "confirm these first: Profile" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
     assert "Not ready" in client.get(f"/jobs/{jobs['Older']}/preparation").text
     confirm_tiles(conn)
     assert 'action="/ready/' in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
@@ -100,3 +101,29 @@ def test_unknown_jobs_are_not_found(client, jobs, path):
 def test_a_closed_job_is_never_queued_even_without_the_page(conn, jobs):
     assert not ready.queue(conn, jobs["Gone"], "now")
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Gone"]) == (None,)
+
+
+def test_a_job_can_use_its_own_sources_and_prepare_needs_them_all_confirmed(client, conn, jobs):
+    confirm_tiles(conn)
+    uploads.upload(conn, form(("robotics-cv.tex", OTHER)))
+    file = uploads.offered(conn)[0]
+    data = {"source.profile": "1", f"source.{file.id}": "1", "csrf_token": csrf(client)}
+    client.post(f"/jobs/{jobs['Fresh']}/sources", data=data)
+    assert writer_sources.of_job(conn, jobs["Fresh"]) == (["profile", file.id], True)
+    assert "uses: Profile + robotics-cv" in client.get("/ready").text
+    assert "confirm these first: robotics-cv" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
+    assert press(client, jobs["Fresh"]).headers["location"] == "/ready?problem=tiles"  # the file isn't confirmed
+    tile_sets.confirm(conn, read_tiles(OTHER).tiles, file.fingerprint, file.id)
+    assert press(client, jobs["Fresh"]).headers["location"] == "/ready"
+    assert press(client, jobs["Anyway"]).headers["location"] == "/ready"  # the default: the Profile, confirmed
+    back = {"default": "1", f"source.{file.id}": "1", "csrf_token": csrf(client)}  # "Use my default" wins
+    client.post(f"/jobs/{jobs['Fresh']}/sources", data=back)
+    assert writer_sources.of_job(conn, jobs["Fresh"]) == (["profile"], False)
+
+
+def test_the_default_choice_is_saved_on_the_resume_profile_page(client, conn, data_dir):
+    (data_dir / "resume.tex").write_text(RESUME_CLS, encoding="utf-8")
+    assert "Tick at least one" in client.post("/resume-profile/sources", data={"csrf_token": csrf(client)}).text
+    client.post("/resume-profile/sources", data={"source.profile": "1", "source.99": "1", "csrf_token": csrf(client)})
+    assert writer_sources.default(conn) == ["profile"]  # a file that isn't offered is never chosen
+    assert 'name="source.profile" value="1" checked' in client.get("/resume-profile").text

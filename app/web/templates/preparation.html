@@ -4,8 +4,8 @@
   <p>Queued: you pressed Prepare on {{ queued[:10] }}. The tailored resume comes with the Writer.</p>
   {% elif not ready %}
   <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
-  {% elif not tiles_ok %}
-  <p class="error">Prepare needs your confirmed entries: <a href="/resume-profile">confirm your resume profile first</a>.</p>
+  {% elif missing %}
+  <p class="error">Prepare needs confirmed entries: <a href="/resume-profile">confirm these first: {{ missing | join(", ") }}</a>.</p>
   {% else %}
   <form method="post" action="/ready/{{ job_id }}/prepare" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -14,5 +14,15 @@
   </form>
   {% endif %}
   <button type="button" disabled title="comes with the Writer">Request changes</button>
+  <form method="post" action="/jobs/{{ job_id }}/sources" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <span>The Writer uses ({{ "this job's own choice" if own else "your default" }}):</span>
+    <label class="tick"><input type="checkbox" name="source.profile" value="1"{% if "profile" in chosen %} checked{% endif %}> Profile</label>
+    {% for file in files %}
+    <label class="tick"><input type="checkbox" name="source.{{ file.id }}" value="1"{% if file.id in chosen %} checked{% endif %}> {{ file.name }}</label>
+    {% endfor %}
+    <button type="submit">Save for this job</button>
+    {% if own %}<button type="submit" name="default" value="1">Use my default</button>{% endif %}
+  </form>
   <span class="muted">Skip is the "Not interested" button above.</span>
 </section>

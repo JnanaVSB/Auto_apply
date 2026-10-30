@@ -4,8 +4,7 @@
 <h1>Ready to Apply</h1>
 <p class="hint">Open jobs scored at or above your ready threshold by your current model with your current resume, and the ones you marked "Prepare anyway"; newest first. Nothing is ever submitted from here.
   <a href="{{ view.address(page=1) }}">Filter or sort these on the Jobs page</a>.</p>
-{% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm your resume profile") %} <a href="/resume-profile">Open the Resume Profile</a>{% endif %}</p>{% endif %}
-{% if not tiles_ok %}<p class="error">Prepare needs your confirmed entries: <a href="/resume-profile">confirm your resume profile first</a>.</p>{% endif %}
+{% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm the entries") %} <a href="/resume-profile">Open the Resume Profile</a>{% endif %}</p>{% endif %}
 {% if skipped %}
 <form method="post" action="/ready/{{ skipped }}/skip" class="result">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -26,7 +25,9 @@
       {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
       {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
       {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
-    <td>{% if queued[job.id] %}queued (you pressed Prepare on {{ queued[job.id][:10] }}){% else %}not started{% endif %}</td>
+    <td>{% if queued[job.id] %}queued (you pressed Prepare on {{ queued[job.id][:10] }}){% else %}not started{% endif %}
+      <br><span class="muted">uses: {{ uses[job.id] | join(" + ") }}</span>
+      {% if missing[job.id] %}<br><a class="error" href="/resume-profile">confirm first: {{ missing[job.id] | join(", ") }}</a>{% endif %}</td>
     <td>—</td>
     <td class="actions">
       {% if not queued[job.id] %}

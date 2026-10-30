@@ -44,12 +44,13 @@ class Shield:
         return PLACEHOLDER.sub(lambda match: real.get(match[0], match[0]), text)
 
 
-def shield(contact: dict, latex: str, tiles: list[Tile]) -> Shield:
-    """The placeholders for your questionnaire's contact details, your resume header's, and your tiles' links."""
+def shield(contact: dict, sources: list[str], tiles: list[Tile]) -> Shield:
+    """The placeholders for your questionnaire's contact details, the headers of every source the Writer uses (your
+    resume.tex and any uploaded files, as LaTeX; app/documents/writer_sources.py), and your tiles' links."""
     name = " ".join(str(contact.get("full_name") or "").split())
     if not name:
         raise PrivacyError(NO_NAME)
-    header = header_latex(latex)
+    header = "\n".join(map(header_latex, sources))
     links = [contact.get(field) or "" for field in LINKS] + [tile.facts.get("link", "") for tile in tiles]
     links += [link for link in HREF.findall(header) if not link.startswith("mailto:")]
     emails = [contact.get("email") or "", *EMAIL.findall(header)]

@@ -345,6 +345,24 @@ UPGRADES = (
     );
     ALTER TABLE jobs ADD COLUMN prepare_requested_on TEXT;  -- when you pressed Prepare; NULL until you do
     """,
+    """
+    -- Uploaded resumes and CVs, encrypted like everything else. Nothing is deleted: Remove only stops a file being
+    -- offered, so a resume prepared from it can always be traced back.
+    CREATE TABLE resume_files (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,  -- the name you gave it, e.g. Robotics CV
+        latex TEXT NOT NULL,  -- the .tex file as uploaded
+        fingerprint TEXT NOT NULL,  -- of its plain text, worked out as for resume.tex
+        uploaded_on TEXT NOT NULL,
+        removed_on TEXT  -- when you pressed Remove; NULL while it is offered
+    );
+    ALTER TABLE tile_sets ADD COLUMN file_id INTEGER REFERENCES resume_files (id);  -- NULL: your Resume Profile
+    CREATE TABLE writer_sources (  -- what the Writer works from, unless a job says otherwise
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        sources TEXT NOT NULL  -- JSON list of "profile" and uploaded file ids, at least one
+    );
+    ALTER TABLE jobs ADD COLUMN writer_sources TEXT;  -- this job's own choice, as above; NULL: the default
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

@@ -729,6 +729,25 @@ def test_version_11_adds_documents_and_keeps_every_job(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
 
 
+def test_version_12_adds_uploaded_resumes_and_keeps_confirmed_tiles(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_11:
+        version_11.setattr(db, "UPGRADES", db.UPGRADES[:11])
+        version_11.setattr(db, "SCHEMA_VERSION", 11)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute("INSERT INTO tile_sets (id, resume, confirmed_on) VALUES (1, 'fp', 'now')")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT id, file_id FROM tile_sets").fetchall() == [(1, None)]  # the Resume Profile's
+        assert conn.execute("SELECT writer_sources FROM jobs").fetchall() == [(None,)]
+        assert conn.execute("SELECT count(*) FROM resume_files").fetchone()[0] == 0
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("INSERT INTO writer_sources VALUES (2, '[\"profile\"]')")  # one default only
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v11") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+
+
 TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts) VALUES (1, '{}', {}, '{}', 'Work', '{{}}')"
 
 
@@ -743,7 +762,7 @@ TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts) VALU
 def test_document_tables_refuse_impossible_values(data_dir, sql):
     with closing(db.connect(data_dir)) as conn:
         with conn:
-            conn.execute("INSERT INTO tile_sets VALUES (1, 'fp', 'now')")
+            conn.execute("INSERT INTO tile_sets (id, resume, confirmed_on) VALUES (1, 'fp', 'now')")
             conn.execute(TILE.format("exp-1", 1, "experience"))
         with pytest.raises(sqlcipher3.IntegrityError):
             conn.execute(sql)

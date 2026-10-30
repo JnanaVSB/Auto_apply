@@ -16,7 +16,7 @@ PAPER = Tile("pub-0001", "publication", "Publications", {"name": "A. Example and
 
 
 def shield():
-    return privacy.shield(CONTACT, RESUME_CLS, [*read_tiles(RESUME_CLS).tiles, PAPER])
+    return privacy.shield(CONTACT, [RESUME_CLS], [*read_tiles(RESUME_CLS).tiles, PAPER])
 
 
 def test_contact_details_become_placeholders():
@@ -45,13 +45,19 @@ def test_putting_back_restores_the_exact_text():
 
 
 def test_the_resume_header_details_are_hidden_too():
-    filter_ = privacy.shield({"full_name": "Alex Example"}, RESUME_CLS, [])
+    filter_ = privacy.shield({"full_name": "Alex Example"}, [RESUME_CLS], [])
     assert filter_.hide("alex@example.com, (555) 010-0199, https://example.com/alex") == "[EMAIL], [PHONE], [LINK]"
+
+
+def test_the_headers_of_every_source_are_hidden():
+    uploaded = RESUME_CLS.replace("alex@example.com", "lex.work@example.org").replace("(555) 010-0199", "480 555 0123")
+    filter_ = privacy.shield({"full_name": "Alex Example"}, [RESUME_CLS, uploaded], [])
+    assert filter_.hide("alex@example.com or lex.work@example.org, 480-555-0123") == "[EMAIL] or [EMAIL-2], [PHONE-2]"
 
 
 def test_no_name_in_the_questionnaire_means_no_filter():
     with pytest.raises(PrivacyError, match="Fill in your full name in the Questionnaire first"):
-        privacy.shield({"email": "alex@example.com"}, RESUME_CLS, [])
+        privacy.shield({"email": "alex@example.com"}, [RESUME_CLS], [])
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException
 
 from app import questionnaire
 from app.config import ConfigError, load_config
-from app.documents import latex, pdf, tile_sets
+from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import ResumeError, from_latex, read_latex
 from app.scoring import ready
@@ -30,7 +30,7 @@ CHOICES = {  # the questionnaire's drop-down choices
 RESUME_CHANGED = "Your resume changed while this page was open: reload the page (nothing was confirmed)."
 
 
-TILES_FIRST = "Confirm your resume profile first: the Writer works from its confirmed entries."
+TILES_FIRST = "Confirm the entries of every source this job uses first, on the Resume Profile page."
 PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
 
@@ -65,10 +65,12 @@ def add_routes(
 
     @app.get(PROFILE)
     async def tiles_page(request: Request) -> Response:
-        view = _tiles_view(request.app.state.conn, data_dir)
+        conn = request.app.state.conn
+        view = _tiles_view(conn, data_dir, _file(conn, request.query_params.get("file", "")))
         notice = {
             "confirmed": "Resume profile confirmed.", "unchanged": "Nothing changed, so nothing was saved.",
-            "built": "Master PDF built.",
+            "built": "Master PDF built.", "uploaded": "Uploaded: choose a file above to check and confirm its entries.",
+            "removed": "Removed (it is kept, but no longer offered).", "sources": "Default choice saved.",
         }  # fmt: skip
         return page(
             request, "tiles.html", **view, notice=next((notice[n] for n in notice if n in request.query_params), None)
@@ -77,17 +79,44 @@ def add_routes(
     @app.post(PROFILE)
     async def confirm_tiles(request: Request) -> Response:
         form, conn = request.state.form, request.app.state.conn
-        rows, view = tile_sets.typed(form), _tiles_view(conn, data_dir)
+        file = _file(conn, form.get("file", ""))
+        rows, view = tile_sets.typed(form), _tiles_view(conn, data_dir, file)
         try:
             if view.get("resume") != form.get("resume"):
                 raise tile_sets.TilesError(RESUME_CHANGED)
-            set_id = tile_sets.confirm(conn, tile_sets.check(rows), view["resume"])
+            set_id = tile_sets.confirm(conn, tile_sets.check(rows), view["resume"], file and file.id)
         except tile_sets.TilesError as error:  # nothing saved; what was typed stays on the page
             return page(
                 request, "tiles.html", **view | {"rows": rows, "resume": form.get("resume")}, problem=str(error)
             )
         done = "confirmed" if set_id else "unchanged"
-        return RedirectResponse(f"{PROFILE}?{done}=1", 303)  # so reloading the page never confirms again
+        source = f"file={file.id}&" if file else ""
+        return RedirectResponse(f"{PROFILE}?{source}{done}=1", 303)  # so reloading the page never confirms again
+
+    @app.post(f"{PROFILE}/upload")  # main.py lets only this address take a big form (the files' text)
+    async def upload_files(request: Request) -> Response:
+        conn = request.app.state.conn
+        try:
+            uploads.upload(conn, request.state.form)
+        except uploads.UploadError as error:  # nothing saved
+            return page(request, "tiles.html", **_tiles_view(conn, data_dir), problem=f"Not uploaded: {error}.")
+        return RedirectResponse(f"{PROFILE}?uploaded=1", 303)
+
+    @app.post(PROFILE + "/files/{file_id:int}/remove")
+    async def remove_file(request: Request, file_id: int) -> Response:
+        if file_id > MAX_JOB_ID or not uploads.remove(request.app.state.conn, file_id):
+            raise HTTPException(404)
+        return RedirectResponse(f"{PROFILE}?removed=1", 303)
+
+    @app.post(f"{PROFILE}/sources")
+    async def save_default_sources(request: Request) -> Response:
+        """What the Writer uses for every job that has no choice of its own."""
+        conn = request.app.state.conn
+        try:
+            writer_sources.save_default(conn, writer_sources.ticked(conn, request.state.form))
+        except writer_sources.SourcesError as error:
+            return page(request, "tiles.html", **_tiles_view(conn, data_dir), problem=str(error))
+        return RedirectResponse(f"{PROFILE}?sources=1", 303)
 
     @app.post(f"{PROFILE}/pdf")
     async def build_master(request: Request) -> Response:
@@ -119,11 +148,14 @@ def add_routes(
         view = queries.Filters(scoring=("ready",), page=int(number) if number.isascii() and number.isdigit() else 1)
         listing = queries.list_jobs(conn, view, current)
         ids = [job["id"] for job in listing.jobs]
+        chosen = {job_id: writer_sources.of_job(conn, job_id)[0] for job_id in ids}
+        uses = {job_id: writer_sources.names(conn, chosen[job_id]) for job_id in ids}
+        missing = {job_id: writer_sources.unconfirmed(conn, chosen[job_id], current.resume) for job_id in ids}
         marks = ", ".join("?" * len(ids))
         queued = dict(conn.execute(f"SELECT id, prepare_requested_on FROM jobs WHERE id IN ({marks})", ids))  # noqa: S608
         skipped = request.query_params.get("skipped", "")
         return page(
-            request, "ready.html", listing=listing, view=view, queued=queued, tiles_ok=_tiles_ok(conn, current),
+            request, "ready.html", listing=listing, view=view, queued=queued, uses=uses, missing=missing,
             skipped=int(skipped) if skipped.isascii() and skipped.isdigit() else None,
             problem=PROBLEMS.get(request.query_params.get("problem", "")),
         )  # fmt: skip
@@ -134,7 +166,7 @@ def add_routes(
         job = queries.job(conn, job_id) if job_id <= MAX_JOB_ID else None
         if job is None:
             raise HTTPException(404)
-        if not _tiles_ok(conn, current):
+        if writer_sources.unconfirmed(conn, writer_sources.of_job(conn, job_id)[0], current.resume):
             problem = "tiles"
         elif job["status"] != "open" or queries.job_scoring(conn, job_id, current)["status"] != "ready":
             problem = "not-ready"
@@ -159,30 +191,53 @@ def add_routes(
         if job_id > MAX_JOB_ID or queries.job(conn, job_id) is None:
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
+        chosen, own = writer_sources.of_job(conn, job_id)
         return page(
-            request, "preparation.html", job_id=job_id, queued=queued, tiles_ok=_tiles_ok(conn, current),
+            request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
+            files=uploads.offered(conn), missing=writer_sources.unconfirmed(conn, chosen, current.resume),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
+
+    @app.post("/jobs/{job_id:int}/sources")
+    async def save_job_sources(request: Request, job_id: int) -> Response:
+        """The job's own choice of what the Writer uses, or back to your default."""
+        conn, form = request.app.state.conn, request.state.form
+        try:
+            chosen = None if form.get("default") else writer_sources.ticked(conn, form)
+        except writer_sources.SourcesError:
+            chosen = None  # nothing ticked: the default
+        if job_id > MAX_JOB_ID or not writer_sources.save_job(conn, job_id, chosen):
+            raise HTTPException(404)
+        return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
 PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY}
 MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 
 
-def _tiles_ok(conn: sqlcipher3.Connection, current: queries.Scoring) -> bool:
-    """Whether your confirmed tiles were read from your current resume."""
-    confirmed = tile_sets.latest(conn)
-    return confirmed is not None and current.resume is not None and confirmed.resume == current.resume
+def _file(conn: sqlcipher3.Connection, number: str) -> uploads.ResumeFile | None:
+    """The uploaded file a page is about; None for your Resume Profile. An unknown or removed one: not found."""
+    if not number:
+        return None
+    file = uploads.get(conn, int(number)) if number.isascii() and number.isdigit() and len(number) < 19 else None
+    if file is None:
+        raise HTTPException(404)
+    return file
 
 
-def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path) -> dict:
-    """What the Tiles page shows: your confirmed tiles if made from the current resume, else a fresh reading."""
-    try:
-        latex = read_latex(data_dir)
-        resume = from_latex(latex).fingerprint
-    except ResumeError as error:
-        return {"resume_problem": str(error), "rows": [], "kinds": PREFIXES}
-    reading, confirmed = read_tiles(latex), tile_sets.latest(conn)
+def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path, file: uploads.ResumeFile | None = None) -> dict:
+    """What the Tiles page shows for one source (your Resume Profile, or an uploaded file): its confirmed tiles if
+    made from its current text, else a fresh reading."""
+    files = uploads.offered(conn)
+    if file:
+        latex, resume = file.latex, file.fingerprint
+    else:
+        try:
+            latex = read_latex(data_dir)
+            resume = from_latex(latex).fingerprint
+        except ResumeError as error:
+            return {"resume_problem": str(error), "rows": [], "kinds": PREFIXES, "files": files, "file": None}
+    reading, confirmed = read_tiles(latex), tile_sets.latest(conn, file and file.id)
     current = confirmed is not None and confirmed.resume == resume
     tiles = confirmed.tiles if current else reading.tiles
     contact = questionnaire.load(conn)[0]["contact"]
@@ -197,5 +252,6 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path) -> dict:
         "unplaced": reading.unplaced, "reading_problem": reading.problem,
         "contact_empty": not any(contact.get(field) for field, _ in tile_sets.CONTACT),
         "contact_missing": tile_sets.contact_check(contact, header_text(latex)),
-        "pdf": pdf.built(pdf.master(data_dir, confirmed.set_id)) if current else None, "one_page": one_page,
+        "pdf": pdf.built(pdf.master(data_dir, confirmed.set_id)) if current and not file else None,
+        "one_page": one_page, "files": files, "file": file, "default_sources": writer_sources.default(conn),
     }  # fmt: skip

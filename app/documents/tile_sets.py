@@ -22,7 +22,7 @@ POSITION = re.compile(r"[0-9]{1,3}")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters
 NOT_DIGITS = re.compile(r"[^0-9]")
 CONTACT = (("full_name", "name"), ("email", "email"), ("phone", "phone"))
-LATEST = "SELECT id, resume, confirmed_on FROM tile_sets ORDER BY id DESC LIMIT 1"
+LATEST = "SELECT id, resume, confirmed_on FROM tile_sets WHERE file_id IS ? ORDER BY id DESC LIMIT 1"  # NULL: Profile
 TILES_OF = "SELECT tile_id, kind, section, facts, bullets FROM tiles WHERE set_id = ? ORDER BY position"
 SAVE_TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts, bullets) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
@@ -39,8 +39,9 @@ class Confirmed:
     tiles: list[Tile]
 
 
-def latest(conn: sqlcipher3.Connection) -> Confirmed | None:
-    row = conn.execute(LATEST).fetchone()
+def latest(conn: sqlcipher3.Connection, file_id: int | None = None) -> Confirmed | None:
+    """The latest confirmed set of your Resume Profile, or of an uploaded file (app/documents/uploads.py)."""
+    row = conn.execute(LATEST, (file_id,)).fetchone()
     if row is None:
         return None
     tiles = [
@@ -146,15 +147,15 @@ def _lines(row: dict[str, str], name: str, length: int, most: int) -> list[str]:
     return lines
 
 
-def confirm(conn: sqlcipher3.Connection, tiles: list[Tile], resume: str) -> int | None:
+def confirm(conn: sqlcipher3.Connection, tiles: list[Tile], resume: str, file_id: int | None = None) -> int | None:
     """Save the tiles as a new confirmed set, all or nothing; None when they equal the latest set (nothing saved)."""
-    current = latest(conn)
+    current = latest(conn, file_id)
     if current and current.resume == resume and current.tiles == tiles:
         return None
     with conn:
         set_id = conn.execute(
-            "INSERT INTO tile_sets (resume, confirmed_on) VALUES (?, ?)",
-            (resume, datetime.now(UTC).isoformat(timespec="seconds")),
+            "INSERT INTO tile_sets (resume, confirmed_on, file_id) VALUES (?, ?, ?)",
+            (resume, datetime.now(UTC).isoformat(timespec="seconds"), file_id),
         ).lastrowid
         conn.executemany(SAVE_TILE, [
             (set_id, tile.tile_id, position, tile.kind, tile.section, json.dumps(tile.facts, ensure_ascii=False),

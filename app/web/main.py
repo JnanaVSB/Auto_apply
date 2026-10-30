@@ -29,6 +29,10 @@ from app.web.scorer import Scorer
 HERE = Path(__file__).parent
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}  # the dashboard listens on this computer only
 MAX_FORM_BYTES = 64 * 1024
+# Uploaded resumes are sent as form text (app/web/static/upload.js): up to 5 files of 1 MB, which form encoding can
+# make up to three times longer. Only this one address accepts that much.
+UPLOAD = "/resume-profile/upload"
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
@@ -429,12 +433,13 @@ async def _form(request: Request) -> dict[str, str]:
     size = request.headers.get("content-length", "0")
     if not DIGITS.fullmatch(size):
         raise HTTPException(400, "The form could not be read.")
-    if int(size) > MAX_FORM_BYTES:
+    limit = MAX_UPLOAD_BYTES if request.url.path == UPLOAD else MAX_FORM_BYTES
+    if int(size) > limit:
         raise HTTPException(413, "Too much data.")
     body = bytearray()
     async for chunk in request.stream():  # piece by piece, so a huge upload is refused before it fills memory
         body += chunk
-        if len(body) > MAX_FORM_BYTES:
+        if len(body) > limit:
             raise HTTPException(413, "Too much data.")
     try:
         fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=500)

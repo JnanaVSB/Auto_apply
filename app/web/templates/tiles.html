@@ -13,6 +13,38 @@
 <p class="hint">Your resume as entries: one per job, project, school, skills group or publication, each with its fixed
   facts (the AI can never change them) and its bullets. Only confirmed entries are used. <code>resume.tex</code> is
   only read, never changed.</p>
+<nav class="actions" aria-label="Sources">
+  <strong>Entries from:</strong>
+  {% if file %}<a href="/resume-profile">Profile (resume.tex)</a>{% else %}<span class="mark">Profile (resume.tex)</span>{% endif %}
+  {% for other in files %}
+  {% if file and other.id == file.id %}<span class="mark">{{ other.name }}</span>{% else %}<a href="/resume-profile?file={{ other.id }}">{{ other.name }}</a>{% endif %}
+  {% endfor %}
+</nav>
+{% if not file %}
+<form method="post" action="/resume-profile/sources" class="actions">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <strong>What the Writer uses by default:</strong>
+  <label class="tick"><input type="checkbox" name="source.profile" value="1"{% if "profile" in default_sources %} checked{% endif %}> Profile</label>
+  {% for other in files %}
+  <label class="tick"><input type="checkbox" name="source.{{ other.id }}" value="1"{% if other.id in default_sources %} checked{% endif %}> {{ other.name }}</label>
+  {% endfor %}
+  <button type="submit">Save choice</button> <span class="muted">Each job can change it on its own page.</span>
+</form>
+{% endif %}
+<form method="post" action="/resume-profile/upload" class="actions" data-upload>
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Upload resumes or CVs (.tex, up to 5 at a time) <input type="file" accept=".tex" multiple></label>
+  <button type="submit">Upload</button>
+  <span class="muted">Each is named after its file and kept in your encrypted database; its LaTeX is never run.</span>
+</form>
+<script src="/static/upload.js" defer></script>
+{% if file %}
+<form method="post" action="/resume-profile/files/{{ file.id }}/remove" class="actions">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <span>Showing the uploaded file <strong>{{ file.name }}</strong> (uploaded {{ file.uploaded_on[:10] }}).</span>
+  <button type="submit">Remove this file</button> <span class="muted">(it is kept, but no longer offered)</span>
+</form>
+{% endif %}
 {% if resume_problem %}
 <p class="error" role="alert">{{ resume_problem }}</p>
 {% else %}
@@ -30,7 +62,7 @@
   <a href="/questionnaire">Questionnaire</a>. The PDF uses the Questionnaire's.</p>
 {% endif %}
 {% if reading_problem %}<p class="error">{{ reading_problem }}</p>{% endif %}
-{% if current %}
+{% if current and not file %}
 <h2>Master PDF</h2>
 <p class="hint">All your confirmed entries in your original wording, built on this computer. The first build downloads
   Tectonic's LaTeX files once (about 40 MB, under a minute).</p>
@@ -69,6 +101,7 @@
 <form method="post" action="/resume-profile" class="stacked" data-unsaved>
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <input type="hidden" name="resume" value="{{ resume }}">
+  <input type="hidden" name="file" value="{{ file.id if file else '' }}">
   {% for row in rows + [{}] %}
   {% set number = loop.index0 %}
   <fieldset class="tile"{% if not row %} id="new-entry"{% endif %}>
