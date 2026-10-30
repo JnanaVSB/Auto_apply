@@ -33,6 +33,7 @@ RESUME_CHANGED = "Your resume changed while this page was open: reload the page 
 TILES_FIRST = "Confirm the entries of every source this job uses first, on the Resume Profile page."
 PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
+SKIPPED = 'You skipped this job: turn off "Not interested" on its page first, then press Prepare.'
 
 
 def add_routes(
@@ -166,7 +167,9 @@ def add_routes(
         job = queries.job(conn, job_id) if job_id <= MAX_JOB_ID else None
         if job is None:
             raise HTTPException(404)
-        if writer_sources.unconfirmed(conn, writer_sources.of_job(conn, job_id)[0], current.resume):
+        if job["not_interested"]:
+            problem = "skipped"
+        elif writer_sources.unconfirmed(conn, writer_sources.of_job(conn, job_id)[0], current.resume):
             problem = "tiles"
         elif job["status"] != "open" or queries.job_scoring(conn, job_id, current)["status"] != "ready":
             problem = "not-ready"
@@ -188,13 +191,14 @@ def add_routes(
     async def preparation_box(request: Request, job_id: int) -> Response:
         """The job page's Ready to Apply box, loaded by the page itself."""
         conn, current = request.app.state.conn, scoring()
-        if job_id > MAX_JOB_ID or queries.job(conn, job_id) is None:
+        job = queries.job(conn, job_id) if job_id <= MAX_JOB_ID else None
+        if job is None:
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         return page(
-            request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
-            files=uploads.offered(conn), missing=writer_sources.unconfirmed(conn, chosen, current.resume),
+            request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
+            own=own, files=uploads.offered(conn), missing=writer_sources.unconfirmed(conn, chosen, current.resume),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
 
@@ -211,7 +215,7 @@ def add_routes(
         return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
-PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY}
+PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED}
 MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 
 

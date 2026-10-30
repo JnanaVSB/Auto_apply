@@ -1,6 +1,8 @@
 <section class="found" id="preparation">
   <h2>Ready to Apply</h2>
-  {% if queued %}
+  {% if skipped %}
+  <p class="muted">Skipped ("Not interested"): kept out of the queue{% if queued %}. Your Prepare press of {{ queued[:10] }} counts again when you undo it{% endif %}.</p>
+  {% elif queued %}
   <p>Queued: you pressed Prepare on {{ queued[:10] }}. The tailored resume comes with the Writer.</p>
   {% elif not ready %}
   <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
