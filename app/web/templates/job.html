@@ -37,6 +37,8 @@
   </form>
 </div>
 
+<div hx-get="/jobs/{{ job.id }}/preparation" hx-trigger="load" hx-swap="outerHTML"></div>  {# Ready to Apply #}
+
 {% set scoring = job.scoring %}
 <h2>Score</h2>
 <p><strong>{{ scoring.label }}</strong>{% if scoring.score is not none %}: {{ scoring.score }} of 100{% endif %}

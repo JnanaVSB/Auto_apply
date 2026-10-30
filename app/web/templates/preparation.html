@@ -1,0 +1,18 @@
+<section class="found" id="preparation">
+  <h2>Ready to Apply</h2>
+  {% if queued %}
+  <p>Queued: you pressed Prepare on {{ queued[:10] }}. The tailored resume comes with the Writer.</p>
+  {% elif not ready %}
+  <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
+  {% elif not tiles_ok %}
+  <p class="error">Prepare needs your confirmed tiles: <a href="/tiles">confirm your tiles first</a>.</p>
+  {% else %}
+  <form method="post" action="/ready/{{ job_id }}/prepare" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="back" value="job">
+    <button type="submit" class="primary">Prepare</button>
+  </form>
+  {% endif %}
+  <button type="button" disabled title="comes with the Writer">Request changes</button>
+  <span class="muted">Skip is the "Not interested" button above.</span>
+</section>

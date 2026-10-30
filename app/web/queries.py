@@ -12,6 +12,7 @@ import sqlcipher3
 from app import jobs
 from app.collect import DISCOVERED, source_label, source_state
 from app.config import AISettings, ScoringSettings
+from app.scoring.ready import STATUS
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
 
@@ -36,7 +37,7 @@ SCORING_LABELS = {
     "low": "low score",
     "quick": "low score (quick check)",
     "failed": "AI score failed: check by hand",
-    "waiting": "not scored yet",
+    "waiting": "waiting for scoring",
 }
 PAGE_NUMBER = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
 SCORE = re.compile(r"[0-9]{1,3}")
@@ -54,15 +55,12 @@ US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
 # Every jobs query joins each job's quick check, its score from the chosen model and a failed new try (when a new
-# try failed, the older score stays). The first two values of every query are that model and the ready threshold; a
-# job's scoring status is worked out from them when it is shown.
-SCORED = """WITH chosen (model, threshold) AS (SELECT ?, ?)
+# try failed, the older score stays). The first three values of every query are that model, the ready threshold and
+# your resume's fingerprint; a job's scoring status is worked out from them when it is shown.
+SCORED = """WITH chosen (model, threshold, resume) AS (SELECT ?, ?, ?)
     SELECT {columns} FROM jobs CROSS JOIN chosen LEFT JOIN stage_a a ON a.job_id = jobs.id
     LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model
     LEFT JOIN ai_failures f ON f.job_id = jobs.id AND f.model = chosen.model"""
-STATUS = """CASE WHEN jobs.prepare_anyway OR s.score >= chosen.threshold THEN 'ready'
-    WHEN s.score IS NOT NULL THEN 'low' WHEN s.failed IS NOT NULL THEN 'failed' WHEN a.passed = 0 THEN 'quick'
-    ELSE 'waiting' END"""
 ODD = "(s.odd IS NOT NULL OR a.trick IS NOT NULL)"
 SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, s.changed AS ad_changed,
     f.failed AS new_try_failed, f.resume AS new_try_resume, {STATUS} AS scoring,
@@ -91,7 +89,7 @@ class Scoring:
     resume: str | None = None  # the resume's fingerprint; None when there is no usable resume
 
     def values(self) -> list:
-        return [self.model, self.threshold]
+        return [self.model, self.threshold, self.resume]
 
 
 DEFAULT_SCORING = Scoring()

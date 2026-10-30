@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Ready to Apply{% endblock %}
+{% block content %}
+<h1>Ready to Apply</h1>
+<p class="hint">Open jobs scored at or above your ready threshold by your current model with your current resume, and the ones you marked "Prepare anyway"; newest first. Nothing is ever submitted from here.
+  <a href="{{ view.address(page=1) }}">Filter or sort these on the Jobs page</a>.</p>
+{% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm your tiles") %} <a href="/tiles">Open the Tiles page</a>{% endif %}</p>{% endif %}
+{% if not tiles_ok %}<p class="error">Prepare needs your confirmed tiles: <a href="/tiles">confirm your tiles first</a>.</p>{% endif %}
+{% if skipped %}
+<form method="post" action="/ready/{{ skipped }}/skip" class="result">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="value" value="0">
+  Skipped (marked "not interested"). <button type="submit">Undo</button>
+</form>
+{% endif %}
+<p class="summary">{{ "{:,}".format(listing.total) }} job{{ "" if listing.total == 1 else "s" }} ready.</p>
+{% if listing.jobs %}
+<table class="jobs">
+  <thead><tr><th>Job</th><th>Posted</th><th>Score and reasons</th><th>Preparation</th><th>Cost</th><th></th></tr></thead>
+  <tbody>
+  {% for job in listing.jobs %}
+  <tr>
+    <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a><br><span class="muted">{{ job.company }}</span></td>
+    <td>{{ job.date_posted or "" }}</td>
+    <td>{% if job.score is not none %}{{ job.score }}{% endif %}
+      {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
+      {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
+      {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
+    <td>{% if queued[job.id] %}queued (you pressed Prepare on {{ queued[job.id][:10] }}){% else %}not started{% endif %}</td>
+    <td>—</td>
+    <td class="actions">
+      {% if not queued[job.id] %}
+      <form method="post" action="/ready/{{ job.id }}/prepare">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit" class="primary">Prepare</button>
+      </form>
+      {% endif %}
+      <button type="button" disabled title="comes with the Writer">Request changes</button>
+      <form method="post" action="/ready/{{ job.id }}/skip">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <input type="hidden" name="value" value="1">
+        <button type="submit">Skip</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<nav class="pager">
+  {% if listing.number > 1 %}<a href="/ready?page={{ listing.number - 1 }}">Previous</a>{% endif %}
+  <span>Page {{ listing.number }} of {{ "{:,}".format(listing.pages) }}</span>
+  {% if listing.number < listing.pages %}<a href="/ready?page={{ listing.number + 1 }}">Next</a>{% endif %}
+</nav>
+{% else %}
+<p>No jobs are ready yet. Jobs scored with an older resume wait for scoring again (Collect page).</p>
+{% endif %}
+{% endblock %}

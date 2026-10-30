@@ -311,7 +311,7 @@ def create_app(
         typed = request.state.form if problem else None  # a refused save keeps what was typed
         return await _settings_page(request, problem=problem, typed=typed)
 
-    prepare.add_routes(app, _page, data_dir)
+    prepare.add_routes(app, _page, data_dir, lambda: _scoring())  # looked up at each call, as the routes above do
     return app
 
 

@@ -1,6 +1,7 @@
 """The PDF build, with a stand-in for Tectonic (no internet needed), plus one real build when Tectonic's files are
 already on this computer."""
 
+import errno
 import json
 import stat
 import sys
@@ -138,3 +139,21 @@ def test_a_real_build_of_a_resume_full_of_special_characters(tmp_path):
     built = pdf.build(latex.resume(CONTACT | {"full_name": "Alex $Ex&mple_%#"}, tiles), tmp_path / "resume.pdf")
     assert built.pages >= 1 and (tmp_path / "resume.pdf").read_bytes().startswith(b"%PDF")
     assert not (tmp_path / "pwned").exists()
+
+
+def test_a_folder_that_cannot_be_written_or_a_full_disk_names_the_folder(fake, tmp_path, monkeypatch):
+    (tmp_path / "documents").write_text("a file where the folder should be")
+    with pytest.raises(PdfError, match=r"Could not write in .*documents \("):
+        run(fake, tmp_path / "documents" / "resume-v1.pdf")
+
+    real_open = pdf.os.open
+
+    def full(path, *args, **kwargs):  # the disk is full for the files the build writes
+        if str(path).endswith(".partial"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(pdf.os, "open", full)
+    with pytest.raises(PdfError, match=r"Could not save resume.tex in .* \(No space left on device\)"):
+        run(fake, tmp_path / "resume-v1.pdf")
+    assert list(tmp_path.glob(f"{pdf.BUILDING}*")) == [] and list(tmp_path.glob("*.partial")) == []

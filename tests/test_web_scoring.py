@@ -96,6 +96,14 @@ def test_odd_scores_and_trick_phrases_can_be_filtered(conn, five):
     assert set(statuses(conn, "f=1&status=open&odd=1")) == {"Low", "Quick"}
 
 
+def test_a_high_score_with_an_older_resume_or_a_changed_ad_waits_to_be_scored_again(conn, five):
+    with conn:
+        scored(conn, five["Low"], score=90, resume="resume-before")
+        conn.execute("UPDATE ai_scores SET changed = 1 WHERE job_id = ?", (five["Ready"],))
+    assert statuses(conn)["Low"] == statuses(conn)["Ready"] == "waiting"
+    assert statuses(conn, scoring=queries.Scoring(MODEL, 70, None))["Low"] == "waiting"  # no usable resume: none ready
+
+
 def test_older_resume_is_marked(conn, five):
     page = queries.list_jobs(conn, queries.Filters.from_address("f=1&status=open"), CHOSEN)
     assert {job["title"] for job in page.jobs if job["older"]} == {"Low"}
