@@ -65,6 +65,7 @@ class Reading:
 
 
 def read_tiles(latex: str) -> Reading:
+    latex = latex.replace("\r\n", "\n").replace("\r", "\n")  # Windows and old Mac line ends, as browsers send them
     body = COMMENT.sub(r"\1", latex)
     body = body.partition(r"\begin{document}")[2] or body  # the preamble holds settings, and resume.cls's header
     body = SETTING.sub(" ", body.partition(r"\end{document}")[0])

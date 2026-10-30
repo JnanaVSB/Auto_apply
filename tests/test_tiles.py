@@ -165,6 +165,11 @@ def test_plain_article_with_publications_awards_and_other():
     ]  # fmt: skip
 
 
+def test_windows_and_old_mac_line_ends_read_the_same():
+    for line_end in ("\r\n", "\r"):  # a browser upload or a file saved on Windows, and an old Mac file
+        assert read_tiles(RESUME_CLS.replace("\n", line_end)) == read_tiles(RESUME_CLS)
+
+
 def test_a_resume_without_sections_goes_to_unplaced_text():
     reading = read_tiles(r"\begin{document}Just some words, no sections.\end{document}")
     assert reading.tiles == [] and reading.problem == NO_SECTIONS

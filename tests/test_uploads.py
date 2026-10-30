@@ -36,12 +36,26 @@ def test_files_are_saved_and_offered_by_their_name(conn):
         (tuple((f"cv{n}.tex", RESUME_CLS + "%" * n) for n in range(6)), "Upload at most 5 files at a time"),
         ((("one.tex", RESUME_CLS), ("two.tex", RESUME_CLS)), "two: already uploaded as one"),
         ((("cv.tex", RESUME_CLS), ("CV.tex", OTHER)), "CV: a file with this name is already uploaded"),
+        ((("cv.pdf", RESUME_CLS),), "cv.pdf: only .tex files can be uploaded"),
+        ((("cv", RESUME_CLS),), "cv: only .tex files can be uploaded"),
+        ((("cv.tex", RESUME_CLS + "\ufffd" * (len(RESUME_CLS) // 50)),), "cv: doesn't look like a LaTeX text file"),
     ],
 )
 def test_a_bad_file_means_nothing_is_saved(conn, files, problem):
     with pytest.raises(UploadError, match=problem):
         uploads.upload(conn, form(*files))
     assert uploads.offered(conn) == []
+
+
+def test_a_tex_name_in_capitals_and_a_few_odd_characters_are_fine(conn):
+    assert uploads.upload(conn, form(("Robotics CV.TEX", RESUME_CLS.replace("Toy", "Toy\ufffd")))) == 1
+    assert [file.name for file in uploads.offered(conn)] == ["Robotics CV"]
+
+
+def test_a_file_over_the_size_limit_is_refused_before_it_is_read(conn, monkeypatch):
+    monkeypatch.setattr(uploads, "plain_text", lambda latex: pytest.fail("read before the size check"))
+    with pytest.raises(UploadError, match="big: is over 1 MB"):
+        uploads.upload(conn, form(("big.tex", "x" * (uploads.MAX_BYTES + 1))))
 
 
 def test_the_same_file_or_name_twice_across_uploads_is_refused(conn):

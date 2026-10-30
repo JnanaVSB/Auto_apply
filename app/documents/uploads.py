@@ -56,19 +56,22 @@ def upload(conn: sqlcipher3.Connection, form: dict[str, str]) -> int:
     names, prints = {file.name.lower() for file in current}, {file.fingerprint: file.name for file in current}
     saved, problems = [], []
     for _, file in sorted(chosen.items()):
-        name, latex = " ".join(file.get("name", "").removesuffix(".tex").split()), file.get("latex", "")
-        latex = latex.replace("\x00", "")
-        text = plain_text(latex)
-        fingerprint = hashlib.sha256(text.encode()).hexdigest()
+        name, latex = " ".join(file.get("name", "").split()), file.get("latex", "").replace("\x00", "")
+        tex = name.lower().endswith(".tex")
+        name = name[:-4].rstrip() if tex else name
         if not name or len(name) > MAX_NAME or CONTROL.search(name):
             problems.append(f"a file name must be 1 to {MAX_NAME} visible characters")
-        elif len(latex.encode()) > MAX_BYTES:
+        elif not tex:
+            problems.append(f"{name}: only .tex files can be uploaded")
+        elif len(latex.encode()) > MAX_BYTES:  # before reading it
             problems.append(f"{name}: is over {MAX_BYTES // 2**20} MB, which does not look like a resume")
-        elif len(text) < MIN_CHARACTERS:
+        elif latex.count("\ufffd") > len(latex) // 100:  # what the browser makes of a PDF or Word file
+            problems.append(f"{name}: doesn't look like a LaTeX text file (too many unreadable characters)")
+        elif len(text := plain_text(latex)) < MIN_CHARACTERS:
             problems.append(f"{name}: looks empty (almost no text after removing LaTeX)")
         elif name.lower() in names:
             problems.append(f"{name}: a file with this name is already uploaded; remove it first, or rename this file")
-        elif fingerprint in prints:
+        elif (fingerprint := hashlib.sha256(text.encode()).hexdigest()) in prints:
             problems.append(f"{name}: already uploaded as {prints[fingerprint]}")
         else:
             names.add(name.lower())
