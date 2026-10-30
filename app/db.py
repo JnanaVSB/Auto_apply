@@ -363,6 +363,53 @@ UPGRADES = (
     );
     ALTER TABLE jobs ADD COLUMN writer_sources TEXT;  -- this job's own choice, as above; NULL: the default
     """,
+    """
+    -- Phase 4b, the Writer. Nothing is overwritten: Request changes makes a new version, and every AI call is a saved
+    -- step, so a call is never sent twice by itself. Spending per day and month is added up from the steps.
+    CREATE TABLE preparations (  -- one row per version of a job's tailored resume or cover letter
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        kind TEXT NOT NULL CHECK (kind IN ('resume', 'cover_letter')),
+        version INTEGER NOT NULL CHECK (version >= 1),  -- 1, 2, ... per job and kind
+        based_on INTEGER REFERENCES preparations (id),  -- the version Request changes started from
+        feedback TEXT,  -- your words from Request changes
+        sources TEXT NOT NULL,  -- JSON: each source used with its confirmed tile set
+        writer TEXT NOT NULL,  -- JSON: the Writer's settings at the start (never a key)
+        status TEXT NOT NULL CHECK (status IN ('writing', 'done', 'by_hand', 'stopped')),
+        problem TEXT,  -- why it stopped or needs checking by hand; never your text
+        draft TEXT,  -- JSON: the checked answer, contact details still as placeholders
+        flags TEXT NOT NULL DEFAULT '[]',  -- JSON: e.g. numbers not in the original bullets
+        created_on TEXT NOT NULL,
+        finished_on TEXT,
+        UNIQUE (job_id, kind, version),
+        CHECK (status != 'done' OR draft IS NOT NULL)
+    );
+    -- At most one version of a job's resume (or cover letter) is being written at a time
+    CREATE UNIQUE INDEX preparations_writing ON preparations (job_id, kind) WHERE status = 'writing';
+    CREATE TABLE steps (  -- one row per AI call a preparation needs
+        id INTEGER PRIMARY KEY,
+        preparation_id INTEGER NOT NULL REFERENCES preparations (id),
+        round INTEGER NOT NULL DEFAULT 1 CHECK (round >= 1),  -- the council's rounds come in Phase 4c
+        member TEXT NOT NULL DEFAULT 'writer',  -- and its other members
+        service TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('sent', 'done', 'failed', 'interrupted')),
+        tries INTEGER NOT NULL DEFAULT 1 CHECK (tries >= 1),
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,  -- thinking included
+        cost REAL CHECK (cost >= 0),  -- dollars, from the tokens the service reported; NULL: not counted (no price)
+        reserved REAL NOT NULL DEFAULT 0 CHECK (reserved >= 0),  -- the largest possible cost of the call waited for
+        day TEXT NOT NULL,  -- the date on this computer's clock when it was sent
+        answer TEXT,  -- the checked answer
+        error TEXT,  -- a short reason; never your text or the answer
+        sent_on TEXT NOT NULL,
+        done_on TEXT,
+        UNIQUE (preparation_id, round, member),
+        CHECK (status = 'sent' OR reserved = 0)  -- once answered or interrupted, the reservation is cost or gone
+    );
+    CREATE INDEX steps_day ON steps (day);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

@@ -748,6 +748,57 @@ def test_version_12_adds_uploaded_resumes_and_keeps_confirmed_tiles(tmp_path, mo
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
+def test_version_13_adds_preparations_and_steps_and_keeps_every_job(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_12:
+        version_12.setattr(db, "UPGRADES", db.UPGRADES[:12])
+        version_12.setattr(db, "SCHEMA_VERSION", 12)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT title FROM jobs").fetchall() == [("ML Intern",)]
+        for table in ("preparations", "steps"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0  # noqa: S608 (fixed names)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v12") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+
+
+PREPARATION = (
+    "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, draft, created_on) "
+    "VALUES ({}, 1, '{}', {}, '[]', '{{}}', '{}', {}, 'now')"
+)
+STEP = (
+    "INSERT INTO steps (preparation_id, member, service, model, status, reserved, day, sent_on) "
+    "VALUES (1, '{}', 'ollama', 'm', '{}', {}, '2026-10-30', 'now')"
+)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        PREPARATION.format(2, "resume", 1, "done", "'{}'"),  # the same job, kind and version
+        PREPARATION.format(2, "resume", 2, "writing", "NULL"),  # a second version written at the same time
+        PREPARATION.format(2, "letter", 1, "writing", "NULL"),
+        PREPARATION.format(2, "cover_letter", 1, "done", "NULL"),  # done, but no draft
+        PREPARATION.format(2, "cover_letter", 0, "writing", "NULL"),
+        PREPARATION.format(2, "cover_letter", 1, "queued", "NULL"),
+        STEP.format("writer", "sent", 0),  # the same preparation, round and member
+        STEP.format("editor", "done", 0.5),  # a reservation left after the answer came
+        STEP.format("editor", "planned", 0),
+        STEP.format("editor", "sent", -1),
+    ],
+)
+def test_preparation_tables_refuse_impossible_values(data_dir, sql):
+    with closing(db.connect(data_dir)) as conn:
+        with conn:
+            _scored_job(conn)
+            conn.execute(PREPARATION.format(1, "resume", 1, "writing", "NULL"))
+            conn.execute(STEP.format("writer", "sent", 0.3))
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute(sql)
+
+
 TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts) VALUES (1, '{}', {}, '{}', 'Work', '{{}}')"
 
 
