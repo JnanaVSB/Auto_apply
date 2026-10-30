@@ -7,9 +7,8 @@ import json
 from functools import cache
 from pathlib import Path
 from typing import NamedTuple
-from urllib.parse import urlsplit
 
-from app.config import OPENAI_HOST, AIRole
+from app.config import AIRole
 from app.llm import Usage
 
 
@@ -39,7 +38,7 @@ def price(role: AIRole, prompt_tokens: int = 0, half: bool = False) -> Price | N
     address without prices, or a model missing from the list)."""
     if role.service == "ollama":
         return Price(0, 0, 0)
-    if role.service == "openai-compatible" and urlsplit(role.address).hostname != OPENAI_HOST:  # your own address
+    if role.own:
         if role.price_input is None or role.price_output is None:
             return None
         return Price(role.price_input, role.price_input, role.price_output)  # no cache price known: the full one

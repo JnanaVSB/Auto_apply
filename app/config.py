@@ -124,20 +124,24 @@ class AIRole(BaseModel):
                     "must never be reachable from elsewhere"
                 )
             return self
-        own = self.service == "openai-compatible" and parts.hostname != OPENAI_HOST  # your own address
-        plain = own and parts.scheme == "http" and _private(parts.hostname)
+        plain = self.own and parts.scheme == "http" and _private(parts.hostname)
         if not (parts.scheme == "https" or plain) or not parts.hostname or parts.username or parts.password:
             raise ValueError(
                 "a cloud service's address must start with https:// (your own address may use http:// on a private "
                 "network, written as numbers, such as http://192.168.1.5:8000) and hold no name or password"
             )
-        if self.key_name is None and not own:  # your own server may need no key
+        if self.key_name is None and not self.own:  # your own server may need no key
             raise ValueError("a cloud service needs key_name: the name its key is saved under in the keychain")
         if (self.price_input is None) != (self.price_output is None):
             raise ValueError("give both prices (price_input and price_output), or neither")
-        if self.price_input is not None and not own:
+        if self.price_input is not None and not self.own:
             raise ValueError("prices can be given only for your own address: the app knows Anthropic's and OpenAI's")
         return self
+
+    @property
+    def own(self) -> bool:
+        """Your own address: an OpenAI-compatible service other than OpenAI itself."""
+        return self.service == "openai-compatible" and urlsplit(self.address).hostname != OPENAI_HOST
 
 
 def _private(host: str | None) -> bool:
@@ -153,6 +157,13 @@ class AISettings(BaseModel):
 
     evaluator: AIRole = AIRole(model="gemma4:26b-a4b-it-q8_0")  # scores jobs (Stage B)
     writer: AIRole | None = None  # tailors resumes and writes cover letters; none until you choose one in Settings
+
+
+class SpendingSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    daily: Annotated[float, Field(ge=1, le=500)] = 15  # dollars a day for paid AI calls
+    monthly: Annotated[float, Field(ge=1, le=5000)] = 150  # dollars a month
 
 
 class DocumentSettings(BaseModel):
@@ -173,6 +184,7 @@ class Config(BaseModel):
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()
     documents: DocumentSettings = DocumentSettings()
+    spending: SpendingSettings = SpendingSettings()
 
 
 def load_config(path: Path | None = None) -> Config:

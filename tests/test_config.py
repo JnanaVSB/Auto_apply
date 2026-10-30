@@ -207,6 +207,14 @@ def test_your_own_address_may_use_http_on_a_private_network_and_needs_no_key(tmp
     assert (role.address, role.key_name, role.price_input, role.price_output) == (address, None, 0.5, 1.5)
 
 
+def test_spending_limits_have_defaults_and_ranges(tmp_path):
+    spending = load_config(write(tmp_path, "data_dir: data\n")).spending
+    assert (spending.daily, spending.monthly) == (15, 150)
+    for setting, value in (("daily", 0.5), ("daily", 501), ("monthly", 0), ("monthly", 5001)):
+        with pytest.raises(ConfigError, match=f"spending.{setting}"):
+            load_config(write(tmp_path, f"data_dir: data\nspending:\n  {setting}: {value}\n"))
+
+
 @pytest.mark.parametrize(
     ("setting", "value"), [("minutes_per_day", 0), ("minutes_per_day", 1441), ("ready_threshold", 101)]
 )

@@ -63,3 +63,10 @@ ai:
 # Resume PDFs, built on this computer by Tectonic.
 documents:
   one_page: true  # the resume must fit on one page; a longer one is marked "over one page" (false: allow more)
+
+# Money for paid AI calls (Anthropic, OpenAI, or your own address with a price). A paid call is sent only if its
+# largest possible cost still fits within both limits; the local model is free and never limited. Set the same monthly
+# limit on your Anthropic and OpenAI accounts too: the app's count can differ slightly from their bills.
+spending:
+  daily: 15  # dollars a day (1 to 500)
+  monthly: 150  # dollars a month (1 to 5000)
