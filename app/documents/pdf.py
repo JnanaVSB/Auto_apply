@@ -9,13 +9,16 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 BUNDLE = "https://data1b.fullyjustified.net/tlextras-2022.0r0.tar"  # given explicitly: an update can't change it
 INSTALL = "conda install -n auto_apply -c conda-forge tectonic=0.17.0=*_0"
 TIMEOUT_SECONDS = 300  # the first build downloads its LaTeX files (about 50 s); later ones take about a second
-BUILDING = "building-"  # the private folders of builds in progress; any left over were interrupted
+BUILDING = "building-"  # the private folders of builds in progress
+LEFT_OVER_SECONDS = TIMEOUT_SECONDS + 60  # a build folder older than this was interrupted; a newer one may be busy
 FAILED = "failed-build"  # the generated LaTeX and the log of the last failed build, kept for checking by hand
 PAGES = re.compile(r"Output written on .*?\((\d+) pages?")
 MISSING = re.compile(r"Missing character: There is no (.) ")
@@ -86,8 +89,11 @@ def _build(latex: str, target: Path, program: Path | None) -> Built:
     folder = target.parent
     try:
         folder.mkdir(mode=0o700, exist_ok=True)
+        now = time.time()
         for old in folder.glob(f"{BUILDING}*"):
-            shutil.rmtree(old, ignore_errors=True)
+            with suppress(FileNotFoundError):  # another dashboard's build may finish meanwhile
+                if now - old.stat().st_mtime > LEFT_OVER_SECONDS:  # never a build another dashboard is running
+                    shutil.rmtree(old, ignore_errors=True)
         work = Path(tempfile.mkdtemp(prefix=BUILDING, dir=folder))  # readable by you only
     except OSError as error:
         raise PdfError(

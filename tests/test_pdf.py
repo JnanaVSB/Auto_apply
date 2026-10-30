@@ -3,8 +3,10 @@ already on this computer."""
 
 import errno
 import json
+import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -114,10 +116,15 @@ def test_one_build_at_a_time(fake, tmp_path):
         run(fake, tmp_path / "resume-v1.pdf")
 
 
-def test_an_interrupted_builds_folder_is_cleaned_up(fake, tmp_path):
-    (tmp_path / f"{pdf.BUILDING}old").mkdir()
+def test_an_interrupted_builds_folder_is_cleaned_up_but_not_one_still_running(fake, tmp_path):
+    old, busy = tmp_path / f"{pdf.BUILDING}old", tmp_path / f"{pdf.BUILDING}busy"  # busy: another dashboard's build
+    old.mkdir()
+    busy.mkdir()
+    long_ago = time.time() - pdf.LEFT_OVER_SECONDS - 1
+    os.utime(old, (long_ago, long_ago))
+    (tmp_path / f"{pdf.BUILDING}gone").symlink_to(tmp_path / "removed meanwhile")  # gone before it is looked at
     run(fake, tmp_path / "resume-v1.pdf")
-    assert list(tmp_path.glob(f"{pdf.BUILDING}*")) == []
+    assert sorted(tmp_path.glob(f"{pdf.BUILDING}*")) == [busy, tmp_path / f"{pdf.BUILDING}gone"]
 
 
 def test_the_master_pdf_remembers_what_its_build_found(fake, tmp_path, monkeypatch):
