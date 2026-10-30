@@ -50,6 +50,12 @@ def test_text_after_a_space_following_a_layout_command_is_kept():
     assert plain_text(r"\vspace{2pt} {\Large Alex}") == "Alex"
 
 
+def test_accent_commands_keep_a_word_whole():
+    assert plain_text(
+        r"Fran\c{c}ois Dvo\v{r}\'ak, \O rsted, Stra\ss e, \aa{}ngstr\"om, \l{}\'od\'z, \H{o}\k{e}\u{a}\r{u}"
+    ) == ("Francois Dvorak, Orsted, Strasse, angstrom, lodz, oeau")
+
+
 def test_without_document_markers_the_whole_text_is_read():
     assert plain_text(r"Just \textit{words}") == "Just words"
 

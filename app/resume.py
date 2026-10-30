@@ -21,7 +21,8 @@ DROPPED = re.compile(
 )
 FIRST_DROPPED = re.compile(rf"\\(?:href|textcolor)(?![A-Za-z@])\s*{GROUP}")  # the link or colour; the text stays
 LINE_BREAK = re.compile(rf"\\\\\*?(?:{OPTION})?")
-ACCENT = re.compile(r"\\['`^\"~=.]\{?([A-Za-z])\}?")  # \'e -> e
+ACCENT = re.compile(r"\\(?:['`^\"~=.]|[cvuHkr](?![A-Za-z])\s*)\{?([A-Za-z])\}?")  # \'e -> e, \c{c} -> c
+LETTER = re.compile(r"\\(?:(l|o|ss|L|O|SS)|(a)a|(A)A)(?![A-Za-z])(?:\{\}|\s*)")  # \o -> o, \aa -> a: one word
 COMMAND = re.compile(rf"\\[A-Za-z@]+\*?(?:{OPTION})?")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters (keeps tabs, new lines)
 SPACES = re.compile(r"[ \t]+")
@@ -72,7 +73,7 @@ def plain_text(latex: str) -> str:
     text = LINE_BREAK.sub("\n", text)
     text = re.sub(r"(?<!\\)[$&]", " ", text)  # math signs and table columns, before \$ and \& become plain
     text = re.sub(r"\\([&%$#_])", r"\1", text)
-    text = ACCENT.sub(r"\1", text)
+    text = ACCENT.sub(r"\1", LETTER.sub(r"\1\2\3", text))
     text = COMMAND.sub(" ", text)
     text = text.replace("~", " ").replace("---", "-").replace("--", "-").replace("{", "").replace("}", "")
     text = CONTROL.sub("", text)
