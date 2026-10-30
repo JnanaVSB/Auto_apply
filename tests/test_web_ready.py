@@ -6,10 +6,12 @@ from test_tiles import RESUME_CLS
 from test_uploads import OTHER, form
 from test_web_scoring import CHOSEN, scored
 
+from app import config
+from app.council import runs
 from app.documents import tile_sets, uploads, writer_sources
 from app.documents.tiles import read_tiles
 from app.scoring import ready
-from app.web import main
+from app.web import main, preparer
 
 
 @pytest.fixture
@@ -28,8 +30,19 @@ def jobs(conn):
 
 
 @pytest.fixture
-def client(client, monkeypatch):
+def writer_chosen(tmp_path, data_dir, monkeypatch):
+    """A made-up settings file with a local Writer chosen."""
+    path = tmp_path / "config.yaml"
+    path.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_PATH", path)
+
+
+@pytest.fixture
+def client(client, writer_chosen, monkeypatch):
+    """Logged in; `client.started` lists the jobs Prepare started the Writer on (never really run here)."""
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
+    client.started = []
+    monkeypatch.setattr(client.app.state.preparer, "start", client.started.append)
     log_in(client)
     return client
 
@@ -120,7 +133,7 @@ def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
     confirm_tiles(conn)
     assert 'action="/ready/' in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
     assert press(client, jobs["Fresh"], back="job").headers["location"] == f"/jobs/{jobs['Fresh']}"
-    assert "Queued: you pressed Prepare on" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
+    assert client.started == [jobs["Fresh"]]
     assert 'hx-get="/jobs/' in client.get(f"/jobs/{jobs['Fresh']}").text
 
 
@@ -169,3 +182,77 @@ def test_the_default_choice_is_saved_on_the_resume_profile_page(client, conn, da
     client.post("/resume-profile/sources", data={"source.profile": "1", "source.99": "1", "csrf_token": csrf(client)})
     assert writer_sources.default(conn) == ["profile"]  # a file that isn't offered is never chosen
     assert 'name="source.profile" value="1" checked' in client.get("/resume-profile").text
+
+
+@pytest.fixture
+def ready_job(client, conn):
+    with conn:
+        job = add_job(conn, "Fresh")
+        scored(conn, job, score=85)
+    confirm_tiles(conn)
+    return job
+
+
+def test_prepare_starts_the_writer_only_when_a_version_is_needed(client, conn, ready_job):
+    assert press(client, ready_job).headers["location"] == "/ready"
+    assert client.started == [ready_job]
+    with conn:
+        conn.execute(
+            "INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on) VALUES "
+            "(?, 'resume', 1, ?, '{}', 'done', '{}', '2026-10-30T10:00:00+00:00')",
+            (ready_job, '[{"source": "profile", "set": 1}]'),
+        )
+    press(client, ready_job)
+    assert client.started == [ready_job]  # done from the same entries: no second version
+    with conn:
+        conn.execute("UPDATE preparations SET status = 'by_hand', problem = 'Writer failed twice (x): check by hand.'")
+    text = client.get(f"/jobs/{ready_job}/preparation").text
+    assert "Version 1: Writer failed twice (x): check by hand." in text and ">Retry</button>" in text
+    press(client, ready_job)
+    assert client.started == [ready_job, ready_job]  # Retry: a new version
+
+
+def test_a_version_made_from_older_entries_can_be_prepared_again(client, conn, ready_job):
+    with conn:
+        conn.execute(
+            "INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on) VALUES "
+            "(?, 'resume', 1, '[{\"source\": \"profile\", \"set\": 99}]', '{}', 'done', '{}', 'now')", (ready_job,),
+        )  # fmt: skip
+    assert "was made from older entries" in client.get(f"/jobs/{ready_job}/preparation").text
+    press(client, ready_job)
+    assert client.started == [ready_job]
+
+
+def test_prepare_without_a_writer_says_where_to_choose_one(client, conn, ready_job, tmp_path, data_dir, monkeypatch):
+    path = tmp_path / "no-writer.yaml"
+    path.write_text(f"data_dir: {data_dir}\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_PATH", path)
+    assert press(client, ready_job).headers["location"] == "/ready?problem=writer"
+    assert (
+        client.started == []
+        and "Choose the Writer&#39;s model on the Writer settings page" in client.get("/ready?problem=writer").text
+    )
+    assert 'href="/settings/writer"' in client.get(f"/jobs/{ready_job}/preparation").text
+
+
+def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(client, conn, ready_job, monkeypatch):
+    state = client.app.state.preparer
+    monkeypatch.setattr(state, "place", lambda job_id: 0)
+    text = client.get(f"/jobs/{ready_job}/preparation").text
+    assert "The Writer is working on it" in text and 'hx-trigger="every 3s"' in text
+    monkeypatch.setattr(state, "place", lambda job_id: 2)
+    assert "Waiting for the Writer: 2 jobs before it." in client.get(f"/jobs/{ready_job}/preparation").text
+    monkeypatch.setattr(state, "place", lambda job_id: None)
+    with conn:
+        conn.execute(
+            "INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on) VALUES "
+            "(?, 'resume', 1, ?, '{}', 'done', '{}', '2026-10-30T10:00:00+00:00')",
+            (ready_job, '[{"source": "profile", "set": 1}]'),
+        )
+    text = client.get(f"/jobs/{ready_job}/preparation").text
+    assert "Done: version 1, written 2026-10-30." in text and "every 3s" not in text
+    state.notice = preparer.BUSY
+    with conn:
+        conn.execute("UPDATE preparations SET status = 'stopped', problem = 'Paused: today&#39;s limit.'")
+    assert preparer.BUSY in client.get(f"/jobs/{ready_job}/preparation").text
+    assert runs.latest(conn, ready_job)["status"] == "stopped"

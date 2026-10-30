@@ -13,7 +13,7 @@ from helpers import ADDRESS, MASTER_PASSWORD, PASSWORD, Clock, FakeWeb
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
-from app import db, fetch, keychain
+from app import config, db, fetch, keychain
 from app.fetch import Fetcher
 from app.web import __main__ as web_command
 from app.web import main, security
@@ -65,6 +65,12 @@ def _fake_secrets(patch: pytest.MonkeyPatch) -> MemoryKeychain:
 @pytest.fixture(autouse=True)
 def fake_keychain(monkeypatch) -> MemoryKeychain:
     return _fake_secrets(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def no_real_settings(tmp_path, monkeypatch):
+    """Tests never read your own data/config.yaml: a test that needs settings writes its own file."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "no-settings" / "config.yaml")
 
 
 @pytest.fixture

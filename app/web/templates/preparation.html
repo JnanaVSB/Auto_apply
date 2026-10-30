@@ -1,18 +1,28 @@
-<section class="found" id="preparation">
+{% set working = place is not none or (latest and latest.status == "writing") %}
+<section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
   {% if skipped %}
   <p class="muted">Skipped ("Not interested"): kept out of the queue{% if queued %}. Your Prepare press of {{ queued[:10] }} counts again when you undo it{% endif %}.</p>
-  {% elif queued %}
-  <p>Queued: you pressed Prepare on {{ queued[:10] }}. The tailored resume comes with the Writer.</p>
+  {% elif place == 0 or (place is none and working) %}
+  <p role="status">The Writer is working on it (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
+  {% elif place %}
+  <p role="status">Waiting for the Writer: {{ place }} job{{ "s" if place > 1 }} before it.</p>
+  {% elif latest and latest.status == "done" and not outdated %}
+  <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}. The PDF and "changes vs your master" come next.</p>
   {% elif not ready %}
   <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
   {% elif missing %}
   <p class="error">Prepare needs confirmed entries: <a href="/resume-profile">confirm these first: {{ missing | join(", ") }}</a>.</p>
+  {% elif not writer %}
+  <p class="error">Choose the Writer's model on the <a href="/settings/writer">Writer settings</a> page first.</p>
   {% else %}
+  {% if latest and latest.status in ("stopped", "by_hand") %}<p class="error" role="alert">Version {{ latest.version }}: {{ latest.problem }}</p>{% endif %}
+  {% if latest and latest.status == "done" %}<p class="muted">Version {{ latest.version }} was made from older entries: prepare it again from your current ones.</p>{% endif %}
+  {% if notice %}<p class="error" role="alert">{{ notice }}</p>{% endif %}
   <form method="post" action="/ready/{{ job_id }}/prepare" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <input type="hidden" name="back" value="job">
-    <button type="submit" class="primary">Prepare</button>
+    <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
   </form>
   {% endif %}
   <button type="button" disabled title="comes with the Writer">Request changes</button>

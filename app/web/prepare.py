@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException
 
 from app import questionnaire
 from app.config import ConfigError, load_config
+from app.council import runs
 from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import ResumeError, from_latex, read_latex
@@ -34,6 +35,7 @@ TILES_FIRST = "Confirm the entries of every source this job uses first, on the R
 PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
 SKIPPED = 'You skipped this job: turn off "Not interested" on its page first, then press Prepare.'
+NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
 
 
 def add_routes(
@@ -180,8 +182,12 @@ def add_routes(
             problem = "tiles"
         elif job["status"] != "open" or queries.job_scoring(conn, job_id, current)["status"] != "ready":
             problem = "not-ready"
+        elif not _writer_chosen():
+            problem = "writer"
         else:
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
+            if _can_write(conn, job_id):  # never while it is written, nor again once done from the same entries
+                request.app.state.preparer.start(job_id)
             problem = None
         back = f"/jobs/{job_id}" if request.state.form.get("back") == "job" else "/ready"  # the page it was pressed on
         return RedirectResponse(f"{back}?problem={problem}" if problem else back, 303)
@@ -203,9 +209,12 @@ def add_routes(
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
+        latest, preparer = runs.latest(conn, job_id), request.app.state.preparer
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
-            own=own, files=uploads.offered(conn),
+            own=own, files=uploads.offered(conn), latest=latest, place=preparer.place(job_id),
+            notice=preparer.notice, outdated=bool(latest) and runs.outdated(conn, job_id, latest),
+            writer=_writer_chosen(),
             missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
@@ -223,7 +232,22 @@ def add_routes(
         return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
-PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED}
+PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED, "writer": NO_WRITER}
+
+
+def _writer_chosen() -> bool:
+    try:
+        return load_config().ai.writer is not None
+    except ConfigError:  # shown on the Settings page; nothing can be prepared meanwhile
+        return False
+
+
+def _can_write(conn: sqlcipher3.Connection, job_id: int) -> bool:
+    """No version yet, the last one stopped or needs checking by hand (Retry), or it was made from older entries."""
+    latest = runs.latest(conn, job_id)
+    if latest is None or latest["status"] in ("stopped", "by_hand"):
+        return True
+    return latest["status"] == "done" and runs.outdated(conn, job_id, latest)
 
 
 def _file(conn: sqlcipher3.Connection, number: str) -> uploads.ResumeFile | None:

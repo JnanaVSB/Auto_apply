@@ -24,6 +24,7 @@ from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
 from app.web import actions, answer_key, prepare, queries, security, writer_settings
 from app.web.collector import Collector
+from app.web.preparer import Preparer
 from app.web.scorer import Scorer
 
 HERE = Path(__file__).parent
@@ -57,6 +58,7 @@ def create_app(
             conn.execute(f"PRAGMA busy_timeout = {BUSY_WAIT_MS}")
             app.state.conn = conn
             schedule = asyncio.create_task(_schedule(app))
+            await asyncio.to_thread(app.state.preparer.recover)  # calls an earlier dashboard left waiting
             try:
                 yield
             finally:  # the dashboard is closing: so are the schedule, any collection and any scoring
@@ -69,6 +71,7 @@ def create_app(
     app.state.logins = logins or security.Logins()
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
+    app.state.preparer = Preparer(data_dir)  # the Writer, one job at a time
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
