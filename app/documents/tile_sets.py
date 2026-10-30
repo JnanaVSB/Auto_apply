@@ -1,5 +1,7 @@
 """Your confirmed tiles in the database: the latest set, what changed against a new reading of resume.tex, and a new
-set from the Tiles page. Older sets are never deleted, so a resume made from them can always be traced back."""
+set from the Resume Profile page. Older sets are never deleted, so a resume made from them can always be traced back.
+
+Users see a tile as an "entry" (see app/documents/tiles.py), so every message here says entry."""
 
 import json
 import re
@@ -13,7 +15,7 @@ from app.documents.tiles import PREFIXES, Tile, new_id
 FACTS = ("name", "rest", "right", "second", "second_right", "link")
 LABELS = {"second_right": "second line's right side"}  # every other box is named as it is written
 MAX_TILES, MAX_FACT, MAX_BULLETS, MAX_BULLET, MAX_SKILLS, MAX_SKILL = 35, 300, 40, 1000, 100, 100
-FIELD = re.compile(r"tile\.([0-9]{1,2})\.(\w+)")  # one box of one tile on the Tiles page
+FIELD = re.compile(r"tile\.([0-9]{1,2})\.(\w+)")  # one box of one entry on the Resume Profile page
 TILE_ID = re.compile(r"[a-z]+-[0-9a-f]{4}(?:-[0-9]{1,3})?")
 LINK = re.compile(r"https?://\S+")
 POSITION = re.compile(r"[0-9]{1,3}")
@@ -83,14 +85,14 @@ def check(rows: list[dict[str, str]]) -> list[Tile]:
             try:
                 kept.append((_position(row), int(row["number"]), _tile(row)))
             except ValueError as error:
-                problems.append(f"Tile {int(row['number']) + 1}, {error}")
+                problems.append(f"Entry {int(row['number']) + 1}, {error}")
     if len(kept) > MAX_TILES:
-        problems.append(f"at most {MAX_TILES} tiles can be confirmed ({len(kept)} now)")
+        problems.append(f"at most {MAX_TILES} entries can be confirmed ({len(kept)} now)")
     if not kept and not problems:
-        problems.append("there are no tiles to confirm")
+        problems.append("there are no entries to confirm")
     ids = [tile.tile_id for *_, tile in kept if tile.tile_id]
     if len(ids) != len(set(ids)):
-        problems.append("two tiles have the same id: reload the page")
+        problems.append("two entries have the same id: reload the page")
     if problems:
         raise TilesError("; ".join(problems))
     taken = set(ids)  # a new tile gets an id no other tile has
@@ -120,9 +122,9 @@ def _tile(row: dict[str, str]) -> Tile:
         raise ValueError("link: must start with http:// or https:// and have no spaces")
     skills, bullets = _lines(row, "skills", MAX_SKILL, MAX_SKILLS), _lines(row, "bullets", MAX_BULLET, MAX_BULLETS)
     if kind == "skills" and (bullets or not skills):
-        raise ValueError("skills: a skills tile needs its skills, one per line, and no bullets")
+        raise ValueError("skills: a skills entry needs its skills, one per line, and no bullets")
     if kind != "skills" and skills:
-        raise ValueError("skills: only a skills tile has a skills list (change its kind, or move them)")
+        raise ValueError("skills: only a skills entry has a skills list (change its kind, or move them)")
     return Tile(tile_id, kind, _box(row, "section"), facts | ({"skills": skills} if skills else {}), tuple(bullets))
 
 

@@ -1,4 +1,7 @@
-"""Phase 4 pages, kept apart from main.py: the questionnaire, the tiles and Ready to Apply."""
+"""Phase 4 pages, kept apart from main.py: the questionnaire, the tiles and Ready to Apply.
+
+Users see the tiles as the "Resume Profile" page (/resume-profile, template tiles.html) and a tile as an "entry"
+(see app/documents/tiles.py); only the code keeps the word "tile"."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -27,7 +30,8 @@ CHOICES = {  # the questionnaire's drop-down choices
 RESUME_CHANGED = "Your resume changed while this page was open: reload the page (nothing was confirmed)."
 
 
-TILES_FIRST = "Confirm your tiles first: the Writer works from your confirmed tiles."
+TILES_FIRST = "Confirm your resume profile first: the Writer works from its confirmed entries."
+PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
 
 
@@ -59,18 +63,18 @@ def add_routes(
             headers={"Content-Disposition": 'attachment; filename="questionnaire.yaml"', "Cache-Control": "no-store"},
         )  # fmt: skip
 
-    @app.get("/tiles")
+    @app.get(PROFILE)
     async def tiles_page(request: Request) -> Response:
         view = _tiles_view(request.app.state.conn, data_dir)
         notice = {
-            "confirmed": "Tiles confirmed.", "unchanged": "Nothing changed, so nothing was saved.",
+            "confirmed": "Resume profile confirmed.", "unchanged": "Nothing changed, so nothing was saved.",
             "built": "Master PDF built.",
         }  # fmt: skip
         return page(
             request, "tiles.html", **view, notice=next((notice[n] for n in notice if n in request.query_params), None)
         )
 
-    @app.post("/tiles")
+    @app.post(PROFILE)
     async def confirm_tiles(request: Request) -> Response:
         form, conn = request.state.form, request.app.state.conn
         rows, view = tile_sets.typed(form), _tiles_view(conn, data_dir)
@@ -82,23 +86,24 @@ def add_routes(
             return page(
                 request, "tiles.html", **view | {"rows": rows, "resume": form.get("resume")}, problem=str(error)
             )
-        return RedirectResponse(f"/tiles?{'confirmed' if set_id else 'unchanged'}=1", 303)  # reloading never confirms
+        done = "confirmed" if set_id else "unchanged"
+        return RedirectResponse(f"{PROFILE}?{done}=1", 303)  # so reloading the page never confirms again
 
-    @app.post("/tiles/pdf")
+    @app.post(f"{PROFILE}/pdf")
     async def build_master(request: Request) -> Response:
         """The master PDF: your confirmed tiles in your original wording, with the Questionnaire's contact header."""
         conn = request.app.state.conn
         view, contact = _tiles_view(conn, data_dir), questionnaire.load(conn)[0]["contact"]
         try:
             if not view.get("current"):
-                raise pdf.PdfError("Confirm your tiles first: the master PDF is made from your confirmed tiles.")
+                raise pdf.PdfError("Confirm your resume profile first: the master PDF is made from its entries.")
             if not contact.get("full_name"):
                 raise pdf.PdfError(pdf.NO_NAME)
             source = latex.resume(contact, view["confirmed"].tiles)
             await run_in_threadpool(pdf.build_master, data_dir, view["confirmed"].set_id, source)  # up to minutes
         except pdf.PdfError as error:
             return page(request, "tiles.html", **view, problem=str(error))
-        return RedirectResponse("/tiles?built=1", 303)
+        return RedirectResponse(f"{PROFILE}?built=1", 303)
 
     @app.get("/documents/master/resume-v{set_id:int}.pdf")
     async def master_pdf(set_id: int) -> Response:

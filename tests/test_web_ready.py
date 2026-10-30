@@ -46,7 +46,7 @@ def test_only_open_ready_jobs_from_the_current_resume_are_listed(client, jobs):
     assert ">Fresh</a>" in text and ">Anyway</a>" in text and "Strong RL match." in text and "2 jobs ready." in text
     for name in ("Older", "Low", "Gone", "Skipped"):
         assert f">{name}</a>" not in text
-    assert "confirm your tiles first" in text
+    assert "confirm your resume profile first" in text
 
 
 def test_prepare_needs_confirmed_tiles_from_the_current_resume(client, conn, jobs):
@@ -54,7 +54,7 @@ def test_prepare_needs_confirmed_tiles_from_the_current_resume(client, conn, job
     confirm_tiles(conn, "resume-before")  # tiles from an older resume don't count
     assert press(client, jobs["Fresh"]).headers["location"] == "/ready?problem=tiles"
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Fresh"]) == (None,)
-    assert "Confirm your tiles first" in client.get("/ready?problem=tiles").text
+    assert "Confirm your resume profile first" in client.get("/ready?problem=tiles").text
 
 
 def test_prepare_queues_a_ready_job_once(client, conn, jobs):
@@ -82,7 +82,7 @@ def test_skip_hides_the_job_and_undo_brings_it_back(client, conn, jobs):
 
 
 def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
-    assert "confirm your tiles first" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
+    assert "confirm your resume profile first" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
     assert "Not ready" in client.get(f"/jobs/{jobs['Older']}/preparation").text
     confirm_tiles(conn)
     assert 'action="/ready/' in client.get(f"/jobs/{jobs['Fresh']}/preparation").text

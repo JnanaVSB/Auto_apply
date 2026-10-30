@@ -5,7 +5,7 @@
   {% elif not ready %}
   <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
   {% elif not tiles_ok %}
-  <p class="error">Prepare needs your confirmed tiles: <a href="/tiles">confirm your tiles first</a>.</p>
+  <p class="error">Prepare needs your confirmed entries: <a href="/resume-profile">confirm your resume profile first</a>.</p>
   {% else %}
   <form method="post" action="/ready/{{ job_id }}/prepare" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">

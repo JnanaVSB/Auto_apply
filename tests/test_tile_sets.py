@@ -11,7 +11,7 @@ TILES = read_tiles(RESUME_CLS).tiles
 
 
 def form_of(tiles, **changes):
-    """The Tiles page's form for these tiles, with some boxes changed (e.g. tile_2_name="...")."""
+    """The Resume Profile page's form for these tiles, with some boxes changed (e.g. tile_2_name="...")."""
     form = {
         f"tile.{number}.{name}": value
         for number, tile in enumerate(tiles)
@@ -42,18 +42,18 @@ def test_edits_reorder_leave_out_and_add_a_tile():
 @pytest.mark.parametrize(
     ("changes", "problem"),
     [
-        ({"tile_1_name": ""}, "Tile 2, name: is empty"),
-        ({"tile_1_kind": "hobby"}, "Tile 2, kind: choose one from the list"),
-        ({"tile_1_right": "May\x002027"}, "Tile 2, right: contains an invisible (control) character"),
-        ({"tile_1_rest": "x" * 301}, "Tile 2, rest: is longer than 300 characters"),
-        ({"tile_7_bullets": "\n".join(["Bullet."] * 41)}, "Tile 8, bullets: at most 40 lines"),
-        ({"tile_7_link": "javascript:alert(1)"}, "Tile 8, link: must start with http:// or https://"),
-        ({"tile_3_skills": ""}, "Tile 4, skills: a skills tile needs its skills"),
-        ({"tile_7_skills": "Python"}, "Tile 8, skills: only a skills tile has a skills list"),
-        ({"tile_7_id": "../../etc"}, "Tile 8, its id is damaged"),
-        ({"tile_7_id": TILES[6].tile_id}, "two tiles have the same id"),
-        ({"tile_7_position": "first"}, "Tile 8, position: must be a whole number"),
-        ({f"tile_{n}_drop": "1" for n in range(8)}, "there are no tiles to confirm"),
+        ({"tile_1_name": ""}, "Entry 2, name: is empty"),
+        ({"tile_1_kind": "hobby"}, "Entry 2, kind: choose one from the list"),
+        ({"tile_1_right": "May\x002027"}, "Entry 2, right: contains an invisible (control) character"),
+        ({"tile_1_rest": "x" * 301}, "Entry 2, rest: is longer than 300 characters"),
+        ({"tile_7_bullets": "\n".join(["Bullet."] * 41)}, "Entry 8, bullets: at most 40 lines"),
+        ({"tile_7_link": "javascript:alert(1)"}, "Entry 8, link: must start with http:// or https://"),
+        ({"tile_3_skills": ""}, "Entry 4, skills: a skills entry needs its skills"),
+        ({"tile_7_skills": "Python"}, "Entry 8, skills: only a skills entry has a skills list"),
+        ({"tile_7_id": "../../etc"}, "Entry 8, its id is damaged"),
+        ({"tile_7_id": TILES[6].tile_id}, "two entries have the same id"),
+        ({"tile_7_position": "first"}, "Entry 8, position: must be a whole number"),
+        ({f"tile_{n}_drop": "1" for n in range(8)}, "there are no entries to confirm"),
     ],
 )
 def test_broken_boxes_name_the_tile_and_box_never_the_text(changes, problem):
@@ -67,7 +67,7 @@ def test_more_than_35_tiles_are_refused():
     many = form_of(TILES) | {
         f"tile.{n}.{box}": value for n in range(8, 40) for box, value in (("name", f"Extra {n}"), ("kind", "other"))
     }
-    with pytest.raises(TilesError, match="at most 35 tiles can be confirmed"):
+    with pytest.raises(TilesError, match="at most 35 entries can be confirmed"):
         tile_sets.check(tile_sets.typed(many))
 
 

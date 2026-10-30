@@ -4,8 +4,8 @@
 <h1>Ready to Apply</h1>
 <p class="hint">Open jobs scored at or above your ready threshold by your current model with your current resume, and the ones you marked "Prepare anyway"; newest first. Nothing is ever submitted from here.
   <a href="{{ view.address(page=1) }}">Filter or sort these on the Jobs page</a>.</p>
-{% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm your tiles") %} <a href="/tiles">Open the Tiles page</a>{% endif %}</p>{% endif %}
-{% if not tiles_ok %}<p class="error">Prepare needs your confirmed tiles: <a href="/tiles">confirm your tiles first</a>.</p>{% endif %}
+{% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm your resume profile") %} <a href="/resume-profile">Open the Resume Profile</a>{% endif %}</p>{% endif %}
+{% if not tiles_ok %}<p class="error">Prepare needs your confirmed entries: <a href="/resume-profile">confirm your resume profile first</a>.</p>{% endif %}
 {% if skipped %}
 <form method="post" action="/ready/{{ skipped }}/skip" class="result">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">

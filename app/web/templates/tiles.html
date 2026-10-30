@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Tiles{% endblock %}
+{# The "Resume Profile" page. In the code an entry is a "tile" (app/documents/tiles.py, tile_sets.py, web/prepare.py). #}
+{% block title %}Resume Profile{% endblock %}
 {% macro box(row, number, name, label, length=300) %}
 <label>{{ label }} <input name="tile.{{ number }}.{{ name }}" maxlength="{{ length }}" value="{{ row.get(name, '') }}"></label>
 {% endmacro %}
@@ -8,9 +9,10 @@
 {% endmacro %}
 {% macro tile_text(tile) %}{{ tile.facts.get("name", "") }}{% for name in ["rest", "right", "second", "second_right"] if tile.facts.get(name) %} · {{ tile.facts[name] }}{% endfor %}{% if tile.facts.get("skills") %}: {{ tile.facts.skills | join(", ") }}{% endif %}{% for bullet in tile.bullets %}<br>• {{ bullet }}{% endfor %}{% endmacro %}
 {% block content %}
-<h1>Tiles</h1>
-<p class="hint">Your resume cut into tiles: one per entry, with its fixed facts (the AI can never change them) and
-  its bullets. Only confirmed tiles are used. <code>resume.tex</code> is only read, never changed.</p>
+<h1>Resume Profile</h1>
+<p class="hint">Your resume as entries: one per job, project, school, skills group or publication, each with its fixed
+  facts (the AI can never change them) and its bullets. Only confirmed entries are used. <code>resume.tex</code> is
+  only read, never changed.</p>
 {% if resume_problem %}
 <p class="error" role="alert">{{ resume_problem }}</p>
 {% else %}
@@ -19,7 +21,7 @@
 <p><strong>
   {% if current %}Confirmed on {{ confirmed.confirmed_on }} (UTC).
   {% elif confirmed %}Your resume changed since you confirmed on {{ confirmed.confirmed_on }} (UTC): check and confirm again.
-  {% else %}Not confirmed yet: check the tiles below, then press Confirm tiles.{% endif %}
+  {% else %}Not confirmed yet: check the entries below, then press Confirm profile.{% endif %}
 </strong></p>
 {% if contact_empty %}
 <p class="error">The PDF's header comes from your Questionnaire: fill in its <a href="/questionnaire">Contact section</a>.</p>
@@ -30,7 +32,7 @@
 {% if reading_problem %}<p class="error">{{ reading_problem }}</p>{% endif %}
 {% if current %}
 <h2>Master PDF</h2>
-<p class="hint">All your confirmed tiles in your original wording, built on this computer. The first build downloads
+<p class="hint">All your confirmed entries in your original wording, built on this computer. The first build downloads
   Tectonic's LaTeX files once (about 40 MB, under a minute).</p>
 {% if pdf %}
 <p><a href="/documents/master/resume-v{{ confirmed.set_id }}.pdf" target="_blank" rel="noopener">View master PDF</a>
@@ -39,7 +41,7 @@
 {% if pdf.missing %}<p class="error">These characters can't be shown by the font and were left out:
   {{ pdf.missing | join(" ") }}</p>{% endif %}
 {% endif %}
-<form method="post" action="/tiles/pdf">
+<form method="post" action="/resume-profile/pdf">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <button type="submit">{% if pdf %}Build it again{% else %}Build master PDF{% endif %}</button>
 </form>
@@ -47,10 +49,10 @@
 
 {% if changes %}
 <h2>What changed since you confirmed</h2>
-<p class="hint">Redo any correction you made before; your earlier tiles are kept either way.</p>
+<p class="hint">Redo any correction you made before; your earlier entries are kept either way.</p>
 <ul class="changes">
   {% for change, old, new in changes %}
-  <li>{% if change == "new" %}<span class="mark">new tile</span> {{ tile_text(new) }}
+  <li>{% if change == "new" %}<span class="mark">new entry</span> {{ tile_text(new) }}
     {% elif change == "gone" %}<span class="mark warn">no longer in your resume</span> {{ tile_text(old) }}
     {% else %}<span class="mark">changed</span> before: {{ tile_text(old) }}<br>now: {{ tile_text(new) }}{% endif %}</li>
   {% endfor %}
@@ -59,17 +61,20 @@
 
 {% if unplaced %}
 <h2>Unplaced text</h2>
-<p class="hint">Text the app couldn't put in a tile. Copy anything that belongs into a tile's boxes.</p>
+<p class="hint">Text the app couldn't put in an entry. Copy anything that belongs into an entry's boxes.</p>
 {% for section, text in unplaced %}<p class="lines">{% if section %}<strong>{{ section }}:</strong> {% endif %}{{ text }}</p>{% endfor %}
 {% endif %}
 
-<form method="post" action="/tiles" class="stacked" data-unsaved>
+<p><a class="button" href="#new-entry">Add an entry</a></p>
+<form method="post" action="/resume-profile" class="stacked" data-unsaved>
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <input type="hidden" name="resume" value="{{ resume }}">
   {% for row in rows + [{}] %}
   {% set number = loop.index0 %}
-  <fieldset class="tile">
-    <legend>{% if row %}Tile {{ loop.index }}{% else %}New tile (fill in to add one){% endif %}</legend>
+  <fieldset class="tile"{% if not row %} id="new-entry"{% endif %}>
+    <legend>{% if row %}Entry {{ loop.index }}{% else %}Add a new entry{% endif %}</legend>
+    {% if not row %}<p class="hint">Fill in at least a name and choose its kind (experience, project…). Press Confirm
+      profile to save it; a fresh empty box is then here for the next one.</p>{% endif %}
     <input type="hidden" name="tile.{{ number }}.id" value="{{ row.get('id', '') }}">
     <div class="list-row">
       <label>Kind
@@ -88,13 +93,13 @@
       {{ box(row, number, "second", "Second line") }}
       {{ box(row, number, "second_right", "Second line's right side") }}
       {{ box(row, number, "link", "Link (https://...)") }}
-      {{ lines(row, number, "skills", "Skills, one per line (skills tiles only)") }}
+      {{ lines(row, number, "skills", "Skills, one per line (skills entries only)") }}
     </details>
     {{ lines(row, number, "bullets", "Bullets, one per line", 6) }}
-    {% if row %}<label class="tick"><input name="tile.{{ number }}.drop" type="checkbox" value="1"{% if row.get('drop') %} checked{% endif %}> Leave this tile out</label>{% endif %}
+    {% if row %}<label class="tick"><input name="tile.{{ number }}.drop" type="checkbox" value="1"{% if row.get('drop') %} checked{% endif %}> Leave this entry out</label>{% endif %}
   </fieldset>
   {% endfor %}
-  <p><button type="submit" class="primary">Confirm tiles</button></p>
+  <p><a class="button" href="#new-entry">Add an entry</a> <button type="submit" class="primary">Confirm profile</button></p>
 </form>
 <script src="/static/unsaved.js" defer></script>
 {% endif %}

@@ -1,6 +1,9 @@
 """Your resume cut into tiles, one per entry (a job, project, school, publication, skills group...), read from
 resume.tex on this computer only. The header with your name and contact details is never a tile, and text the
-reader can't place is handed back as "unplaced", never dropped. Nothing is compiled: LaTeX is only read."""
+reader can't place is handed back as "unplaced", never dropped. Nothing is compiled: LaTeX is only read.
+
+Users never see the word "tile": the dashboard calls this the Resume Profile, and a tile an entry (see
+app/documents/tile_sets.py, app/web/prepare.py and app/web/templates/tiles.html). Code, files and tables keep "tile"."""
 
 import hashlib
 import re
@@ -42,7 +45,7 @@ SKILL_ROW = re.compile(r"\\\\|\\item(?![A-Za-z@])|\n[ \t]*\n")
 COMMA = re.compile(r",(?![^()]*\))")  # a comma that isn't inside brackets, as in "C++ (17, 20)"
 HREF = re.compile(r"\\href\s*\{([^{}]*)\}")
 SCRIPT = re.compile(r"\\text(?:super|sub)script(?![A-Za-z@])")  # PI\textsuperscript{2} reads as PI2, not PI 2
-NO_SECTIONS = "The app couldn't find sections in your resume; check the Tiles page."
+NO_SECTIONS = "The app couldn't find sections in your resume; check the Resume Profile page."
 
 
 @dataclass(frozen=True)
