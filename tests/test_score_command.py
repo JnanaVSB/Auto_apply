@@ -24,7 +24,9 @@ def ready(data_dir, monkeypatch, tmp_path):
     monkeypatch.setattr(files, "ensure_files", lambda fetcher, out=print, folder=None: tmp_path)
     monkeypatch.setattr(score.Meaning, "load", lambda folder: FakeMeaning())
     monkeypatch.setattr(score.stage_a, "skill_names", lambda folder, extra: ["PyTorch"])
-    monkeypatch.setattr(score.ollama, "answer", lambda *args: '{"score": 80, "reasons": ["Robots."]}')
+    monkeypatch.setattr(
+        score.ollama, "answer", lambda *args: llm.Reply('{"score": 80, "reasons": ["Robots."]}', llm.Usage())
+    )
     monkeypatch.setattr(queue, "today", lambda: "2026-10-28")
     with closing(score.db.connect(data_dir)) as conn, conn:
         add_job(conn, "RL Robot Engineer", description="Robots.", date_posted="2026-10-27")  # passes the quick check

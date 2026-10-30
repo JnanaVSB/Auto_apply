@@ -1,5 +1,6 @@
 """Load and validate the user's private settings from data/config.yaml."""
 
+import ipaddress
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -14,6 +15,22 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 DEFAULT_ADDRESSES = {"ollama": "http://127.0.0.1:11434", "anthropic": "https://api.anthropic.com"}
+OPENAI_HOST = "api.openai.com"  # OpenAI's own address; any other openai-compatible address is your own
+# Your own address may use plain http only on these private networks, written as numbers: a name could quietly start
+# pointing elsewhere. This computer, home and office networks, Tailscale, and IPv6 private networks.
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",
+        "::1/128",
+        "fc00::/7",
+    )
+)
+Price = Annotated[float, Field(ge=0, le=1000)]  # dollars per 1M tokens
 
 
 class ConfigError(Exception):
@@ -76,7 +93,7 @@ class ScoringSettings(BaseModel):
 
 
 class AIRole(BaseModel):
-    """One role's AI model (the Evaluator now; the Writer and the council later). Never holds a key itself."""
+    """One role's AI model (the Evaluator, the Writer, later the council). Never holds a key itself."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -86,6 +103,9 @@ class AIRole(BaseModel):
     key_name: Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")] | None = None  # the key's name in the keychain
     thinking: Literal["off", "low", "medium", "high"] = "off"
     context: Annotated[int, Field(ge=2048, le=262144, strict=True)] = 16384  # Ollama's working size, in word-pieces
+    # Your own address's prices, if you know them; Anthropic and OpenAI use the price list shipped with the app
+    price_input: Price | None = None
+    price_output: Price | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -103,17 +123,36 @@ class AIRole(BaseModel):
                     "Ollama must run on this computer (address http://127.0.0.1:11434): it has no password, so it "
                     "must never be reachable from elsewhere"
                 )
-        elif parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
-            raise ValueError("a cloud service's address must start with https:// and hold no name or password")
-        elif self.key_name is None:
+            return self
+        own = self.service == "openai-compatible" and parts.hostname != OPENAI_HOST  # your own address
+        plain = own and parts.scheme == "http" and _private(parts.hostname)
+        if not (parts.scheme == "https" or plain) or not parts.hostname or parts.username or parts.password:
+            raise ValueError(
+                "a cloud service's address must start with https:// (your own address may use http:// on a private "
+                "network, written as numbers, such as http://192.168.1.5:8000) and hold no name or password"
+            )
+        if self.key_name is None and not own:  # your own server may need no key
             raise ValueError("a cloud service needs key_name: the name its key is saved under in the keychain")
+        if (self.price_input is None) != (self.price_output is None):
+            raise ValueError("give both prices (price_input and price_output), or neither")
+        if self.price_input is not None and not own:
+            raise ValueError("prices can be given only for your own address: the app knows Anthropic's and OpenAI's")
         return self
+
+
+def _private(host: str | None) -> bool:
+    try:
+        address = ipaddress.ip_address(host or "")
+    except ValueError:  # a name, not a number
+        return False
+    return any(address in network for network in PRIVATE_NETWORKS)
 
 
 class AISettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     evaluator: AIRole = AIRole(model="gemma4:26b-a4b-it-q8_0")  # scores jobs (Stage B)
+    writer: AIRole | None = None  # tailors resumes and writes cover letters; none until you choose one in Settings
 
 
 class DocumentSettings(BaseModel):

@@ -151,6 +151,30 @@ AI_ROLE = "data_dir: data\nai:\n  evaluator:\n"
         ("    service: anthropic\n    model: m\n    address: http://api.anthropic.com\n    key_name: k\n", "https://"),
         ("    service: anthropic\n    model: m\n", "needs key_name"),
         ("    service: openai-compatible\n    model: m\n    key_name: k\n", "https://"),  # no default address
+        # plain http only for your own address, on a private network written as numbers
+        ("    service: openai-compatible\n    model: m\n    address: http://8.8.8.8:8000/v1\n", "https://"),
+        ("    service: openai-compatible\n    model: m\n    address: http://myserver.local/v1\n", "https://"),
+        ("    service: openai-compatible\n    model: m\n    address: http://172.32.0.1/v1\n", "https://"),
+        (
+            "    service: openai-compatible\n    model: m\n    address: http://api.openai.com/v1\n    key_name: k\n",
+            "https://",
+        ),
+        ("    service: anthropic\n    model: m\n    address: http://192.168.1.5\n    key_name: k\n", "https://"),
+        ("    service: openai-compatible\n    model: m\n    address: https://u:p@example.org/v1\n", "no name or"),
+        ("    service: openai-compatible\n    model: m\n    address: https://api.openai.com/v1\n", "needs key_name"),
+        (
+            "    service: openai-compatible\n    model: m\n    address: https://example.org/v1\n    price_input: 1\n",
+            "give both prices",
+        ),
+        (
+            "    service: anthropic\n    model: m\n    key_name: k\n    price_input: 1\n    price_output: 2\n",
+            "only for your own address",
+        ),
+        (
+            "    service: openai-compatible\n    model: m\n    address: https://example.org/v1\n    price_input: -1\n"
+            "    price_output: 2\n",
+            "greater than or equal to 0",
+        ),
         ("    model: rm -rf /\n", "String should match pattern"),
         ("    model: m\n    thinking: off\n", "thinking: Input should be 'off'"),  # YAML reads a bare off as false
     ],
@@ -161,12 +185,26 @@ def test_ai_role_settings_are_checked(tmp_path, role, problem):
 
 
 def test_ai_roles_have_safe_defaults(tmp_path):
-    role = load_config(write(tmp_path, "data_dir: data\n")).ai.evaluator
+    ai = load_config(write(tmp_path, "data_dir: data\n")).ai
+    role = ai.evaluator
     assert (role.service, role.model, role.address, role.thinking) == (
         "ollama", "gemma4:26b-a4b-it-q8_0", "http://127.0.0.1:11434", "off"
     )  # fmt: skip
+    assert ai.writer is None  # no Writer until you choose one
     claude = load_config(write(tmp_path, AI_ROLE + "    service: anthropic\n    model: m\n    key_name: k\n"))
     assert claude.ai.evaluator.address == "https://api.anthropic.com"
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["http://192.168.1.5:8000/v1", "http://10.0.0.7/v1", "http://172.16.4.2/v1", "http://127.0.0.1:8080/v1",
+     "http://100.101.102.103:8000/v1", "http://[fd12:3456::1]:8000/v1", "http://[::1]:8000/v1",
+     "https://models.example.org/v1"],
+)  # fmt: skip
+def test_your_own_address_may_use_http_on_a_private_network_and_needs_no_key(tmp_path, address):
+    own = f"data_dir: data\nai:\n  writer:\n    service: openai-compatible\n    model: m\n    address: {address}\n"
+    role = load_config(write(tmp_path, own + "    price_input: 0.5\n    price_output: 1.5\n")).ai.writer
+    assert (role.address, role.key_name, role.price_input, role.price_output) == (address, None, 0.5, 1.5)
 
 
 @pytest.mark.parametrize(

@@ -5,11 +5,11 @@ import re
 import httpx
 
 from app.config import AIRole
-from app.llm import StopScoring, TooLong
+from app.llm import LLMError, Reply, StopScoring, TooLong, Usage, tokens
 
 KEEP_LOADED = "10m"  # the model stays in memory between jobs for this long
-ANSWER_LIMIT = 1024  # word-pieces; with thinking on, the model needs more room
-THINKING_ANSWER_LIMIT = 4096
+ANSWER_LIMIT = 1024  # word-pieces, unless the request asks for more
+THINKING_ROOM = 3072  # with thinking on, the model needs this much more room
 OUT_OF_MEMORY = ("out of memory", "cudamalloc", "cuda error")
 TOO_LONG = ("exceed_context_size", "exceeds the available context size")  # its refusal while told not to cut
 DETAIL = 200  # characters of Ollama's own error text shown; it names the cause and never holds the texts sent
@@ -19,7 +19,13 @@ MIN_VERSION = (0, 32, 15)  # tested to refuse a too-long prompt when told not to
 VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 
-def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool) -> str:
+def most_output(role: AIRole, limit: int | None) -> int:
+    return (limit or ANSWER_LIMIT) + (0 if role.thinking == "off" else THINKING_ROOM)
+
+
+def answer(
+    client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool, limit: int | None
+) -> Reply:
     body = {
         "model": role.model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -32,7 +38,7 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
             "num_ctx": role.context,
             "temperature": 0.3 if retry else 0,
             "seed": 2 if retry else 1,
-            "num_predict": ANSWER_LIMIT if role.thinking == "off" else THINKING_ANSWER_LIMIT,
+            "num_predict": most_output(role, limit),
         },
     }
     reply = client.post(f"{role.address}/api/chat", json=body)
@@ -56,12 +62,16 @@ def answer(client: httpx.Client, role: AIRole, key: None, system: str, user: str
             "check the AI model settings."
         )
     try:
-        content = reply.json()["message"]["content"]
+        data = reply.json()
+        content = data["message"]["content"]
     except (ValueError, TypeError, KeyError):
         content = None
     if not isinstance(content, str):
         raise StopScoring(UNEXPECTED)
-    return content
+    usage = Usage(tokens(data, "prompt_eval_count"), 0, tokens(data, "eval_count"))
+    if data.get("done_reason") == "length":
+        raise LLMError("the answer was cut off at its length limit", usage)
+    return Reply(content, usage)
 
 
 def _get(role: AIRole, path: str, transport: httpx.BaseTransport | None) -> httpx.Response:

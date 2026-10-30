@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from helpers import ADDRESS, MASTER_PASSWORD, PASSWORD, Clock, FakeWeb
 from keyring.backend import KeyringBackend
+from keyring.errors import PasswordDeleteError
 
 from app import db, fetch, keychain
 from app.fetch import Fetcher
@@ -30,6 +31,10 @@ class MemoryKeychain(KeyringBackend):
 
     def set_password(self, service: str, username: str, password: str) -> None:
         self.store[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        if self.store.pop((service, username), None) is None:
+            raise PasswordDeleteError("not saved")
 
 
 class FakeTime:

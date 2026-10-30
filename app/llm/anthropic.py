@@ -8,17 +8,24 @@ shape is given as a JSON schema in output_config.
 import httpx
 
 from app.config import AIRole
-from app.llm import LLMError, TooLong, refused
+from app.llm import LLMError, Reply, TooLong, Usage, answer_data, refused, tokens
 
 API_VERSION = "2026-10-21"
-ANSWER_LIMIT = 16000  # word-pieces, including thinking
+ANSWER_LIMIT = 8000  # word-pieces, unless the request asks for more
+THINKING_ROOM = 8000  # these models always think
 EFFORT = {"off": "low", "low": "low", "medium": "medium", "high": "high"}
 
 
-def answer(client: httpx.Client, role: AIRole, key: str, system: str, user: str, schema: dict, retry: bool) -> str:
+def most_output(role: AIRole, limit: int | None) -> int:
+    return (limit or ANSWER_LIMIT) + THINKING_ROOM
+
+
+def answer(
+    client: httpx.Client, role: AIRole, key: str, system: str, user: str, schema: dict, retry: bool, limit: int | None
+) -> Reply:
     body = {
         "model": role.model,
-        "max_tokens": ANSWER_LIMIT,
+        "max_tokens": most_output(role, limit),
         "system": system,
         "messages": [{"role": "user", "content": user}],
         "output_config": {"format": {"type": "json_schema", "schema": schema}, "effort": EFFORT[role.thinking]},
@@ -29,9 +36,16 @@ def answer(client: httpx.Client, role: AIRole, key: str, system: str, user: str,
         raise TooLong("the texts are longer than the model can read at once")
     if reply.status_code != 200:
         raise refused("Anthropic", reply.status_code, role.model)
-    data = reply.json()
+    data = answer_data(reply)
+    usage = Usage(  # the app never asks to store texts in the cache, so cache writes are rare: counted as input
+        tokens(data, "usage", "input_tokens") + tokens(data, "usage", "cache_creation_input_tokens"),
+        tokens(data, "usage", "cache_read_input_tokens"),
+        tokens(data, "usage", "output_tokens"),
+    )
     if data.get("stop_reason") == "refusal":
-        raise LLMError("the model declined to answer")
+        raise LLMError("the model declined to answer", usage)
     if data.get("stop_reason") == "max_tokens":
-        raise LLMError("the answer was cut off at its length limit")
-    return "".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
+        raise LLMError("the answer was cut off at its length limit", usage)
+    blocks = data["content"] if isinstance(data.get("content"), list) else []
+    texts = [block.get("text") for block in blocks if isinstance(block, dict) and block.get("type") == "text"]
+    return Reply("".join(text for text in texts if isinstance(text, str)), usage)

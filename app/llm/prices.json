@@ -1,0 +1,20 @@
+{
+  "checked": "2026-10-30",
+  "columns": "dollars per 1M tokens: input, cached input, output; long: over this many input tokens (cached ones too)",
+  "models": {
+    "claude-opus-5-5": {"service": "anthropic", "name": "Claude Opus 5.5", "normal": [4, 0.2, 20], "half": [2, 0.1, 10]},
+    "claude-sonnet-5-5": {"service": "anthropic", "name": "Claude Sonnet 5.5", "normal": [2, 0.1, 10], "half": [1, 0.05, 5]},
+    "claude-haiku-5-5": {
+      "service": "anthropic", "name": "Claude Haiku 5.5", "normal": [0.1, 0.01, 0.5], "half": [0.05, 0.005, 0.25],
+      "long_over": 100000, "long_normal": [0.5, 0.05, 2.5], "long_half": [0.25, 0.025, 1.25]
+    },
+    "gpt-6.1-sol": {
+      "service": "openai", "name": "GPT-6.1 Sol", "normal": [2, 0.1, 10], "half": [1, 0.05, 5],
+      "long_over": 272000, "long_normal": [4, 0.2, 15], "long_half": [2, 0.1, 7.5]
+    },
+    "gpt-6.1-terra": {
+      "service": "openai", "name": "GPT-6.1 Terra", "normal": [1, 0.05, 5], "half": [0.5, 0.025, 2.5],
+      "long_over": 272000, "long_normal": [2, 0.1, 7.5], "long_half": [1, 0.05, 3.75]
+    }
+  }
+}

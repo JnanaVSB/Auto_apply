@@ -1,7 +1,7 @@
 """Store and read the user's secrets in the OS keychain, never in files."""
 
 import keyring
-from keyring.errors import KeyringError
+from keyring.errors import KeyringError, PasswordDeleteError
 
 SERVICE = "auto_apply"
 # Only the real OS keychains; anything else (plain files, "null", unknown add-ons) is refused.
@@ -41,3 +41,14 @@ def get_secret(name: str) -> str | None:
         return backend.get_password(SERVICE, name)
     except KeyringError as error:
         raise KeychainError(f"Could not read '{name}' from the OS keychain ({type(error).__name__}).") from None
+
+
+def delete_secret(name: str) -> None:
+    """Remove a secret; one that isn't saved is fine."""
+    backend = _keychain()
+    try:
+        backend.delete_password(SERVICE, name)
+    except PasswordDeleteError:
+        return
+    except KeyringError as error:
+        raise KeychainError(f"Could not remove '{name}' from the OS keychain ({type(error).__name__}).") from None

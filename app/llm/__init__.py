@@ -1,9 +1,12 @@
 """The one AI connector: ask a model for a JSON answer of a given shape, through Ollama on this computer, an
 OpenAI-compatible service or the Anthropic API, as one role's settings say. Keys come only from the keychain.
 
-Errors name the cause and the fix; they never include a key, the texts sent or the answer.
+Errors name the cause and the fix; they never include a key, the texts sent or the answer. Every answer comes with
+the tokens the service counted, so its cost can be worked out (app/llm/prices.py), even for a failed answer that was
+charged.
 """
 
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -14,8 +17,26 @@ from app.keychain import get_secret
 TIMEOUT_SECONDS = 120  # per answer; the first answer of the day also loads the model (about 20 s)
 
 
+class Usage(NamedTuple):
+    input: int = 0  # tokens read at the normal price
+    cached: int = 0  # tokens read from the service's cache, at its lower price
+    output: int = 0  # tokens written, thinking included
+
+
+class Reply(NamedTuple):
+    text: str  # meant to be JSON of the requested shape
+    usage: Usage
+
+
+NOTHING = Usage()  # a request the service refused, or never answered
+
+
 class LLMError(Exception):
-    """One request failed; the next one may work."""
+    """One request failed; the next one may work. `usage` is what the service still charged for it."""
+
+    def __init__(self, message: str, usage: Usage = NOTHING) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 class StopScoring(LLMError):  # noqa: N818 (an instruction, not just an error)
@@ -39,25 +60,68 @@ def ask(
     retry: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
-    """One request; returns the model's answer, meant to be JSON of the requested shape.
+    """One request with the usual limits; returns only the model's answer (see call)."""
+    return call(role, system, user, schema, retry=retry, transport=transport).text
+
+
+def call(
+    role: AIRole,
+    system: str,
+    user: str,
+    schema: dict,
+    *,
+    retry: bool = False,
+    answer_limit: int | None = None,
+    timeout: int = TIMEOUT_SECONDS,
+    transport: httpx.BaseTransport | None = None,
+) -> Reply:
+    """One request; returns the model's answer and the tokens counted for it.
 
     `retry` asks a little less strictly: the first try is fully predictable, so asking the same way again would give
-    the same answer."""
-    from app.llm import anthropic, ollama, openai_compatible  # the services import the errors above
-
-    service = {"ollama": ollama, "openai-compatible": openai_compatible, "anthropic": anthropic}[role.service]
-    key = None if role.service == "ollama" else _key(role)
-    with httpx.Client(transport=transport, timeout=TIMEOUT_SECONDS, follow_redirects=False, trust_env=False) as client:
+    the same answer. `answer_limit` is the answer's room in tokens (thinking gets its own room on top), else the
+    service's usual one; `timeout` is in seconds."""
+    service = _service(role)
+    key = None if role.service == "ollama" or role.key_name is None else _key(role)
+    with httpx.Client(transport=transport, timeout=timeout, follow_redirects=False, trust_env=False) as client:
         try:  # trust_env=False: no proxy settings or other surprises from the environment
-            return service.answer(client, role, key, system, user, schema, retry)
+            return service.answer(client, role, key, system, user, schema, retry, answer_limit)
         except httpx.TimeoutException:
-            raise TimedOut(f"no answer within {TIMEOUT_SECONDS} seconds") from None
+            raise TimedOut(f"no answer within {timeout} seconds") from None
         except httpx.TransportError:
             if role.service == "ollama":
                 raise StopScoring("Ollama isn't running: start it with `ollama serve`.") from None
             raise StopScoring(
                 f"Could not reach {urlsplit(role.address).hostname}: check your internet connection."
             ) from None
+
+
+def most_output(role: AIRole, answer_limit: int | None = None) -> int:
+    """The most tokens a request can write (its answer and thinking), for reserving its largest possible cost."""
+    return _service(role).most_output(role, answer_limit)
+
+
+def _service(role: AIRole):
+    from app.llm import anthropic, ollama, openai_compatible  # the services import the errors above
+
+    return {"ollama": ollama, "openai-compatible": openai_compatible, "anthropic": anthropic}[role.service]
+
+
+def tokens(data: object, *names: str) -> int:
+    """A token count in a service's answer, e.g. tokens(data, "usage", "output_tokens"); 0 when it isn't there."""
+    for name in names:
+        data = data.get(name) if isinstance(data, dict) else None
+    return data if type(data) is int and data > 0 else 0
+
+
+def answer_data(reply: httpx.Response) -> dict:
+    """A cloud service's answer as JSON; anything else is one failed try."""
+    try:
+        data = reply.json()
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise LLMError("the service did not answer as expected")
+    return data
 
 
 def _key(role: AIRole) -> str:

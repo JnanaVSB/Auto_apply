@@ -2,7 +2,7 @@ import keyring
 import pytest
 from keyring.errors import KeyringLocked
 
-from app.keychain import SAFE_BACKENDS, SERVICE, KeychainError, get_secret, set_secret
+from app.keychain import SAFE_BACKENDS, SERVICE, KeychainError, delete_secret, get_secret, set_secret
 
 FAKE_SECRET = "fake-secret-value-123"  # noqa: S105 (fake value, tests only)
 
@@ -44,13 +44,27 @@ def test_empty_combined_keychain_is_refused(fake_keychain):
         set_secret("db_key", FAKE_SECRET)
 
 
-@pytest.mark.parametrize("method", ["set_password", "get_password"])
+def test_a_removed_secret_is_gone_and_removing_a_missing_one_is_fine(fake_keychain):
+    set_secret("anthropic", FAKE_SECRET)
+    delete_secret("anthropic")
+    assert get_secret("anthropic") is None and fake_keychain.store == {}
+    delete_secret("anthropic")  # not saved: nothing to do
+
+
+ACTIONS = {
+    "set_password": lambda: set_secret("db_key", FAKE_SECRET),
+    "get_password": lambda: get_secret("db_key"),
+    "delete_password": lambda: delete_secret("db_key"),
+}
+
+
+@pytest.mark.parametrize("method", ACTIONS)
 def test_keychain_failure_never_shows_secret(fake_keychain, monkeypatch, method):
     def locked(*args):
         raise KeyringLocked(f"locked while handling {FAKE_SECRET}")
 
     monkeypatch.setattr(fake_keychain, method, locked)
     with pytest.raises(KeychainError) as error:
-        set_secret("db_key", FAKE_SECRET) if method == "set_password" else get_secret("db_key")
+        ACTIONS[method]()
     assert FAKE_SECRET not in str(error.value)
     assert error.value.__suppress_context__  # the original error, which may hold the secret, is not shown
