@@ -68,6 +68,9 @@ ANSWER_LIMIT, TIMEOUT_SECONDS = 8192, 600  # owner choice I: room for a whole re
 MAX_BULLET, MAX_BULLETS, MAX_NOTES = 1000, 40, 2000  # only against a broken answer (the Resume Profile's box sizes)
 KEEP_AS_WRITTEN = {"publication"}  # chosen or left out only; so is any entry without bullets
 ALWAYS = {"education", "summary"}  # on every version (owner choice): put back as written if the Writer leaves one out
+SKILLS_HINT = 'Skills (choose and reorder only; in your answer "bullets": [] and "skills" from this list):'
+AS_WRITTEN_HINT = 'Keep as written (choose or leave out this entry; in your answer "bullets": [] and "skills": []):'
+BULLETS_HINT = 'Bullets (in your answer "skills": []):'
 FACT_LABELS = {
     "name": "name", "rest": "details", "right": "right side", "second": "second line",
     "second_right": "second line's right side", "link": "link",
@@ -120,15 +123,8 @@ def request(
 ) -> tuple[str, str]:  # fmt: skip
     """The Writer's instructions and its data; for a revision also its previous version (a draft) and your request.
     Raises PrivacyStop naming the kind of item and the entry it is in (or your feedback)."""
-    blocks = []
-    for entry in entries:
-        try:
-            blocks.append(shield.outgoing(_block(entry)))
-        except PrivacyStop as stop:
-            raise PrivacyStop(f"{stop} in entry '{entry.tile.facts.get('name') or entry.label}'") from None
-    ad = shield.hide(f"Title: {title}\nCompany: {company}\nLocation: {location}\n\n{description}")
     instructions = f"{SKILL_FILE.read_text(encoding='utf-8').strip()}\n\n{RULES}"
-    user = f"<job>\n{ad.translate(LOOK_ALIKES)}\n</job>\n\n<entries>\n{'\n\n'.join(blocks)}\n</entries>"
+    user = data(title, company, location, description, entries, shield)
     if previous is None:
         return instructions, user
     try:
@@ -139,6 +135,22 @@ def request(
         f"{user}\n\n<previous>\n{shield.outgoing(_previous(previous, entries))}\n</previous>\n\n"
         f"<feedback>\n{asked}\n</feedback>"
     )
+
+
+def data(
+    title: str, company: str, location: str, description: str, entries: list[Entry], shield: Shield,
+    hints: bool = True,
+) -> str:  # fmt: skip
+    """The job ad and your entries, each wrapped as data; your entries leave only through the privacy gate, one at a
+    time (PrivacyStop names the entry). `hints` say how the resume's answer treats each entry."""
+    blocks = []
+    for entry in entries:
+        try:
+            blocks.append(shield.outgoing(_block(entry, hints)))
+        except PrivacyStop as stop:
+            raise PrivacyStop(f"{stop} in entry '{entry.tile.facts.get('name') or entry.label}'") from None
+    ad = shield.hide(f"Title: {title}\nCompany: {company}\nLocation: {location}\n\n{description}")
+    return f"<job>\n{ad.translate(LOOK_ALIKES)}\n</job>\n\n<entries>\n{'\n\n'.join(blocks)}\n</entries>"
 
 
 def again(user: str, problem: str) -> str:
@@ -165,18 +177,18 @@ def _previous(draft: dict, entries: list[Entry]) -> str:
     return _harmless("\n".join(lines))
 
 
-def _block(entry: Entry) -> str:
+def _block(entry: Entry, hints: bool) -> str:
     tile = entry.tile
     facts = " | ".join(f"{label}: {tile.facts[name]}" for name, label in FACT_LABELS.items() if tile.facts.get(name))
     lines = [f"{entry.label} | {tile.kind} | section: {tile.section}", f"Fixed facts (read-only): {facts}"]
     if tile.kind == "skills":
-        lines.append('Skills (choose and reorder only; in your answer "bullets": [] and "skills" from this list):')
+        lines.append(SKILLS_HINT if hints else "Skills:")
         lines += [f"- {skill}" for skill in tile.facts.get("skills", [])]
     elif kept_as_written(tile):
-        lines.append('Keep as written (choose or leave out this entry; in your answer "bullets": [] and "skills": []):')
+        lines.append(AS_WRITTEN_HINT if hints else "Text:")
         lines += tile.bullets
     else:
-        lines.append('Bullets (in your answer "skills": []):')
+        lines.append(BULLETS_HINT if hints else "Bullets:")
         lines += [f"{number}: {bullet}" for number, bullet in enumerate(tile.bullets)]
     return _harmless("\n".join(lines))
 

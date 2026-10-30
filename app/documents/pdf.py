@@ -53,9 +53,9 @@ def master(data_dir: Path, set_id: int) -> Path:
     return data_dir / "documents" / "master" / f"resume-v{set_id}.pdf"
 
 
-def tailored(data_dir: Path, job_id: int, version: int) -> Path:
-    """A job's tailored resume, one file per version: a new version never replaces an older one."""
-    return data_dir / "documents" / str(job_id) / f"resume-v{version}.pdf"
+def tailored(data_dir: Path, job_id: int, version: int, kind: str = "resume") -> Path:
+    """A job's tailored resume (or cover letter), one file per version: a new version never replaces an older one."""
+    return data_dir / "documents" / str(job_id) / f"{kind.replace('_', '-')}-v{version}.pdf"
 
 
 def build_master(data_dir: Path, set_id: int, latex: str) -> Built:

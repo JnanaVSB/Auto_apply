@@ -346,3 +346,24 @@ def test_a_privacy_stop_in_your_words_sends_nothing(conn, data_dir, job, writer_
         == "Privacy check stopped this: a phone number in your feedback. Change that, then try again."
     )
     assert len(calls) == 1
+
+
+LETTER = json.dumps({"paragraphs": ["I want this job.", "I trained a robot arm with PPO.", "Thank you."],
+                     "from": ["E1"], "notes": "Short."})  # fmt: skip
+
+
+def test_a_cover_letter_is_its_own_kind_drawn_from_the_resumes_entries(conn, data_dir, job, writer_answers, built):
+    calls, replies = writer_answers
+    replies.extend([LETTER, GOOD, LETTER])
+    runs.prepare(conn, config(data_dir), job, kind=runs.LETTER)  # no resume yet: all your entries
+    assert "E6 | publication" in calls[0]["user"] and calls[0]["shape"] is runs.letter.SHAPE
+    runs.prepare(conn, config(data_dir), job)  # the resume: summary, lab, school
+    runs.prepare(conn, config(data_dir), job, kind=runs.LETTER)
+    assert "E3 | education" in calls[2]["user"] and "E4 |" not in calls[2]["user"]  # only what the resume chose
+    found = runs.latest(conn, job, runs.LETTER)
+    assert (found["version"], found["status"]) == (2, "done") and runs.latest(conn, job)["version"] == 1
+    assert json.loads(found["draft"])["paragraphs"][1] == "I trained a robot arm with PPO."
+    target, source = built[-1]
+    assert target == data_dir / "documents" / str(job) / "cover-letter-v2.pdf"
+    assert "Dear Hiring Manager," in source and "I trained a robot arm with PPO.\\par" in source
+    assert "Re: Robot Learning Intern, Acme" in source and "Alex Example" in source

@@ -35,18 +35,35 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) ->
     }  # fmt: skip
 
 
+def letter(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
+    """The job's cover letters for its box: the newest, its text in parts (new numbers marked), its PDF, every
+    version."""
+    latest = runs.latest(conn, job_id, runs.LETTER)
+    done = latest is not None and latest["status"] == "done"
+    marked = {flag["paragraph"]: set(flag["numbers"]) for flag in json.loads(latest["flags"])} if done else {}
+    paragraphs = json.loads(latest["draft"])["paragraphs"] if done else []
+    return {
+        "latest": latest, "versions": runs.versions(conn, job_id, runs.LETTER),
+        "paragraphs": [_parts(text, marked.get(number, set())) for number, text in enumerate(paragraphs)],
+        "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"], runs.LETTER)) if done else None,
+    }  # fmt: skip
+
+
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) -> None:
     @app.get("/documents/{job_id:int}/resume-v{version:int}.pdf")
     async def tailored_pdf(job_id: int, version: int) -> Response:
-        path = pdf.tailored(data_dir, job_id, version)  # whole numbers only: never a path from the address bar
-        if not path.is_file():
-            raise HTTPException(404)
-        return FileResponse(path, media_type="application/pdf", filename=path.name, content_disposition_type="inline")
+        return _pdf(pdf.tailored(data_dir, job_id, version))  # whole numbers only: never a path from the address bar
+
+    @app.get("/documents/{job_id:int}/cover-letter-v{version:int}.pdf")
+    async def letter_pdf(job_id: int, version: int) -> Response:
+        return _pdf(pdf.tailored(data_dir, job_id, version, runs.LETTER))
 
     @app.post("/jobs/{job_id:int}/pdf")
     async def build_again(request: Request, job_id: int) -> Response:
-        """The newest version's PDF again, e.g. after a failed build or a changed Questionnaire contact."""
-        conn, latest = request.app.state.conn, runs.latest(request.app.state.conn, queries.known(job_id))
+        """The newest version's PDF again (the resume, or the cover letter), e.g. after a failed build or a changed
+        Questionnaire contact."""
+        kind = runs.LETTER if request.state.form.get("kind") == runs.LETTER else runs.KIND
+        conn, latest = request.app.state.conn, runs.latest(request.app.state.conn, queries.known(job_id), kind)
         if latest is None or latest["status"] != "done":
             raise HTTPException(404)
         try:
@@ -93,6 +110,12 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             request, "usage.html", by=by, periods=list(SHOWN), rows=spending.history(conn, by)[: SHOWN[by]],
             spent=spending.spent(conn, spending.today()), limits=limits,
         )  # fmt: skip
+
+
+def _pdf(path: Path) -> Response:
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="application/pdf", filename=path.name, content_disposition_type="inline")
 
 
 def _rows(entries: list[writer.Entry], draft: dict, flags: list[dict], restore: Callable[[str], str]) -> list[dict]:

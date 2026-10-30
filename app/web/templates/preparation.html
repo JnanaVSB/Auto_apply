@@ -1,4 +1,4 @@
-{% set working = place is not none or (latest and latest.status == "writing") %}
+{% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
   {% if skipped %}
@@ -56,6 +56,33 @@
     {% endfor %}
     </tbody>
   </table>
+  {% endif %}
+  <h3>Cover letter</h3>
+  {% set found = letter.latest %}
+  {% if found and found.status == "writing" %}<p role="status">The Writer is writing cover letter {{ found.version }}…</p>
+  {% elif found and found.status == "done" %}
+  <p class="result">Cover letter {{ found.version }}, written {{ found.created_on[:10] }}.
+    {% if letter.built %}<a href="/documents/{{ job_id }}/cover-letter-v{{ found.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ letter.built.pages }} page{{ "s" if letter.built.pages != 1 }}){% endif %}</p>
+  <div class="letter">{% for parts in letter.paragraphs %}<p>{% for text, new in parts %}{% if new %}<mark>{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}</p>{% endfor %}</div>
+  {% if found.problem or not letter.built %}
+  <p class="error" role="alert">{{ found.problem or "The PDF hasn't been built yet." }}</p>
+  <form method="post" action="/jobs/{{ job_id }}/pdf" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="kind" value="cover_letter">
+    <button type="submit">Build the letter's PDF again</button>
+  </form>
+  {% endif %}
+  {% elif found %}<p class="error" role="alert">Cover letter {{ found.version }}: {{ found.problem }}</p>
+  {% endif %}
+  {% if letter_problem %}<p class="error" role="alert">{{ letter_problem }}</p>{% endif %}
+  {% if can_letter %}
+  <form method="post" action="/jobs/{{ job_id }}/cover-letter" hx-post="/jobs/{{ job_id }}/cover-letter" hx-target="#preparation" hx-swap="outerHTML" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit">{{ "Write another cover letter" if found else "Write cover letter" }}</button>
+  </form>
+  {% endif %}
+  {% if letter.versions | length > 1 %}
+  <p class="muted">Earlier letters: {% for older in letter.versions[1:] %}{% if older.status == "done" %}<a href="/documents/{{ job_id }}/cover-letter-v{{ older.version }}.pdf" target="_blank" rel="noopener">{{ older.version }}</a>{% else %}{{ older.version }} ({{ labels[older.status] }}){% endif %} (${{ "%.2f" | format(older.cost) }}){{ ", " if not loop.last }}{% endfor %}</p>
   {% endif %}
   <form method="post" action="/jobs/{{ job_id }}/sources" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">

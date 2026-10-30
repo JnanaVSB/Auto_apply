@@ -42,8 +42,8 @@ def client(client, writer_chosen, monkeypatch):
     """Logged in; `client.started` lists the jobs Prepare started the Writer on (never really run here)."""
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     client.started = []
-    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="": client.started.append(
-        (job, words) if words else job))  # fmt: skip
+    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="", kind="resume": client.started.append(
+        (job, words or kind) if words or kind != "resume" else job))  # fmt: skip
     log_in(client)
     return client
 

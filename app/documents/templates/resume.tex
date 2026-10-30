@@ -8,13 +8,7 @@
 \setlength{\parindent}{0pt}
 \newcommand{\resumesection}[1]{\vspace{5pt}{\large\bfseries #1}\par\vspace{-3pt}\rule{\linewidth}{0.4pt}\par\vspace{2pt}}
 \begin{document}
-\begin{center}
-{\LARGE\bfseries << name >>}\par\vspace{2pt}
-<% for field, value in header.items() if value %>
-<% if not loop.first %>\enspace\textbullet\enspace <% endif %>
-<% if field in ("email", "phone", "place") %><< value >><% else %>\href{<< value | href >>}{<< value | shown >>}<% endif %>
-<% endfor %>
-\end{center}
+<% include "header.tex" %>
 <% for section in sections %>
 \resumesection{<< section.heading >>}
 <% for block in section.blocks %>

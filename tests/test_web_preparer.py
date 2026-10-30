@@ -18,8 +18,8 @@ class FakeWriter:
     def __init__(self) -> None:
         self.started, self.go, self.done = [], threading.Event(), threading.Event()
 
-    def __call__(self, conn, settings, job_id, feedback="") -> None:
-        self.started.append((job_id, feedback) if feedback else job_id)
+    def __call__(self, conn, settings, job_id, feedback="", kind="resume") -> None:
+        self.started.append((job_id, feedback or kind) if feedback or kind != "resume" else job_id)
         assert self.go.wait(WAIT)
         if job_id == 3:
             self.done.set()
@@ -57,8 +57,9 @@ def test_one_job_at_a_time_the_others_wait_their_turn(data_dir, fake):
     assert fake.started == [1, 2, 3] and preparer.place(1) is None
     fake.go.clear()
     preparer.start(4, "Shorter.")  # after the line has emptied, a press starts the Writer again, your words kept
+    preparer.start(5, "", "cover_letter")
     fake.go.set()
-    assert finished(preparer) and fake.started == [1, 2, 3, (4, "Shorter.")]
+    assert finished(preparer) and fake.started == [1, 2, 3, (4, "Shorter."), (5, "cover_letter")]
 
 
 def test_a_writer_running_elsewhere_lets_the_presses_go_and_says_why(data_dir, fake):

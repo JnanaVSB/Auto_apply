@@ -1,0 +1,19 @@
+<# The app's cover letter. Every << value >> is escaped by app/documents/latex.py; the Writer writes only the paragraphs. #>
+\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8em}
+\begin{document}
+<% include "header.tex" %>
+\vspace{1em}
+<< date >>\par
+Re: << title >>, << company >>\par
+Dear Hiring Manager,\par
+<% for paragraph in paragraphs %>
+<< paragraph >>\par
+<% endfor %>
+Sincerely,\par
+<< name >>
+\end{document}

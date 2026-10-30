@@ -22,19 +22,19 @@ log = logging.getLogger("app.web")
 @dataclass
 class Preparer:
     data_dir: Path
-    waiting: list[tuple[int, str]] = field(default_factory=list)  # (job, your feedback or ""), first pressed first
+    waiting: list[tuple[int, str, str]] = field(default_factory=list)  # (job, your words or "", kind), in press order
     current: int | None = None  # the job being written now
     notice: str | None = None  # why the last press could not run; shown in the job's box
     _thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def start(self, job_id: int, feedback: str = "") -> None:
-        """You pressed Prepare (or sent your changes): the job is written now, or after the jobs before it. A second
-        press while it waits or is written changes nothing."""
+    def start(self, job_id: int, feedback: str = "", kind: str = runs.KIND) -> None:
+        """You pressed Prepare (sent your changes, or asked for a cover letter): the job is written now, or after the
+        jobs before it. A job holds one place at a time: another press while it waits or is written changes nothing."""
         with self._lock:
             if self._place(job_id) is not None:
                 return
-            self.waiting.append((job_id, feedback))
+            self.waiting.append((job_id, feedback, kind))
             self.notice = None
             if self._thread is None:
                 self._thread = threading.Thread(target=self._run, daemon=True)
@@ -48,7 +48,7 @@ class Preparer:
     def _place(self, job_id: int) -> int | None:
         if job_id == self.current:
             return 0
-        waiting = [job for job, _ in self.waiting]
+        waiting = [job for job, *_ in self.waiting]
         return waiting.index(job_id) + 1 if job_id in waiting else None
 
     def recover(self) -> None:
@@ -78,7 +78,7 @@ class Preparer:
             except Exception as error:  # one line only; never job data, your text or a crash report
                 log.error("Unexpected error in the Writer: %s", type(error).__name__)
 
-    def _next(self) -> tuple[int, str] | None:
+    def _next(self) -> tuple[int, str, str] | None:
         with self._lock:
             job = self.waiting.pop(0) if self.waiting else None
             self.current = job and job[0]

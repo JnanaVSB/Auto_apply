@@ -61,12 +61,22 @@ ENVIRONMENT.filters |= {"href": href, "shown": lambda link: re.sub(r"^https?://(
 
 def resume(contact: dict, tiles: list[Tile]) -> str:
     """The whole resume as LaTeX: the header from your questionnaire's Contact section, then the tiles in order."""
+    return ENVIRONMENT.get_template("resume.tex").render(**_header(contact), sections=_sections(tiles))
+
+
+def cover_letter(contact: dict, title: str, company: str, date: str, paragraphs: list[str]) -> str:
+    """A cover letter as LaTeX: your header, the date, the job, the greeting, the Writer's paragraphs, your name."""
+    return ENVIRONMENT.get_template("cover-letter.tex").render(
+        **_header(contact), title=title, company=company, date=date, paragraphs=paragraphs
+    )
+
+
+def _header(contact: dict) -> dict:
+    """Your name and contact line from the questionnaire: only web links (http or https) are shown as links."""
     place = ", ".join(part for part in (contact.get("city"), contact.get("state")) if part)
     header = {name: str(contact.get(name) or "") for name in HEADER} | {"place": place}
     header = {name: value for name, value in header.items() if name in ("email", "phone", "place") or WEB.match(value)}
-    return ENVIRONMENT.get_template("resume.tex").render(
-        name=str(contact.get("full_name") or ""), header=header, sections=_sections(tiles)
-    )
+    return {"name": str(contact.get("full_name") or ""), "header": header}
 
 
 def _sections(tiles: list[Tile]) -> list[dict]:

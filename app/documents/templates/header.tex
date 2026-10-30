@@ -1,0 +1,9 @@
+<# Your name and contact line, from the Questionnaire's Contact section: shared by the resume and the cover letter. #>
+\begin{center}
+{\LARGE\bfseries << name >>}\par\vspace{2pt}
+<% for field, value in header.items() if value %>
+<% if not loop.first %>\enspace\textbullet\enspace <% endif %>
+<% if field in ("email", "phone", "place") %><< value >><% else %>\href{<< value | href >>}{<< value | shown >>}<% endif %>
+<% endfor %>
+\end{center}
+

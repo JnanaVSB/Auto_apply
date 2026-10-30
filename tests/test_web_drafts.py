@@ -52,8 +52,8 @@ def job(conn, data_dir, tmp_path, monkeypatch):
 def client(client, monkeypatch):
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     client.started = []
-    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="": client.started.append(
-        (job, words) if words else job))  # fmt: skip
+    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="", kind="resume": client.started.append(
+        (job, words or kind) if words or kind != "resume" else job))  # fmt: skip
     log_in(client)
     return client
 
@@ -206,3 +206,56 @@ def test_retry_after_a_failed_change_sends_the_same_words(client, conn, job):
     assert "you asked: Lead with the lab." in text and ">Retry</button>" in text
     client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client)})
     assert client.started == [(job, "Lead with the lab.")]
+
+
+LETTER = {"paragraphs": ["I want this job.", "I trained arms to 95% success.", "Thanks."], "from": [], "notes": ""}
+LETTER_VERSION = """INSERT INTO preparations (job_id, kind, version, sources, writer, status, problem, draft, flags,
+    created_on) VALUES (?, 'cover_letter', ?, '[]', '{}', ?, ?, ?, ?, '2026-10-30T10:00:00+00:00')"""
+
+
+def letter_version(conn, job, number=1, status="done", problem=None):
+    with conn:
+        draft = json.dumps(LETTER) if status == "done" else None
+        flags = json.dumps([{"paragraph": 1, "numbers": ["95"]}])
+        conn.execute(LETTER_VERSION, (job, number, status, problem, draft, flags))
+
+
+def test_write_cover_letter_starts_the_writer_and_the_box_shows_the_letter(client, conn, data_dir, job):
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert ">Write cover letter</button>" in text
+    text = client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
+    assert client.started == [(job, "cover_letter")] and 'id="preparation"' in text
+    letter_version(conn, job)
+    target = pdf.tailored(data_dir, job, 1, "cover_letter")
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"%PDF-1.7 letter")
+    target.with_suffix(".json").write_text('{"pages": 1, "missing": []}', encoding="utf-8")
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert (
+        "<p>I trained arms to <mark>95</mark>% success.</p>" in text and ">Write another cover letter</button>" in text
+    )
+    assert f'href="/documents/{job}/cover-letter-v1.pdf"' in text and "(1 page)" in text
+    assert client.get(f"/documents/{job}/cover-letter-v1.pdf").content == b"%PDF-1.7 letter"
+    assert client.get(f"/documents/{job}/cover-letter-v2.pdf").status_code == 404
+
+
+def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, conn, job, monkeypatch):
+    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: 0)
+    text = client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
+    assert "The Writer is still working on this job" in text and client.started == []
+    assert ">Write cover letter</button>" not in client.get(f"/jobs/{job}/preparation").text
+    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
+    with conn:
+        conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (job,))
+    assert "You skipped this job" in client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
+    assert client.post("/jobs/999/cover-letter", data={"csrf_token": csrf(client)}).status_code == 404
+
+
+def test_the_letters_pdf_can_be_built_again(client, conn, data_dir, job, monkeypatch):
+    letter_version(conn, job, problem="PDF could not be built: The PDF build took over 5 minutes and was stopped.")
+    built = []
+    monkeypatch.setattr(drafts.pdf, "build_kept", lambda data_dir, target, source: built.append((target, source)))
+    client.post(f"/jobs/{job}/pdf", data={"csrf_token": csrf(client), "kind": "cover_letter"})
+    ((target, source),) = built
+    assert target == pdf.tailored(data_dir, job, 1, "cover_letter") and "I trained arms to 95\\% success." in source
+    assert "PDF could not be built" not in client.get(f"/jobs/{job}/preparation").text

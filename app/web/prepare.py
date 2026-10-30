@@ -36,7 +36,7 @@ PROFILE = "/resume-profile"  # the tiles page's address
 NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
 SKIPPED = 'You skipped this job: turn off "Not interested" on its page first, then press Prepare.'
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
-BUSY_JOB = "The Writer is still working on this job: send your changes when it's done."
+BUSY_JOB = "The Writer is still working on this job: try again when it's done."
 MAX_FEEDBACK = 2000
 
 
@@ -176,22 +176,11 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        if job["not_interested"]:
-            problem = "skipped"
-        elif writer_sources.unconfirmed(
-            writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job_id)[0]
-        ):
-            problem = "tiles"
-        elif job["status"] != "open" or queries.job_scoring(conn, job_id, current)["status"] != "ready":
-            problem = "not-ready"
-        elif not _writer_chosen():
-            problem = "writer"
-        else:
+        if not (problem := _cannot(conn, current, job)):
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
             if runs.writable(conn, job_id, latest := runs.latest(conn, job_id)):  # Retry a change: the same words
                 failed = latest is not None and latest["status"] in ("stopped", "by_hand")
                 request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "")
-            problem = None
         back = f"/jobs/{job_id}" if request.state.form.get("back") == "job" else "/ready"  # the page it was pressed on
         return RedirectResponse(f"{back}?problem={problem}" if problem else back, 303)
 
@@ -213,10 +202,10 @@ def add_routes(
         """Your words to the Writer: a new version built on the newest finished one. Answers with the job's box."""
         conn, preparer = request.app.state.conn, request.app.state.preparer
         words = " ".join(CONTROL.sub("", request.state.form.get("feedback", "")).split())
-        base, latest = runs.last_done(conn, queries.known(job_id)), runs.latest(conn, job_id)
+        base = runs.last_done(conn, queries.known(job_id))
         if not _writer_chosen():
             problem = NO_WRITER
-        elif preparer.place(job_id) is not None or (latest and latest["status"] == "writing"):
+        elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
             problem = BUSY_JOB
         elif base is None:
             problem = runs.NO_BASE
@@ -229,7 +218,26 @@ def add_routes(
             problem = None
         return box(request, job_id, problem, words if problem else "")
 
-    def box(request: Request, job_id: int, change_problem: str | None = None, typed: str = "") -> HTMLResponse:
+    @app.post("/jobs/{job_id:int}/cover-letter")
+    async def write_letter(request: Request, job_id: int) -> Response:
+        """Write cover letter: a new letter version for this job, in the background. Answers with the job's box."""
+        conn, preparer = request.app.state.conn, request.app.state.preparer
+        job = queries.job(conn, queries.known(job_id))
+        if job is None:
+            raise HTTPException(404)
+        if cannot := _cannot(conn, scoring(), job):
+            problem = PROBLEMS[cannot]
+        elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
+            problem = BUSY_JOB
+        else:
+            preparer.start(job_id, "", runs.LETTER)
+            problem = None
+        return box(request, job_id, letter_problem=problem)
+
+    def box(
+        request: Request, job_id: int, change_problem: str | None = None, typed: str = "",
+        letter_problem: str | None = None,
+    ) -> HTMLResponse:  # fmt: skip
         conn, current = request.app.state.conn, scoring()
         job = queries.job(conn, queries.known(job_id))
         if job is None:
@@ -237,11 +245,13 @@ def add_routes(
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         preparer = request.app.state.preparer
+        free = preparer.place(job_id) is None and not runs.writing(conn, job_id)
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
             own=own, files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
             versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=_writer_chosen(),
-            one_page=_one_page(), change_problem=change_problem, typed=typed,
+            one_page=_one_page(), change_problem=change_problem, typed=typed, letter_problem=letter_problem,
+            letter=drafts.letter(conn, data_dir, job_id), can_letter=free and _cannot(conn, current, job) is None,
             missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
@@ -260,6 +270,19 @@ def add_routes(
 
 
 PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED, "writer": NO_WRITER}
+
+
+def _cannot(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) -> str | None:
+    """Why the Writer can't work on this job (a PROBLEMS key), or None: Prepare and Write cover letter alike."""
+    if job["not_interested"]:
+        return "skipped"
+    if writer_sources.unconfirmed(
+        writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job["id"])[0]
+    ):
+        return "tiles"
+    if job["status"] != "open" or queries.job_scoring(conn, job["id"], current)["status"] != "ready":
+        return "not-ready"
+    return None if _writer_chosen() else "writer"
 
 
 def _one_page() -> bool:
