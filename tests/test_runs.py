@@ -50,6 +50,14 @@ def writer_answers(monkeypatch):
     return calls, replies
 
 
+@pytest.fixture(autouse=True)
+def built(monkeypatch):
+    """Records the PDF builds instead of running Tectonic (never a download here); returns them as (target, LaTeX)."""
+    found = []
+    monkeypatch.setattr(runs.pdf, "build_kept", lambda data_dir, target, source: found.append((target, source)))
+    return found
+
+
 def config(data_dir, role=OPUS, daily=15):
     return Config(data_dir=data_dir, ai=AISettings(writer=role), spending=SpendingSettings(daily=daily))
 
@@ -234,3 +242,47 @@ def test_a_call_cut_off_by_closing_the_dashboard_is_counted_honestly(conn, data_
     runs.recover(conn)
     assert one(conn, "SELECT status, cost, reserved FROM steps") == ("interrupted", cost, 0)
     assert version(conn)["status"] == "by_hand"  # paid: its largest possible cost; free: $0; unpriced: not counted
+
+
+def test_a_good_draft_becomes_a_pdf_with_your_details_put_back(conn, data_dir, job, writer_answers, built):
+    writer_answers[1].append(answer(
+        ("E2", [bullet("Shared the code at [LINK].", 2), bullet("Trained a robot arm with PPO.", 0)], []),
+        ("E4", [], ["Rust", "Python"]),
+    ))  # fmt: skip
+    runs.prepare(conn, config(data_dir), job)
+    ((target, source),) = built
+    assert target == data_dir / "documents" / str(job) / "resume-v1.pdf" and version(conn)["problem"] is None
+    shared = source.index("Shared the code at https://github.com/alex-example.")  # as the Questionnaire writes it
+    assert shared < source.index("Trained a robot arm with PPO.")  # the Writer's order inside an entry
+    assert "Demo Robotics Lab" in source and "Jan 2024 – May 2025" in source  # the fixed facts, unchanged
+    assert "Rust, Python" in source and "C++" not in source and "Fake Drone" not in source  # left out
+    assert "Alex Example" in source and "[" not in source.split(r"\begin{document}")[1].replace("{[}", "")
+
+
+def test_a_failed_build_keeps_the_draft_and_says_why(conn, data_dir, job, writer_answers, monkeypatch):
+    def failing(data_dir, target, source):
+        raise runs.pdf.PdfError("The LaTeX has an error (Undefined control sequence) on line 12.")
+
+    monkeypatch.setattr(runs.pdf, "build_kept", failing)
+    writer_answers[1].append(GOOD)
+    runs.prepare(conn, config(data_dir), job)
+    found = version(conn)
+    assert found["status"] == "done" and found["draft"]
+    assert found["problem"] == "PDF could not be built: The LaTeX has an error (Undefined control sequence) on line 12."
+
+
+def test_each_version_lists_its_cost(conn, data_dir, job, writer_answers, built):
+    writer_answers[1].extend([GOOD, BAD, BAD])
+    runs.prepare(conn, config(data_dir), job)
+    runs.prepare(conn, config(data_dir, OWN), job)
+    questionnaire.save(conn, questionnaire.check({}))
+    runs.prepare(conn, config(data_dir), job)  # stopped before any call: no name in the Questionnaire
+    with conn:
+        other = add_job(conn, "Another job")
+    writer_answers[1].append(GOOD)
+    runs.prepare(conn, config(data_dir), other)
+    found = runs.versions(conn, job)
+    assert [(item["version"], item["status"], item["uncounted"]) for item in found] == [
+        (3, "stopped", 0), (2, "by_hand", 1), (1, "done", 0)
+    ]  # fmt: skip
+    assert (found[2]["cost"], found[1]["cost"], found[0]["cost"]) == (pytest.approx(0.018), 0, 0)

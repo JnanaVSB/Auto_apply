@@ -6,18 +6,21 @@ by hand: Retry starts a new version) or "stopped" (nothing more was sent: fix th
 Messages name the cause and the fix, never your text, the job ad or the answer."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import sqlcipher3
 
 from app import llm, questionnaire
 from app.config import AIRole, Config
 from app.council import spending, writer
-from app.documents import privacy, tile_sets, uploads, writer_sources
+from app.documents import latex, pdf, privacy, tile_sets, uploads, writer_sources
 from app.keychain import KeychainError
 from app.resume import ResumeError, read_latex
 
-KIND = "resume"  # the cover letter (piece 9) is its own kind
+KIND = "resume"  # the cover letter is its own kind
+LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
 LATEST = """SELECT id, version, status, problem, sources, draft, flags, created_on FROM preparations
     WHERE job_id = ? AND kind = ? ORDER BY version DESC LIMIT 1"""
@@ -34,6 +37,12 @@ LEFT_WAITING = "SELECT id, preparation_id, reserved FROM steps WHERE status = 's
 INTERRUPT = """UPDATE steps SET status = 'interrupted', cost = cost + reserved, reserved = 0, error = ?, done_on = ?
     WHERE id = ?"""
 LEFT_WRITING = "SELECT id FROM preparations WHERE status = 'writing'"
+VERSION = "SELECT job_id, version, sources, draft FROM preparations WHERE id = ?"
+NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
+VERSIONS = """SELECT p.id, p.version, p.status, p.created_on,
+    coalesce(sum(coalesce(s.cost, 0) + s.reserved), 0), coalesce(max(s.id IS NOT NULL AND s.cost IS NULL), 0)
+    FROM preparations p LEFT JOIN steps s ON s.preparation_id = p.id WHERE p.job_id = ? AND p.kind = ?
+    GROUP BY p.id ORDER BY p.version DESC"""
 ERROR = 300  # characters of a failed try's reason kept with its step
 CLOSED = "Interrupted: the dashboard closed while the Writer was working"
 
@@ -43,6 +52,20 @@ def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> dict |
     rows = conn.execute(LATEST, (job_id, kind))
     row = rows.fetchone()
     return dict(zip([column[0] for column in rows.description], row, strict=True)) if row else None
+
+
+def versions(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> list[dict]:
+    """Every version of the job's resume, newest first, with what it cost (and whether some was not counted)."""
+    names = ("id", "version", "status", "created_on", "cost", "uncounted")
+    return [dict(zip(names, row, strict=True)) for row in conn.execute(VERSIONS, (job_id, kind))]
+
+
+def writable(conn: sqlcipher3.Connection, job_id: int, version: dict | None) -> bool:
+    """Whether Prepare writes a new version: none yet, the last one stopped or needs checking by hand (Retry), or it
+    was made from older entries. Never while one is being written, nor twice from the same entries."""
+    if version is None or version["status"] in ("stopped", "by_hand"):
+        return True
+    return version["status"] == "done" and outdated(conn, job_id, version)
 
 
 def outdated(conn: sqlcipher3.Connection, job_id: int, version: dict) -> bool:
@@ -65,7 +88,54 @@ def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int) -> int:
         _finish(conn, preparation, "by_hand", f"Something went wrong ({type(error).__name__}): press Retry.")
         raise
     _finish(conn, preparation, status, problem, result)
+    if status == "done":
+        try:
+            target, source = pdf_source(conn, config, preparation)
+            pdf.build_kept(config.data_dir, target, source)
+            note_pdf(conn, preparation, None)
+        except (pdf.PdfError, privacy.PrivacyError, ResumeError) as error:
+            note_pdf(conn, preparation, error)
     return preparation
+
+
+def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) -> tuple[Path, str]:
+    """Where a version's tailored PDF goes, and its LaTeX: your original fixed facts, the Writer's bullets and skills
+    with your details put back (on this computer only), and the Questionnaire's contact header."""
+    job_id, number, sources, draft = conn.execute(VERSION, (preparation,)).fetchone()
+    found = originals(conn, sources)
+    shield = shield_for(conn, config, found)
+    by_id = {(entry.source, entry.tile.tile_id): entry.tile for entry in found}
+    tiles = [
+        _tailored(by_id[(chosen["source"], chosen["tile_id"])], chosen, shield)
+        for chosen in json.loads(draft)["entries"]
+    ]
+    source = latex.resume(questionnaire.load(conn)[0]["contact"], tiles)
+    return pdf.tailored(config.data_dir, job_id, number), source
+
+
+def note_pdf(conn: sqlcipher3.Connection, preparation: int, error: Exception | None) -> None:
+    """A failed build keeps the draft and says why (the kind of error and its line, never your text)."""
+    with conn:
+        conn.execute(NOTE, (f"PDF could not be built: {error}" if error else None, preparation))
+
+
+def originals(conn: sqlcipher3.Connection, sources: str) -> list[writer.Entry]:
+    """The entries a version was made from (its recorded sets, as JSON), in the order of your resume."""
+    return writer.in_order([(found["source"], tile_sets.tiles(conn, found["set"])) for found in json.loads(sources)])
+
+
+def shield_for(conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry]) -> privacy.Shield:
+    """The privacy filter for these entries and their sources, as the Writer's text is hidden with."""
+    sources = list(dict.fromkeys(entry.source for entry in entries))
+    latex_texts = [read_latex(config.data_dir) if source == writer_sources.PROFILE else uploads.latex(conn, source)
+                   for source in sources]  # fmt: skip
+    return privacy.shield(questionnaire.load(conn)[0]["contact"], latex_texts, [entry.tile for entry in entries])
+
+
+def _tailored(tile, chosen: dict, shield: privacy.Shield):
+    """One tile as the Writer chose it: its fixed facts unchanged, its bullets and skills the draft's."""
+    skills = {"skills": [shield.restore(skill) for skill in chosen["skills"]]} if tile.kind == "skills" else {}
+    return replace(tile, facts=tile.facts | skills, bullets=tuple(shield.restore(b["text"]) for b in chosen["bullets"]))
 
 
 def recover(conn: sqlcipher3.Connection) -> None:
@@ -89,9 +159,7 @@ def _write(
     title, company, locations, description = conn.execute(JOB, (job_id,)).fetchone()
     found = writer.entries(conn, sources)
     try:
-        latex = [read_latex(config.data_dir) if source == writer_sources.PROFILE else uploads.latex(conn, source)
-                 for source in sources]  # fmt: skip
-        shield = privacy.shield(questionnaire.load(conn)[0]["contact"], latex, [entry.tile for entry in found])
+        shield = shield_for(conn, config, found)
         system, user = writer.request(
             title, company, ", ".join(json.loads(locations)), description or "", found, shield
         )

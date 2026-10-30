@@ -44,13 +44,15 @@ class Confirmed:
 def latest(conn: sqlcipher3.Connection, file_id: int | None = None) -> Confirmed | None:
     """The latest confirmed set of your Resume Profile, or of an uploaded file (app/documents/uploads.py)."""
     row = conn.execute(LATEST, (file_id,)).fetchone()
-    if row is None:
-        return None
-    tiles = [
+    return None if row is None else Confirmed(row[0], row[1], row[2], tiles(conn, row[0]))
+
+
+def tiles(conn: sqlcipher3.Connection, set_id: int | None) -> list[Tile]:
+    """The tiles of one confirmed set, in order: a prepared resume names the sets it was made from."""
+    return [
         Tile(tile_id, kind, section, json.loads(facts), tuple(json.loads(bullets)))
-        for tile_id, kind, section, facts, bullets in conn.execute(TILES_OF, (row[0],))
+        for tile_id, kind, section, facts, bullets in conn.execute(TILES_OF, (set_id,))
     ]
-    return Confirmed(row[0], row[1], row[2], tiles)
 
 
 def changes(old: list[Tile], new: list[Tile]) -> list[tuple[str, Tile | None, Tile | None]]:

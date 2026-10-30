@@ -53,8 +53,17 @@ def master(data_dir: Path, set_id: int) -> Path:
     return data_dir / "documents" / "master" / f"resume-v{set_id}.pdf"
 
 
+def tailored(data_dir: Path, job_id: int, version: int) -> Path:
+    """A job's tailored resume, one file per version: a new version never replaces an older one."""
+    return data_dir / "documents" / str(job_id) / f"resume-v{version}.pdf"
+
+
 def build_master(data_dir: Path, set_id: int, latex: str) -> Built:
-    target = master(data_dir, set_id)
+    return build_kept(data_dir, master(data_dir, set_id), latex)
+
+
+def build_kept(data_dir: Path, target: Path, latex: str) -> Built:
+    """Build target's PDF in the documents folder, and keep what the build found beside it (see built)."""
     try:
         target.parent.parent.mkdir(mode=0o700, exist_ok=True)  # documents/, readable by you only
     except OSError as error:

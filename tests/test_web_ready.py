@@ -75,7 +75,7 @@ def test_prepare_queues_a_ready_job_once(client, conn, jobs):
     confirm_tiles(conn)
     assert press(client, jobs["Fresh"]).headers["location"] == "/ready"
     first = one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Fresh"])
-    assert first[0] and "queued (you pressed Prepare on" in client.get("/ready").text
+    assert first[0] and client.started == [jobs["Fresh"]]  # the Writer is started (never really run here)
     assert not ready.queue(conn, jobs["Fresh"], "later")  # a second press changes nothing
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Fresh"]) == first
 

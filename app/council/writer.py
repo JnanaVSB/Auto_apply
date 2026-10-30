@@ -91,14 +91,21 @@ class Checked(NamedTuple):
 
 
 def entries(conn: sqlcipher3.Connection, sources: list) -> list[Entry]:
-    """Every confirmed entry of the job's sources, in the order of your resume: the first source's in its own order;
-    another source's entry after the last one of its kind (Experience after Experience), else at the end."""
+    """Every confirmed entry of the job's sources, in the order of your resume (see in_order)."""
+    found = [
+        (source, tile_sets.latest(conn, None if source == writer_sources.PROFILE else source)) for source in sources
+    ]
+    return in_order([(source, confirmed.tiles if confirmed else []) for source, confirmed in found])
+
+
+def in_order(sources: list[tuple]) -> list[Entry]:
+    """Each source's tiles, as (source, tiles), in the order of your resume: the first source's in its own order;
+    another source's tile after the last one of its kind (Experience after Experience), else at the end."""
     ordered: list[tuple] = []
-    for source in sources:
-        confirmed = tile_sets.latest(conn, None if source == writer_sources.PROFILE else source)
-        for tile in confirmed.tiles if confirmed else []:
+    for source, tiles in sources:
+        for tile in tiles:
             same = [place for place, (_, other) in enumerate(ordered) if other.kind == tile.kind]
-            at = same[-1] + 1 if same and source != sources[0] else len(ordered)
+            at = same[-1] + 1 if same and source != sources[0][0] else len(ordered)
             ordered.insert(at, (source, tile))
     return [Entry(f"E{number}", source, tile) for number, (source, tile) in enumerate(ordered, 1)]
 
@@ -130,7 +137,7 @@ def _block(entry: Entry) -> str:
     if tile.kind == "skills":
         lines.append('Skills (choose and reorder only; in your answer "bullets": [] and "skills" from this list):')
         lines += [f"- {skill}" for skill in tile.facts.get("skills", [])]
-    elif _as_written(tile):
+    elif kept_as_written(tile):
         lines.append('Keep as written (choose or leave out this entry; in your answer "bullets": [] and "skills": []):')
         lines += tile.bullets
     else:
@@ -139,7 +146,8 @@ def _block(entry: Entry) -> str:
     return MARKER.sub(lambda marker: f"[{marker[1]}{marker[2]}]", "\n".join(lines))
 
 
-def _as_written(tile: Tile) -> bool:
+def kept_as_written(tile: Tile) -> bool:
+    """Chosen or left out only: a publication, or an entry without bullets."""
     return tile.kind in KEEP_AS_WRITTEN or not tile.bullets
 
 
@@ -192,7 +200,7 @@ def _bullets(entry: Entry, bullets: object) -> list[dict]:
     label, tile = entry.label, entry.tile
     if not isinstance(bullets, list):
         raise BadAnswer(f'{label}: "bullets" must be a list')
-    if tile.kind == "skills" or _as_written(tile):
+    if tile.kind == "skills" or kept_as_written(tile):
         if bullets:
             kept = "is a skills group" if tile.kind == "skills" else 'is marked "keep as written"'
             raise BadAnswer(f"{label} {kept}: send no bullets for it")

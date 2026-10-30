@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Changes: {{ job.title }}{% endblock %}
+{% block content %}
+<h1>Changes vs your master</h1>
+<p class="company"><a href="/jobs/{{ job.id }}">{{ job.title }}</a> at {{ job.company }}: version {{ version.version }},
+  written {{ version.created_on[:10] }} by {{ model }}.
+  {% if built %}<a href="/documents/{{ job.id }}/resume-v{{ version.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ built.pages }} page{{ "s" if built.pages != 1 }}){% endif %}</p>
+<p class="hint">Left: your entry as confirmed. Right: what the Writer made of it; numbers that are not in the bullets
+  it is based on are <mark>highlighted</mark>. Fixed facts (names, titles, places, dates) are never changed.</p>
+{% if notes %}<p class="result">The Writer's notes: {{ notes }}</p>{% endif %}
+<table class="jobs changes">
+  <thead><tr><th>Your entry</th><th>The Writer's version</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  {% set tile = row.tile %}
+  <tr{% if not row.chosen %} class="hidden-job"{% endif %}>
+    <td><strong>{{ tile.facts.name or tile.section }}</strong>
+      {% for name in ("rest", "right", "second", "second_right") if tile.facts[name] %}<span class="muted"> · {{ tile.facts[name] }}</span>{% endfor %}
+      <br><span class="muted">{{ tile.section }}</span>
+      {% if tile.kind == "skills" %}<p>{{ tile.facts.skills | join(", ") }}</p>
+      {% elif tile.bullets %}<ol start="0">{% for bullet in tile.bullets %}<li>{{ bullet }}</li>{% endfor %}</ol>{% endif %}</td>
+    <td>{% if not row.chosen %}<span class="muted">left out</span>
+      {% elif tile.kind == "skills" %}<p>{{ row.skills | join(", ") }}</p>
+        {% set dropped = tile.facts.skills | reject("in", row.skills) | list %}
+        {% if dropped %}<p class="muted">left out: {{ dropped | join(", ") }}</p>{% endif %}
+      {% elif row.as_written %}<span class="muted">kept as written</span>
+      {% else %}<ul>{% for bullet in row.bullets %}<li>{% for text, new in bullet.parts %}{% if new %}<mark>{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}
+        <span class="muted">(from {{ bullet.from | join(", ") }})</span></li>{% endfor %}</ul>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

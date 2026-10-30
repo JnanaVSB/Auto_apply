@@ -8,7 +8,18 @@
   {% elif place %}
   <p role="status">Waiting for the Writer: {{ place }} job{{ "s" if place > 1 }} before it.</p>
   {% elif latest and latest.status == "done" and not outdated %}
-  <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}. The PDF and "changes vs your master" come next.</p>
+  <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}.
+    {% if built %}<a href="/documents/{{ job_id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ built.pages }} page{{ "s" if built.pages != 1 }}) ·{% endif %}
+    <a href="/jobs/{{ job_id }}/changes?version={{ latest.version }}">Changes vs your master</a></p>
+  {% if built and one_page and built.pages > 1 %}<p class="error">Over one page ({{ built.pages }} pages): Request changes can ask for a shorter version.</p>{% endif %}
+  {% if built and built.missing %}<p class="muted">Left out of the PDF (the font can't show them): {{ built.missing | join(" ") }}</p>{% endif %}
+  {% if latest.problem or not built %}
+  <p class="error" role="alert">{{ latest.problem or "The PDF hasn't been built yet." }}</p>
+  <form method="post" action="/jobs/{{ job_id }}/pdf" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit">Build the PDF again</button>
+  </form>
+  {% endif %}
   {% elif not ready %}
   <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
   {% elif missing %}
@@ -25,7 +36,19 @@
     <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
   </form>
   {% endif %}
-  <button type="button" disabled title="comes with the Writer">Request changes</button>
+  <button type="button" disabled title="comes in the next part of the Writer">Request changes</button>
+  {% if versions %}
+  <table class="versions">
+    <thead><tr><th>Version</th><th>Written</th><th>Status</th><th>Cost</th></tr></thead>
+    <tbody>
+    {% for found in versions %}
+    <tr><td>{% if found.status == "done" %}<a href="/jobs/{{ job_id }}/changes?version={{ found.version }}">{{ found.version }}</a>{% else %}{{ found.version }}{% endif %}</td>
+      <td>{{ found.created_on[:10] }}</td><td>{{ labels[found.status] }}</td>
+      <td>{{ "at least " if found.uncounted }}${{ "%.2f" | format(found.cost) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
   <form method="post" action="/jobs/{{ job_id }}/sources" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <span>The Writer uses ({{ "this job's own choice" if own else "your default" }}):</span>

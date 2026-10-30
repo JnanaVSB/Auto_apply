@@ -20,7 +20,7 @@ from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import ResumeError, from_latex, read_latex
 from app.scoring import ready
-from app.web import actions, queries
+from app.web import actions, drafts, queries
 
 CHOICES = {  # the questionnaire's drop-down choices
     "STATUSES": questionnaire.STATUSES, "GENDERS": questionnaire.GENDERS, "RACES": questionnaire.RACES,
@@ -159,11 +159,11 @@ def add_routes(
         chosen = {job_id: writer_sources.of_job(conn, job_id)[0] for job_id in ids}
         uses = {job_id: writer_sources.names(offered, chosen[job_id]) for job_id in ids}
         missing = {job_id: writer_sources.unconfirmed(offered, chosen[job_id]) for job_id in ids}
-        marks = ", ".join("?" * len(ids))
-        queued = dict(conn.execute(f"SELECT id, prepare_requested_on FROM jobs WHERE id IN ({marks})", ids))  # noqa: S608
+        states = {job_id: drafts.state(conn, data_dir, request.app.state.preparer, job_id) for job_id in ids}
         skipped = request.query_params.get("skipped", "")
         return page(
-            request, "ready.html", listing=listing, view=view, queued=queued, uses=uses, missing=missing,
+            request, "ready.html", listing=listing, view=view, states=states, uses=uses, missing=missing,
+            labels=runs.LABELS,
             skipped=int(skipped) if queries.PAGE_NUMBER.fullmatch(skipped) else None,
             problem=PROBLEMS.get(request.query_params.get("problem", "")),
         )  # fmt: skip
@@ -186,7 +186,7 @@ def add_routes(
             problem = "writer"
         else:
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
-            if _can_write(conn, job_id):  # never while it is written, nor again once done from the same entries
+            if runs.writable(conn, job_id, runs.latest(conn, job_id)):
                 request.app.state.preparer.start(job_id)
             problem = None
         back = f"/jobs/{job_id}" if request.state.form.get("back") == "job" else "/ready"  # the page it was pressed on
@@ -209,12 +209,12 @@ def add_routes(
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
-        latest, preparer = runs.latest(conn, job_id), request.app.state.preparer
+        preparer = request.app.state.preparer
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
-            own=own, files=uploads.offered(conn), latest=latest, place=preparer.place(job_id),
-            notice=preparer.notice, outdated=bool(latest) and runs.outdated(conn, job_id, latest),
-            writer=_writer_chosen(),
+            own=own, files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
+            versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=_writer_chosen(),
+            one_page=_one_page(),
             missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
@@ -235,19 +235,18 @@ def add_routes(
 PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED, "writer": NO_WRITER}
 
 
+def _one_page() -> bool:
+    try:
+        return load_config().documents.one_page
+    except ConfigError:  # shown on the Settings page; the default meanwhile
+        return True
+
+
 def _writer_chosen() -> bool:
     try:
         return load_config().ai.writer is not None
     except ConfigError:  # shown on the Settings page; nothing can be prepared meanwhile
         return False
-
-
-def _can_write(conn: sqlcipher3.Connection, job_id: int) -> bool:
-    """No version yet, the last one stopped or needs checking by hand (Retry), or it was made from older entries."""
-    latest = runs.latest(conn, job_id)
-    if latest is None or latest["status"] in ("stopped", "by_hand"):
-        return True
-    return latest["status"] == "done" and runs.outdated(conn, job_id, latest)
 
 
 def _file(conn: sqlcipher3.Connection, number: str) -> uploads.ResumeFile | None:
@@ -276,10 +275,6 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path, file: uploads.Resum
     current = confirmed is not None and confirmed.resume == resume
     tiles = confirmed.tiles if current else reading.tiles
     contact = questionnaire.load(conn)[0]["contact"]
-    try:
-        one_page = load_config().documents.one_page
-    except ConfigError:  # shown on the Settings page; the default meanwhile
-        one_page = True
     return {
         "resume": resume, "confirmed": confirmed, "current": current, "kinds": PREFIXES,
         "rows": [tile_sets.as_row(tile, position) for position, tile in enumerate(tiles, 1)],
@@ -288,5 +283,5 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path, file: uploads.Resum
         "contact_empty": not any(contact.get(field) for field, _ in tile_sets.CONTACT),
         "contact_missing": tile_sets.contact_check(contact, header_text(latex)),
         "pdf": pdf.built(pdf.master(data_dir, confirmed.set_id)) if current and not file else None,
-        "one_page": one_page, "files": files, "file": file, "default_sources": writer_sources.default(conn),
+        "one_page": _one_page(), "files": files, "file": file, "default_sources": writer_sources.default(conn),
     }  # fmt: skip

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Usage{% endblock %}
+{% block content %}
+<h1>Usage</h1>
+<p>Today: ${{ "%.2f" | format(spent.today) }} of your ${{ "%.2f" | format(limits.daily) }} daily limit.
+  This month: ${{ "%.2f" | format(spent.month) }} of ${{ "%.2f" | format(limits.monthly) }}.
+  <a href="/settings/writer">Change the limits</a></p>
+<p class="hint">Every AI call the Writer made, local and paid. Dollars include what is set aside for a call still
+  waiting; "at least" means some calls went to your own address without a price, so they were not counted. Compare
+  with your Anthropic and OpenAI dashboards now and then: their bills can differ slightly.</p>
+<nav class="actions">
+  {% for period in periods %}<a class="button"{% if period == by %} aria-current="page"{% endif %} href="/usage?by={{ period }}">{{ period.title() }}</a>{% endfor %}
+</nav>
+{% if rows %}
+<table class="jobs">
+  <thead><tr><th>{{ by.title() }} from</th><th>Calls</th><th>Tokens read</th><th>From cache</th><th>Written</th><th>Dollars</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr><td>{{ row.start }}</td><td>{{ "{:,}".format(row.calls) }}</td><td>{{ "{:,}".format(row.input) }}</td>
+    <td>{{ "{:,}".format(row.cached) }}</td><td>{{ "{:,}".format(row.output) }}</td>
+    <td>{{ "at least " if row.uncounted }}${{ "%.2f" | format(row.dollars) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No AI calls yet: they appear here once the Writer has prepared a job.</p>
+{% endif %}
+{% endblock %}

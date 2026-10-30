@@ -25,18 +25,24 @@
       {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
       {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
       {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
-    <td>{% if queued[job.id] %}queued (you pressed Prepare on {{ queued[job.id][:10] }}){% else %}not started{% endif %}
+    {% set found = states[job.id] %}{% set latest = found.latest %}
+    <td>{% if found.place == 0 %}writing…{% elif found.place %}waiting for the Writer ({{ found.place }} before it)
+      {% elif not latest %}not started
+      {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else "done" }}: version {{ latest.version }}
+        <br>{% if found.built %}<a href="/documents/{{ job.id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a>{% if found.built.pages > 1 %} <span class="mark warn">{{ found.built.pages }} pages</span>{% endif %} · {% endif %}<a href="/jobs/{{ job.id }}/changes?version={{ latest.version }}">Changes</a>
+        {% if latest.problem %}<br><span class="error">PDF could not be built: see the job's page</span>{% endif %}
+      {% else %}<span class="error">{{ labels[latest.status] }}</span> <span class="muted">(version {{ latest.version }}; see the job's page)</span>{% endif %}
       <br><span class="muted">uses: {{ uses[job.id] | join(" + ") }}</span>
       {% if missing[job.id] %}<br><a class="error" href="/resume-profile">confirm first: {{ missing[job.id] | join(", ") }}</a>{% endif %}</td>
-    <td>—</td>
+    <td>{{ "at least " if found.cost[1] }}${{ "%.2f" | format(found.cost[0]) }}</td>
     <td class="actions">
-      {% if not queued[job.id] %}
+      {% if found.writable and found.place is none %}
       <form method="post" action="/ready/{{ job.id }}/prepare">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit" class="primary">Prepare</button>
+        <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
       </form>
       {% endif %}
-      <button type="button" disabled title="comes with the Writer">Request changes</button>
+      <button type="button" disabled title="comes in the next part of the Writer">Request changes</button>
       <form method="post" action="/ready/{{ job.id }}/skip">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <input type="hidden" name="value" value="1">
