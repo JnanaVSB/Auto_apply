@@ -77,6 +77,16 @@ def test_no_resume_says_how_to_add_one(client, data_dir):
     assert "Resume not found: save your LaTeX resume as" in client.get("/resume-profile").text
 
 
+def test_upload_messages_show_without_resume_tex_and_only_confirm_says_not_confirmed(client, data_dir):
+    (data_dir / "resume.tex").unlink()
+    empty = client.post("/resume-profile/upload", data={"csrf_token": csrf(client)}).text
+    assert "Not uploaded: Choose one or more .tex files first." in empty and "Resume not found" in empty
+    upload = {"file.0.name": "cv.tex", "file.0.latex": RESUME_CLS, "csrf_token": csrf(client)}
+    assert "Uploaded: choose a file" in client.get(client.post("/resume-profile/upload", data=upload).url).text
+    answer = client.post("/resume-profile/pdf", data={"csrf_token": csrf(client)}).text
+    assert 'role="alert">Confirm your resume profile first' in answer and "Not confirmed: Confirm" not in answer
+
+
 def test_the_contact_check_uses_the_questionnaire(client):
     client.post("/questionnaire", data={"contact.email": "sam@example.com", "csrf_token": csrf(client)})
     assert "doesn't show the email in your" in client.get("/resume-profile").text

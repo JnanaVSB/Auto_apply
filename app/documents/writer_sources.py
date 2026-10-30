@@ -2,6 +2,8 @@
 every job that a job can change. Prepare needs every chosen source's entries confirmed (app/documents/tile_sets.py)."""
 
 import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import sqlcipher3
 
@@ -10,10 +12,20 @@ from app.documents import tile_sets, uploads
 PROFILE = "profile"  # your Resume Profile (resume.tex); an uploaded file is its id
 SAVE_DEFAULT = """INSERT INTO writer_sources (id, sources) VALUES (1, ?)
     ON CONFLICT (id) DO UPDATE SET sources = excluded.sources"""
+SAVE_JOB = "UPDATE jobs SET writer_sources = ? WHERE id = ?"
 
 
 class SourcesError(Exception):
     """A choice that can't be saved."""
+
+
+@dataclass(frozen=True)
+class Source:
+    name: str
+    confirmed: bool  # its entries are confirmed for its current text
+
+
+REMOVED = Source("a removed file", False)
 
 
 def default(conn: sqlcipher3.Connection) -> list:
@@ -44,24 +56,41 @@ def save_default(conn: sqlcipher3.Connection, sources: list) -> None:
 def save_job(conn: sqlcipher3.Connection, job_id: int, sources: list | None) -> bool:
     """The job's own choice; None goes back to your default."""
     with conn:
-        changed = conn.execute(
-            "UPDATE jobs SET writer_sources = ? WHERE id = ?", (json.dumps(sources) if sources else None, job_id)
-        )
-        return changed.rowcount == 1
+        return conn.execute(SAVE_JOB, (json.dumps(sources) if sources else None, job_id)).rowcount == 1
 
 
-def names(conn: sqlcipher3.Connection, sources: list) -> list[str]:
-    files = {file.id: file.name for file in uploads.offered(conn)}
-    return ["Profile" if source == PROFILE else files.get(source, "a removed file") for source in sources]
+def offered(conn: sqlcipher3.Connection, resume: str | None) -> dict:
+    """Every source you can choose, by its key (PROFILE or a file's id), loaded once per page for names() and
+    unconfirmed(); `resume` is your current resume's fingerprint (None: no usable resume.tex)."""
+    confirmed = tile_sets.confirmed_for(conn)
+    texts = [(PROFILE, "Profile", resume)] + [(file.id, file.name, file.fingerprint) for file in uploads.offered(conn)]
+    return {
+        key: Source(name, text is not None and confirmed.get(None if key == PROFILE else key) == text)
+        for key, name, text in texts
+    }
 
 
-def unconfirmed(conn: sqlcipher3.Connection, sources: list, resume: str | None) -> list[str]:
+def names(offered: dict, sources: list) -> list[str]:
+    return [offered.get(source, REMOVED).name for source in sources]
+
+
+def unconfirmed(offered: dict, sources: list) -> list[str]:
     """The chosen sources whose entries aren't confirmed for their current text (your Profile: your current resume)."""
-    files = {file.id: file for file in uploads.offered(conn)}
-    missing = []
-    for source, name in zip(sources, names(conn, sources), strict=True):
-        text = resume if source == PROFILE else getattr(files.get(source), "fingerprint", None)
-        confirmed = tile_sets.latest(conn, None if source == PROFILE else source)
-        if text is None or confirmed is None or confirmed.resume != text:
-            missing.append(name)
-    return missing
+    return [found.name for found in (offered.get(source, REMOVED) for source in sources) if not found.confirmed]
+
+
+def remove(conn: sqlcipher3.Connection, file_id: int) -> bool:
+    """Stop offering an uploaded file (it is kept) and take it out of every choice: a job left with nothing uses
+    your default, and the default is never left empty."""
+    with conn:
+        if conn.execute(uploads.REMOVE, (datetime.now(UTC).isoformat(timespec="seconds"), file_id)).rowcount != 1:
+            return False
+        if file_id in (sources := default(conn)):
+            conn.execute(SAVE_DEFAULT, (json.dumps([source for source in sources if source != file_id] or [PROFILE]),))
+        for job_id, raw in conn.execute(
+            "SELECT id, writer_sources FROM jobs WHERE writer_sources IS NOT NULL"
+        ).fetchall():
+            if file_id in (sources := json.loads(raw)):
+                kept = [source for source in sources if source != file_id]
+                conn.execute(SAVE_JOB, (json.dumps(kept) if kept else None, job_id))
+    return True

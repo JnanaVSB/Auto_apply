@@ -8,6 +8,7 @@ from datetime import date
 from urllib.parse import parse_qs, urlencode
 
 import sqlcipher3
+from starlette.exceptions import HTTPException
 
 from app import jobs
 from app.collect import DISCOVERED, source_label, source_state
@@ -39,6 +40,7 @@ SCORING_LABELS = {
     "failed": "AI score failed: check by hand",
     "waiting": "waiting for scoring",
 }
+MAX_ID = 2**63 - 1  # the largest number the database can hold
 PAGE_NUMBER = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
 SCORE = re.compile(r"[0-9]{1,3}")
 SOURCE = re.compile(rf"(simplify|{'|'.join(BOARDS)})(:[\w.-]+)?|manual")  # a kind, or one list or board
@@ -310,6 +312,13 @@ def choices(conn: sqlcipher3.Connection) -> dict[str, list[str]]:
         "term": column("SELECT DISTINCT value FROM jobs, json_each(jobs.terms) ORDER BY 1"),
         "simplify": column("SELECT name FROM sources WHERE name LIKE 'simplify:%' ORDER BY 1"),
     }
+
+
+def known(number: int) -> int:
+    """A job or file number the database can hold; anything larger is "Page not found"."""
+    if number > MAX_ID:
+        raise HTTPException(404)
+    return number
 
 
 def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:

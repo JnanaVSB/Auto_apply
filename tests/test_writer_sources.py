@@ -21,7 +21,12 @@ def test_the_default_is_the_profile_until_you_choose(conn, file):
     writer_sources.save_default(conn, [file.id])
     writer_sources.save_default(conn, ["profile", file.id])
     assert writer_sources.default(conn) == ["profile", file.id]
-    assert writer_sources.names(conn, writer_sources.default(conn)) == ["Profile", "robotics-cv"]
+    offered = writer_sources.offered(conn, None)
+    assert writer_sources.names(offered, [*writer_sources.default(conn), 999]) == [
+        "Profile",
+        "robotics-cv",
+        "a removed file",
+    ]
 
 
 def test_ticked_boxes_offered_files_only_and_at_least_one(conn, file):
@@ -40,12 +45,18 @@ def test_a_job_uses_its_own_choice_or_the_default(conn, file):
 
 
 def test_every_chosen_source_must_be_confirmed_for_its_current_text(conn, file):
-    assert writer_sources.unconfirmed(conn, ["profile", file.id], "fp-now") == ["Profile", "robotics-cv"]
+    def unconfirmed(sources, resume):
+        return writer_sources.unconfirmed(writer_sources.offered(conn, resume), sources)
+
+    assert unconfirmed(["profile", file.id], "fp-now") == ["Profile", "robotics-cv"]
     tile_sets.confirm(conn, read_tiles(RESUME_CLS).tiles, "fp-before")  # the Profile, from an older resume
-    tile_sets.confirm(conn, read_tiles(OTHER).tiles, file.fingerprint, file.id)
-    assert writer_sources.unconfirmed(conn, ["profile", file.id], "fp-now") == ["Profile"]
-    assert writer_sources.unconfirmed(conn, ["profile", file.id], "fp-before") == []
-    assert writer_sources.unconfirmed(conn, ["profile"], None) == ["Profile"]  # no usable resume
+    tile_sets.confirm(conn, read_tiles(OTHER).tiles, "fp-older", file.id)
+    tile_sets.confirm(conn, read_tiles(OTHER).tiles, file.fingerprint, file.id)  # the latest set counts
+    assert unconfirmed(["profile", file.id], "fp-now") == ["Profile"]
+    assert unconfirmed(["profile", file.id], "fp-before") == []
+    assert unconfirmed(["profile"], None) == ["Profile"] and unconfirmed([999], "fp-before") == ["a removed file"]
+    tile_sets.confirm(conn, read_tiles(RESUME_CLS).tiles, "fp-now")  # a newer Profile set replaces the older one
+    assert unconfirmed(["profile"], "fp-before") == ["Profile"] and unconfirmed(["profile"], "fp-now") == []
 
 
 def test_removing_a_file_cleans_every_choice_that_used_it(conn, file):
@@ -54,7 +65,7 @@ def test_removing_a_file_cleans_every_choice_that_used_it(conn, file):
     writer_sources.save_job(conn, alone, [file.id])
     writer_sources.save_job(conn, both, ["profile", file.id])
     writer_sources.save_default(conn, [file.id])
-    uploads.remove(conn, file.id)
+    writer_sources.remove(conn, file.id)
     assert writer_sources.of_job(conn, alone) == (["profile"], False)  # nothing left: your default
     assert writer_sources.of_job(conn, both) == (["profile"], True)
     assert writer_sources.default(conn) == ["profile"]

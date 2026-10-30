@@ -1,22 +1,22 @@
 """Your uploaded resumes and CVs (.tex), kept in the encrypted database. Their LaTeX is never run: it is only read into
 entries (app/documents/tiles.py), and every PDF is built from the app's own template. Remove only stops a file being
-offered; nothing is deleted. On the Resume Profile page each file is a source of entries beside your Profile."""
+offered (writer_sources.remove); nothing is deleted. On the Resume Profile page each file is a source of entries
+beside your Profile."""
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import sqlcipher3
 
-from app.resume import MAX_BYTES, MIN_CHARACTERS, plain_text
+from app.resume import CONTROL, MAX_BYTES, MIN_CHARACTERS, plain_text
 
 MAX_FILES = 5  # per upload
 MAX_NAME = 100
 FIELD = re.compile(r"file\.([0-9])\.(name|latex)")  # one chosen file, as the page's script sends it
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-OFFERED = "SELECT id, name, latex, fingerprint, uploaded_on FROM resume_files WHERE removed_on IS NULL ORDER BY id"
+OFFERED = "SELECT id, name, fingerprint, uploaded_on FROM resume_files WHERE removed_on IS NULL ORDER BY id"  # no text
+LATEX = "SELECT latex FROM resume_files WHERE id = ?"
 SAVE = "INSERT INTO resume_files (name, latex, fingerprint, uploaded_on) VALUES (?, ?, ?, ?)"
 REMOVE = "UPDATE resume_files SET removed_on = ? WHERE id = ? AND removed_on IS NULL"
 
@@ -29,7 +29,6 @@ class UploadError(Exception):
 class ResumeFile:
     id: int
     name: str
-    latex: str
     fingerprint: str  # of its plain text, worked out as for resume.tex
     uploaded_on: str
 
@@ -40,6 +39,11 @@ def offered(conn: sqlcipher3.Connection) -> list[ResumeFile]:
 
 def get(conn: sqlcipher3.Connection, file_id: int) -> ResumeFile | None:
     return next((file for file in offered(conn) if file.id == file_id), None)
+
+
+def latex(conn: sqlcipher3.Connection, file_id: int) -> str:
+    """A file's LaTeX, loaded only for the page or reader that needs it."""
+    return conn.execute(LATEX, (file_id,)).fetchone()[0]
 
 
 def upload(conn: sqlcipher3.Connection, form: dict[str, str]) -> int:
@@ -82,24 +86,3 @@ def upload(conn: sqlcipher3.Connection, form: dict[str, str]) -> int:
     with conn:  # all or nothing
         conn.executemany(SAVE, saved)
     return len(saved)
-
-
-def remove(conn: sqlcipher3.Connection, file_id: int) -> bool:
-    """Stop offering a file (it is kept), and take it out of the Writer's choices (app/documents/writer_sources.py):
-    a job left with nothing uses your default, and the default is never left empty."""
-    with conn:
-        if conn.execute(REMOVE, (datetime.now(UTC).isoformat(timespec="seconds"), file_id)).rowcount != 1:
-            return False
-        row = conn.execute("SELECT sources FROM writer_sources").fetchone()
-        if row and file_id in (sources := json.loads(row[0])):
-            kept = [source for source in sources if source != file_id] or ["profile"]  # never an empty choice
-            conn.execute("UPDATE writer_sources SET sources = ?", (json.dumps(kept),))
-        for job_id, raw in conn.execute(
-            "SELECT id, writer_sources FROM jobs WHERE writer_sources IS NOT NULL"
-        ).fetchall():
-            if file_id in (sources := json.loads(raw)):
-                kept = [source for source in sources if source != file_id]
-                conn.execute(
-                    "UPDATE jobs SET writer_sources = ? WHERE id = ?", (json.dumps(kept) if kept else None, job_id)
-                )
-    return True

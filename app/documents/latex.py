@@ -8,6 +8,7 @@ from urllib.parse import quote
 import jinja2
 
 from app.documents.tiles import Tile
+from app.resume import CONTROL
 
 SPECIAL = {
     "\\": r"\textbackslash{}",
@@ -24,7 +25,6 @@ SPECIAL = {
     "]": "{]}",
 }  # fmt: skip
 SPECIAL_CHARACTER = re.compile("|".join(map(re.escape, SPECIAL)))
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters
 WEB = re.compile(r"https?://", re.I)  # the only links the PDF shows
 FACTS = ("name", "rest", "right", "second", "second_right", "link")
 HEADER = ("email", "phone", "place", "linkedin", "github", "portfolio", "scholar", "other_link")

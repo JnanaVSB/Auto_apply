@@ -94,6 +94,18 @@ def test_skipping_a_queued_job_takes_it_out_of_the_queue_and_undo_puts_it_back(c
     assert ready.queued(conn) == [jobs["Fresh"], jobs["Anyway"]]
 
 
+@pytest.mark.parametrize("number", ["9" * 5000, "²", "0", "-1"])
+def test_odd_page_and_skipped_numbers_never_break_the_page(client, jobs, number):
+    answer = client.get(f"/ready?page={number}&skipped={number}")
+    assert answer.status_code == 200 and "Page 1 of 1" in answer.text
+
+
+def test_the_ready_page_loads_the_sources_once(client, conn, jobs, monkeypatch):
+    calls, offered = [], writer_sources.offered
+    monkeypatch.setattr(writer_sources, "offered", lambda *args: calls.append(1) or offered(*args))
+    assert "confirm first: Profile" in client.get("/ready").text and len(calls) == 1
+
+
 def test_skip_hides_the_job_and_undo_brings_it_back(client, conn, jobs):
     assert press(client, jobs["Fresh"], "skip", value="1").headers["location"] == f"/ready?skipped={jobs['Fresh']}"
     text = client.get(f"/ready?skipped={jobs['Fresh']}").text
@@ -112,7 +124,14 @@ def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
     assert 'hx-get="/jobs/' in client.get(f"/jobs/{jobs['Fresh']}").text
 
 
-@pytest.mark.parametrize("path", ["/ready/999/prepare", "/ready/999/skip", "/jobs/999/preparation"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        *(f"/ready/{number}/{action}" for number in (999, 2**63) for action in ("prepare", "skip")),
+        *(f"/jobs/{number}/{part}" for number in (999, 2**63) for part in ("preparation", "sources")),
+        f"/resume-profile/files/{2**63}/remove",  # larger than the database can hold: not found, never a crash
+    ],
+)
 def test_unknown_jobs_are_not_found(client, jobs, path):
     answer = client.get(path) if path.endswith("preparation") else client.post(path, data={"csrf_token": csrf(client)})
     assert answer.status_code == 404

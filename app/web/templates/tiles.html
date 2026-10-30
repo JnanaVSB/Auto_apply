@@ -45,11 +45,11 @@
   <button type="submit">Remove this file</button> <span class="muted">(it is kept, but no longer offered)</span>
 </form>
 {% endif %}
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
 {% if resume_problem %}
 <p class="error" role="alert">{{ resume_problem }}</p>
 {% else %}
-{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
-{% if problem %}<p class="error" role="alert">Not confirmed: {{ problem }}</p>{% endif %}
 <p><strong>
   {% if current %}Confirmed on {{ confirmed.confirmed_on }} (UTC).
   {% elif confirmed %}Your resume changed since you confirmed on {{ confirmed.confirmed_on }} (UTC): check and confirm again.

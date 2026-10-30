@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import sqlcipher3
 
 from app.documents.tiles import PREFIXES, Tile, new_id
+from app.resume import CONTROL
 
 FACTS = ("name", "rest", "right", "second", "second_right", "link")
 LABELS = {"second_right": "second line's right side"}  # every other box is named as it is written
@@ -19,10 +20,11 @@ FIELD = re.compile(r"tile\.([0-9]{1,2})\.(\w+)")  # one box of one entry on the 
 TILE_ID = re.compile(r"[a-z]+-[0-9a-f]{4}(?:-[0-9]{1,3})?")
 LINK = re.compile(r"https?://\S+")
 POSITION = re.compile(r"[0-9]{1,3}")
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters
 NOT_DIGITS = re.compile(r"[^0-9]")
 CONTACT = (("full_name", "name"), ("email", "email"), ("phone", "phone"))
 LATEST = "SELECT id, resume, confirmed_on FROM tile_sets WHERE file_id IS ? ORDER BY id DESC LIMIT 1"  # NULL: Profile
+# The text each source's latest set was confirmed for, all sources at once (file_id NULL: your Profile)
+CONFIRMED_FOR = "SELECT file_id, resume FROM tile_sets WHERE id IN (SELECT max(id) FROM tile_sets GROUP BY file_id)"
 TILES_OF = "SELECT tile_id, kind, section, facts, bullets FROM tiles WHERE set_id = ? ORDER BY position"
 SAVE_TILE = "INSERT INTO tiles (set_id, tile_id, position, kind, section, facts, bullets) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
@@ -57,6 +59,11 @@ def changes(old: list[Tile], new: list[Tile]) -> list[tuple[str, Tile | None, Ti
     found = [("changed" if tile.tile_id in before else "new", before.get(tile.tile_id), tile) for tile in new]
     gone = [("gone", tile, None) for tile in old if tile.tile_id not in now]
     return [change for change in found if change[1] != change[2]] + gone
+
+
+def confirmed_for(conn: sqlcipher3.Connection) -> dict[int | None, str]:
+    """Each source's latest confirmed text (its fingerprint), without loading the entries."""
+    return dict(conn.execute(CONFIRMED_FOR))
 
 
 def as_row(tile: Tile, position: int) -> dict[str, str]:

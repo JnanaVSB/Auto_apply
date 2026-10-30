@@ -9,6 +9,8 @@ import sqlcipher3
 import yaml
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, model_validator
 
+from app.resume import CONTROL
+
 NO_ANSWER = "I prefer not to answer"
 GENDERS = ("Male", "Female", "Non-binary", NO_ANSWER)
 RACES = (
@@ -20,7 +22,6 @@ DISABILITY = ("Yes, I have a disability (or had one in the past)", "No, I do not
 STATUSES = ("citizen", "permanent resident", "F-1 OPT", "STEM OPT", "H-1B", "other")
 MAX_PAIRS = 100
 PAIR_ROW = re.compile(r"more\.(question|answer)\.([0-9]{1,3})")  # one "More answers" row on the form
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters (tabs and new lines are fine)
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PHONE = re.compile(r"[0-9 +().-]+")
 MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")

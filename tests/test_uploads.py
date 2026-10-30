@@ -5,7 +5,7 @@ import json
 import pytest
 from test_tiles import RESUME_CLS
 
-from app.documents import uploads
+from app.documents import uploads, writer_sources
 from app.documents.uploads import UploadError
 
 OTHER = RESUME_CLS.replace("Toy Driver", "Kite")  # another made-up resume, long enough to be one
@@ -22,7 +22,9 @@ def form(*files):
 def test_files_are_saved_and_offered_by_their_name(conn):
     assert uploads.upload(conn, form(("robotics-cv.tex", RESUME_CLS), ("Short Resume.tex", OTHER))) == 2
     files = uploads.offered(conn)
-    assert [file.name for file in files] == ["robotics-cv", "Short Resume"] and files[0].latex == RESUME_CLS
+    assert [file.name for file in files] == ["robotics-cv", "Short Resume"] and uploads.latex(
+        conn, files[0].id
+    ) == RESUME_CLS
     assert uploads.get(conn, files[1].id) == files[1] and uploads.get(conn, 999) is None
 
 
@@ -71,7 +73,7 @@ def test_remove_hides_a_file_keeps_it_and_takes_it_out_of_the_default(conn):
     cv, short = uploads.offered(conn)
     with conn:
         conn.execute("INSERT INTO writer_sources VALUES (1, ?)", (json.dumps([cv.id]),))
-    assert uploads.remove(conn, cv.id) and not uploads.remove(conn, cv.id)  # a second press changes nothing
+    assert writer_sources.remove(conn, cv.id) and not writer_sources.remove(conn, cv.id)  # a second press: no change
     assert uploads.offered(conn) == [short]
     assert conn.execute("SELECT count(*) FROM resume_files").fetchone()[0] == 2  # kept
     assert json.loads(conn.execute("SELECT sources FROM writer_sources").fetchone()[0]) == ["profile"]

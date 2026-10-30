@@ -38,7 +38,6 @@ EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
-MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 SCHEDULE_CHECK_SECONDS = 60
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
 templates.env.globals["US_LABELS"] = queries.US_LABELS
@@ -138,7 +137,7 @@ def create_app(
     @app.get("/jobs/{job_id:int}")
     async def job_page(request: Request, job_id: int) -> Response:
         conn = request.app.state.conn
-        job = queries.job(conn, _known(job_id))
+        job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
         job["scoring"] = queries.job_scoring(conn, job_id, _scoring())
@@ -147,7 +146,7 @@ def create_app(
     @app.post("/jobs/{job_id:int}/prepare")
     async def prepare_anyway(request: Request, job_id: int) -> Response:
         form = request.state.form
-        if not actions.set_prepare_anyway(request.app.state.conn, _known(job_id), form.get("value") == "1"):
+        if not actions.set_prepare_anyway(request.app.state.conn, queries.known(job_id), form.get("value") == "1"):
             raise HTTPException(404)
         if form.get("to") == "list":  # pressed in the Low score list: back to that list
             return RedirectResponse(_back(form.get("back", "")), 303)
@@ -155,7 +154,7 @@ def create_app(
 
     @app.post("/jobs/{job_id:int}/score")
     async def score_job(request: Request, job_id: int) -> Response:
-        if queries.job(request.app.state.conn, _known(job_id)) is None:
+        if queries.job(request.app.state.conn, queries.known(job_id)) is None:
             raise HTTPException(404)
         request.app.state.scorer.notice = request.app.state.scorer.start([job_id])
         return RedirectResponse("/collect#scoring", 303)
@@ -209,14 +208,14 @@ def create_app(
         form = request.state.form
         if form.get("label") not in ANSWERS:
             raise HTTPException(400, "Choose yes, maybe or no, or clear the mark.")
-        if not actions.set_answer(request.app.state.conn, _known(job_id), form["label"]):
+        if not actions.set_answer(request.app.state.conn, queries.known(job_id), form["label"]):
             raise HTTPException(404)
         return _to_job(job_id, form)
 
     @app.post("/jobs/{job_id:int}/not-interested")
     async def not_interested(request: Request, job_id: int) -> Response:
         form = request.state.form
-        if not actions.set_not_interested(request.app.state.conn, _known(job_id), form.get("value") == "1"):
+        if not actions.set_not_interested(request.app.state.conn, queries.known(job_id), form.get("value") == "1"):
             raise HTTPException(404)
         return _to_job(job_id, form)
 
@@ -225,7 +224,7 @@ def create_app(
         form = request.state.form
         if form.get("choice") not in ("yes", "no", "auto"):
             raise HTTPException(400, "Choose US, not US, or let collections decide again.")
-        if not actions.set_location(request.app.state.conn, _known(job_id), form["choice"]):
+        if not actions.set_location(request.app.state.conn, queries.known(job_id), form["choice"]):
             raise HTTPException(404)
         return _to_job(job_id, form)
 
@@ -262,7 +261,7 @@ def create_app(
             raise HTTPException(404)
         job, back = form.get("job", ""), form.get("back", "")
         if DIGITS.fullmatch(job):
-            return _to_job(_known(int(job)), form)
+            return _to_job(queries.known(int(job)), form)
         return RedirectResponse(_boards_back(back) if back.startswith("/boards") else "/settings", 303)
 
     @app.get("/boards")
@@ -446,13 +445,6 @@ async def _form(request: Request) -> dict[str, str]:
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "The form could not be read.") from None
     return {name: values[-1] for name, values in fields.items()}
-
-
-def _known(job_id: int) -> int:
-    """A job number the database can hold; anything larger is "Page not found"."""
-    if job_id > MAX_JOB_ID:
-        raise HTTPException(404)
-    return job_id
 
 
 def _back(address: str) -> str:

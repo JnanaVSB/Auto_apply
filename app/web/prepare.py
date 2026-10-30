@@ -88,7 +88,10 @@ def add_routes(
             set_id = tile_sets.confirm(conn, tile_sets.check(rows), view["resume"], file and file.id)
         except tile_sets.TilesError as error:  # nothing saved; what was typed stays on the page
             return page(
-                request, "tiles.html", **view | {"rows": rows, "resume": form.get("resume")}, problem=str(error)
+                request,
+                "tiles.html",
+                **view | {"rows": rows, "resume": form.get("resume")},
+                problem=f"Not confirmed: {error}",
             )
         done = "confirmed" if set_id else "unchanged"
         source = f"file={file.id}&" if file else ""
@@ -105,7 +108,7 @@ def add_routes(
 
     @app.post(PROFILE + "/files/{file_id:int}/remove")
     async def remove_file(request: Request, file_id: int) -> Response:
-        if file_id > MAX_JOB_ID or not uploads.remove(request.app.state.conn, file_id):
+        if not writer_sources.remove(request.app.state.conn, queries.known(file_id)):
             raise HTTPException(404)
         return RedirectResponse(f"{PROFILE}?removed=1", 303)
 
@@ -146,30 +149,34 @@ def add_routes(
     async def ready_page(request: Request) -> Response:
         """The jobs ready for preparation (one rule, in app.scoring.ready), newest first."""
         conn, current, number = request.app.state.conn, scoring(), request.query_params.get("page", "1")
-        view = queries.Filters(scoring=("ready",), page=int(number) if number.isascii() and number.isdigit() else 1)
-        listing = queries.list_jobs(conn, view, current)
+        view = queries.Filters(
+            scoring=("ready",), page=max(1, int(number)) if queries.PAGE_NUMBER.fullmatch(number) else 1
+        )
+        listing, offered = queries.list_jobs(conn, view, current), writer_sources.offered(conn, current.resume)
         ids = [job["id"] for job in listing.jobs]
         chosen = {job_id: writer_sources.of_job(conn, job_id)[0] for job_id in ids}
-        uses = {job_id: writer_sources.names(conn, chosen[job_id]) for job_id in ids}
-        missing = {job_id: writer_sources.unconfirmed(conn, chosen[job_id], current.resume) for job_id in ids}
+        uses = {job_id: writer_sources.names(offered, chosen[job_id]) for job_id in ids}
+        missing = {job_id: writer_sources.unconfirmed(offered, chosen[job_id]) for job_id in ids}
         marks = ", ".join("?" * len(ids))
         queued = dict(conn.execute(f"SELECT id, prepare_requested_on FROM jobs WHERE id IN ({marks})", ids))  # noqa: S608
         skipped = request.query_params.get("skipped", "")
         return page(
             request, "ready.html", listing=listing, view=view, queued=queued, uses=uses, missing=missing,
-            skipped=int(skipped) if skipped.isascii() and skipped.isdigit() else None,
+            skipped=int(skipped) if queries.PAGE_NUMBER.fullmatch(skipped) else None,
             problem=PROBLEMS.get(request.query_params.get("problem", "")),
         )  # fmt: skip
 
     @app.post("/ready/{job_id:int}/prepare")
     async def prepare_job(request: Request, job_id: int) -> Response:
         conn, current = request.app.state.conn, scoring()
-        job = queries.job(conn, job_id) if job_id <= MAX_JOB_ID else None
+        job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
         if job["not_interested"]:
             problem = "skipped"
-        elif writer_sources.unconfirmed(conn, writer_sources.of_job(conn, job_id)[0], current.resume):
+        elif writer_sources.unconfirmed(
+            writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job_id)[0]
+        ):
             problem = "tiles"
         elif job["status"] != "open" or queries.job_scoring(conn, job_id, current)["status"] != "ready":
             problem = "not-ready"
@@ -183,7 +190,7 @@ def add_routes(
     async def skip_job(request: Request, job_id: int) -> Response:
         """Skip is your "Not interested" switch: the job is only hidden, and Undo brings it back."""
         value = request.state.form.get("value") == "1"
-        if job_id > MAX_JOB_ID or not actions.set_not_interested(request.app.state.conn, job_id, value):
+        if not actions.set_not_interested(request.app.state.conn, queries.known(job_id), value):
             raise HTTPException(404)
         return RedirectResponse(f"/ready?skipped={job_id}" if value else "/ready", 303)
 
@@ -191,14 +198,15 @@ def add_routes(
     async def preparation_box(request: Request, job_id: int) -> Response:
         """The job page's Ready to Apply box, loaded by the page itself."""
         conn, current = request.app.state.conn, scoring()
-        job = queries.job(conn, job_id) if job_id <= MAX_JOB_ID else None
+        job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
-            own=own, files=uploads.offered(conn), missing=writer_sources.unconfirmed(conn, chosen, current.resume),
+            own=own, files=uploads.offered(conn),
+            missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
             ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
         )  # fmt: skip
 
@@ -210,13 +218,12 @@ def add_routes(
             chosen = None if form.get("default") else writer_sources.ticked(conn, form)
         except writer_sources.SourcesError:
             chosen = None  # nothing ticked: the default
-        if job_id > MAX_JOB_ID or not writer_sources.save_job(conn, job_id, chosen):
+        if not writer_sources.save_job(conn, queries.known(job_id), chosen):
             raise HTTPException(404)
         return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
 PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED}
-MAX_JOB_ID = 2**63 - 1  # the largest number the database can hold
 
 
 def _file(conn: sqlcipher3.Connection, number: str) -> uploads.ResumeFile | None:
@@ -234,7 +241,7 @@ def _tiles_view(conn: sqlcipher3.Connection, data_dir: Path, file: uploads.Resum
     made from its current text, else a fresh reading."""
     files = uploads.offered(conn)
     if file:
-        latex, resume = file.latex, file.fingerprint
+        latex, resume = uploads.latex(conn, file.id), file.fingerprint
     else:
         try:
             latex = read_latex(data_dir)
