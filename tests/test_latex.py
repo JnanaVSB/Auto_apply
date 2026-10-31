@@ -62,3 +62,9 @@ def test_the_layouts_of_the_three_resume_styles():
     assert "Made-up engineer who builds pretend robots.\\par" in source  # a summary is a paragraph
     publications = source.split(r"\resumesection{Publications}")[1].split(r"\resumesection")[0]
     assert publications.count(r"\item") == 2 and publications.count(r"\begin{itemize}") == 1
+
+
+def test_a_summary_is_always_a_paragraph_whatever_its_name_box_holds():
+    named = Tile("sum-1", "summary", "Summary", {"name": "Alex Example"}, ("Made-up engineer who builds robots.",))
+    body = latex.resume(CONTACT, [named]).split(r"\resumesection{Summary}")[1]
+    assert body.lstrip().startswith("Made-up engineer who builds robots.\\par") and "Alex Example" not in body

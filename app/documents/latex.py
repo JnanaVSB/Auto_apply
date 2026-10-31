@@ -98,6 +98,8 @@ def _sections(tiles: list[Tile]) -> list[dict]:
 def _layout(tile: Tile, facts: dict) -> str:
     if tile.kind == "skills":
         return "skills"
+    if tile.kind == "summary":  # its text under its heading, whatever its name box holds: never a bold first line
+        return "paragraph"
     only_name = not any(facts[name] for name in ("rest", "right", "second", "second_right"))  # a link isn't shown
     if only_name and facts["name"] == tile.section:  # a summary, or another section that is just text
         return "paragraph"
