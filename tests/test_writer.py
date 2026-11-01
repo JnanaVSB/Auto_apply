@@ -142,6 +142,7 @@ def test_a_good_answer_is_kept_in_your_order_with_new_numbers_flagged(shield):
             {"source": "profile", "tile_id": "pub-1", "skills": [], "bullets": [{"text": "[ME]", "from": [0]}]},
         ],
         "notes": "Put the robot learning first. Then skills.",
+        "details": {"[LINK]": "https://github.com/alex-example", "[ME]": "Alex Example"},  # only those it uses
     }  # fmt: skip
     assert flags == [{"source": "profile", "tile_id": "exp-1", "bullet": 0, "numbers": ["95", "3"]}]
 
@@ -262,3 +263,11 @@ def test_your_words_pass_the_privacy_check_too(shield):
     assert "Ask [ME]" in writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, "Ask Alex Example")[1]
     with pytest.raises(PrivacyStop, match="^a phone number in your feedback$"):
         writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, "Call 555-010-0123 for details.")
+
+
+def test_a_revision_sends_the_previous_version_with_todays_placeholders():
+    linked = privacy.shield(CONTACT | {"linkedin": "https://linkedin.com/in/alex-example"}, [RESUME_CLS], PROFILE)
+    lab = {"source": "profile", "tile_id": "exp-1", "bullets": [bullet("Shared it at [LINK].", 2)], "skills": []}
+    previous = {"entries": [lab], "notes": "", "details": {"[LINK]": "https://github.com/alex-example"}}
+    _, user = writer.request(*JOB, labelled(*PROFILE), linked, previous, "Shorter.")
+    assert "2: Code at [LINK-2]" in user and "<previous>\nE2:\n- Shared it at [LINK-2]. (from 2)\n</previous>" in user

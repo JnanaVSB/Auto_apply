@@ -67,9 +67,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if latest is None or latest["status"] != "done":
             raise HTTPException(404)
         try:
-            target, source = runs.pdf_source(conn, load_config(), latest["id"])
+            target, source, note = runs.pdf_source(conn, load_config(), latest["id"])
             await run_in_threadpool(pdf.build_kept, data_dir, target, source)  # up to minutes the first time
-            runs.note_pdf(conn, latest["id"], None)
+            runs.note_pdf(conn, latest["id"], note)
         except (pdf.PdfError, privacy.PrivacyError, ResumeError, ConfigError) as error:
             runs.note_pdf(conn, latest["id"], error)
         return RedirectResponse(f"/jobs/{job_id}", 303)
@@ -85,15 +85,15 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if found is None or found[5] is None:  # no such version, or no draft
             raise HTTPException(404)
         version = dict(zip([column[0] for column in rows.description], found, strict=True))
-        entries = runs.originals(conn, version["sources"])
+        entries, draft = runs.originals(conn, version["sources"]), json.loads(version["draft"])
         try:
-            restore = runs.shield_for(conn, load_config(), entries).restore
+            restore = runs.put_back(conn, load_config(), entries, draft)[0]
         except (privacy.PrivacyError, ResumeError, ConfigError):  # shown as the Writer saw it, placeholders and all
             restore = str
         return page(
             request, "changes.html", job=queries.job(conn, job_id), version=version,
-            rows=_rows(entries, json.loads(version["draft"]), json.loads(version["flags"]), restore),
-            notes=json.loads(version["draft"])["notes"], model=json.loads(version["writer"])["model"],
+            rows=_rows(entries, draft, json.loads(version["flags"]), restore),
+            notes=draft["notes"], model=json.loads(version["writer"])["model"],
             built=pdf.built(pdf.tailored(data_dir, job_id, version["version"])),
         )  # fmt: skip
 

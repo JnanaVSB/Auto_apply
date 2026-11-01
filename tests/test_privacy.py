@@ -40,6 +40,11 @@ def test_each_detail_always_gets_the_same_placeholder():
     assert first.hide(text) == again.hide(text) == "[ME], [EMAIL], [PHONE], [LINK]"
 
 
+def test_a_draft_keeps_what_each_of_its_placeholders_stood_for():
+    assert shield().details("Mail [EMAIL], see [LINK-9]; [EMAIL] again") == {"[EMAIL]": "alex@example.com"}
+    assert privacy.restore("[EMAIL] or [ME]", {"[EMAIL]": "old@example.com"}) == "old@example.com or [ME]"
+
+
 def test_putting_back_restores_the_exact_text():
     text = "A. Example and Lex built it; mail alex@example.com or call +1 (555) 010-0199; https://example.org/paper"
     filter_ = shield()

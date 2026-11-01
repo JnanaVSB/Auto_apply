@@ -30,7 +30,7 @@
       {% elif not latest %}not started
       {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else "done" }}: version {{ latest.version }}
         <br>{% if found.built %}<a href="/documents/{{ job.id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a>{% if found.built.pages > 1 %} <span class="mark warn">{{ found.built.pages }} pages</span>{% endif %} · {% endif %}<a href="/jobs/{{ job.id }}/changes?version={{ latest.version }}">Changes</a>
-        {% if latest.problem %}<br><span class="error">PDF could not be built: see the job's page</span>{% endif %}
+        {% if latest.problem %}<br><span class="error">{{ latest.problem.split(":")[0] }}: see the job's page</span>{% endif %}
       {% else %}<span class="error">{{ labels[latest.status] }}</span> <span class="muted">(version {{ latest.version }}; see the job's page)</span>{% endif %}
       <br><span class="muted">uses: {{ uses[job.id] | join(" + ") }}</span>
       {% if missing[job.id] %}<br><a class="error" href="/resume-profile">confirm first: {{ missing[job.id] | join(", ") }}</a>{% endif %}</td>

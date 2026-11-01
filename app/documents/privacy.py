@@ -63,9 +63,18 @@ class Shield:
         return text
 
     def restore(self, text: str) -> str:
-        """Only on this computer: each placeholder back to its exact text (an unknown one is left as it is)."""
+        return restore(text, self.details(text))
+
+    def details(self, text: str) -> dict[str, str]:
+        """The placeholders in `text` and the exact text each stands for: kept with a draft, so it is always put back
+        as it was written, even after your details change and the placeholders are numbered differently."""
         real = {placeholder: value for _, value, placeholder in self.values}
-        return PLACEHOLDER.sub(lambda match: real.get(match[0], match[0]), text)
+        return {found: real[found] for found in PLACEHOLDER.findall(text) if found in real}
+
+
+def restore(text: str, details: dict[str, str]) -> str:
+    """Only on this computer: each placeholder back to its exact text (an unknown one is left as it is)."""
+    return PLACEHOLDER.sub(lambda match: details.get(match[0], match[0]), text)
 
 
 def shield(contact: dict, sources: list[str], tiles: list[Tile]) -> Shield:

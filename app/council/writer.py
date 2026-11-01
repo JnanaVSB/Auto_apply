@@ -15,7 +15,7 @@ import sqlcipher3
 
 from app.config import PROJECT_DIR
 from app.documents import tile_sets, writer_sources
-from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check
+from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check, restore
 from app.documents.tiles import Tile
 from app.resume import CONTROL
 
@@ -93,7 +93,7 @@ class Entry:
 
 
 class Checked(NamedTuple):
-    draft: dict  # {"entries": [{"source", "tile_id", "bullets": [{"text", "from"}], "skills"}], "notes"}
+    draft: dict  # {"entries": [{"source", "tile_id", "bullets": [{"text", "from"}], "skills"}], "notes", "details"}
     flags: list[dict]  # numbers not in the cited originals: {"source", "tile_id", "bullet", "numbers"}
 
 
@@ -164,7 +164,9 @@ def _harmless(text: str) -> str:
 
 
 def _previous(draft: dict, entries: list[Entry]) -> str:
-    """A draft as the Writer wrote it, by the labels it is given now: bullets with what they are based on, skills."""
+    """A draft as the Writer wrote it, by the labels it is given now: bullets with what they are based on, skills.
+    Your details are put back as the draft was written, so the gate hides them with today's placeholders, the same
+    ones as your entries'."""
     labels = {(entry.source, entry.tile.tile_id): entry.label for entry in entries}
     lines = []
     for item in draft["entries"]:
@@ -174,7 +176,7 @@ def _previous(draft: dict, entries: list[Entry]) -> str:
         else:
             lines += [f"{label}:", *(f"- {bullet['text']} (from {', '.join(map(str, bullet['from']))})"
                                      for bullet in item["bullets"])]  # fmt: skip
-    return _harmless("\n".join(lines))
+    return _harmless(restore("\n".join(lines), draft.get("details", {})))
 
 
 def _block(entry: Entry, hints: bool) -> str:
@@ -243,7 +245,7 @@ def checked(text: str, entries: list[Entry], shield: Shield) -> Checked:
         if (new := _new_numbers(bullet, entry.tile))
     ]
     notes = " ".join(CONTROL.sub("", data["notes"]).split())[:MAX_NOTES]
-    return Checked({"entries": draft, "notes": notes}, flags)
+    return Checked({"entries": draft, "notes": notes, "details": shield.details(json.dumps(draft))}, flags)
 
 
 def _as_seen(entry: Entry, shield: Shield) -> Entry:

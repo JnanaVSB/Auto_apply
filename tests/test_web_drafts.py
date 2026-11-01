@@ -98,6 +98,16 @@ def test_the_changes_page_shows_each_entry_beside_the_writers_version(client, co
         assert client.get(address).status_code == 404
 
 
+def test_the_changes_page_puts_back_what_each_placeholder_stood_for(client, conn, job):
+    version(conn, job)
+    with conn:
+        conn.execute(
+            "UPDATE preparations SET draft = ?", (json.dumps(DRAFT | {"details": {"[LINK]": "github.com/x"}}),)
+        )
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT | {"linkedin": "https://linkedin.com/in/x"}}))
+    assert "Shared the &lt;b&gt;code&lt;/b&gt; at github.com/x." in client.get(f"/jobs/{job}/changes?version=1").text
+
+
 def test_without_your_name_the_changes_page_shows_the_placeholders(client, conn, job):
     questionnaire.save(conn, questionnaire.check({}))
     version(conn, job)
@@ -127,6 +137,20 @@ def test_building_the_pdf_again_notes_how_it_went(client, conn, data_dir, job, m
     )
 
 
+def test_building_the_pdf_again_says_when_a_bullet_shows_a_detail_changed_since(client, conn, job, monkeypatch):
+    version(conn, job)
+    with conn:
+        conn.execute(
+            "UPDATE preparations SET draft = ?", (json.dumps(DRAFT | {"details": {"[LINK]": "github.com/x"}}),)
+        )
+    monkeypatch.setattr(drafts.pdf, "build_kept", lambda data_dir, target, source: None)
+    client.post(f"/jobs/{job}/pdf", data={"csrf_token": csrf(client)})
+    assert (
+        "PDF built, but a bullet still shows a link you have changed since"
+        in client.get(f"/jobs/{job}/preparation").text
+    )
+
+
 def test_the_box_shows_the_pdf_its_pages_and_every_version(client, conn, data_dir, job):
     version(conn, job, 1, "by_hand", "Writer failed twice (x): check by hand, or press Retry.", cost=0.5)
     version(conn, job, 2)
@@ -148,6 +172,8 @@ def test_the_ready_page_shows_each_jobs_state_cost_and_buttons(client, conn, dat
     text = client.get("/ready").text
     assert "done: version 2" in text and f'href="/jobs/{job}/changes?version=2">Changes' in text
     assert "2 pages</span>" in text and "$0.25" in text and ">Prepare</button>" not in text
+    version(conn, job, 3, problem="PDF built, but a bullet still shows a link you have changed since: update it.")
+    assert "PDF built, but a bullet still shows a link you have changed since: see the job" in client.get("/ready").text
 
 
 def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, monkeypatch):

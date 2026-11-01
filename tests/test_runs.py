@@ -259,6 +259,23 @@ def test_a_good_draft_becomes_a_pdf_with_your_details_put_back(conn, data_dir, j
     assert "Alex Example" in source and "[" not in source.split(r"\begin{document}")[1].replace("{[}", "")
 
 
+def test_a_rebuilt_pdf_puts_back_what_each_placeholder_stood_for(conn, data_dir, job, writer_answers):
+    writer_answers[1].append(answer(("E2", [bullet("Shared the code at [LINK].", 2)], [])))
+    runs.prepare(conn, config(data_dir), job)
+    linkedin = "https://linkedin.com/in/alex-example"  # now [LINK]: your links are numbered from the Questionnaire's
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT | {"linkedin": linkedin}}))
+    _, source, note = runs.pdf_source(conn, config(data_dir), version(conn)["id"])
+    assert "Shared the code at https://github.com/alex-example." in source and note is None
+    assert "linkedin.com/in/alex-example" in source  # the header: the Questionnaire as it is now
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT | {"github": "https://github.com/alex-new"}}))
+    _, source, note = runs.pdf_source(conn, config(data_dir), version(conn)["id"])
+    assert "Shared the code at https://github.com/alex-example." in source and "github.com/alex-new" in source
+    assert note == (
+        "PDF built, but a bullet still shows a link you have changed since: update that entry on the Resume Profile "
+        "page, then press Prepare for a fresh version."
+    )
+
+
 def test_a_failed_build_keeps_the_draft_and_says_why(conn, data_dir, job, writer_answers, monkeypatch):
     def failing(data_dir, target, source):
         raise runs.pdf.PdfError("The LaTeX has an error (Undefined control sequence) on line 12.")

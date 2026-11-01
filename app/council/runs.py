@@ -7,8 +7,10 @@ by hand: Retry starts a new version) or "stopped" (nothing more was sent: fix th
 Messages name the cause and the fix, never your text, the job ad or the answer."""
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 import sqlcipher3
@@ -51,6 +53,12 @@ ERROR = 300  # characters of a failed try's reason kept with its step
 CLOSED = "Interrupted: the dashboard closed while the Writer was working"
 NO_BASE = "There is no finished version to change yet: press Prepare first."
 CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
+DETAIL_CHANGED = ("PDF built, but a bullet still shows {} you have changed since: update that entry on the Resume "
+                  "Profile page, then press Prepare for a fresh version.")  # fmt: skip
+DETAIL_KINDS = {
+    "ME": "your name", "EMAIL": "an email address", "PHONE": "a phone number", "ADDRESS": "a street address",
+    "LINK": "a link",
+}  # fmt: skip
 
 
 def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST) -> dict | None:
@@ -112,39 +120,56 @@ def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: 
     _finish(conn, preparation, status, problem, result)
     if status == "done":
         try:
-            target, source = pdf_source(conn, config, preparation)
+            target, source, note = pdf_source(conn, config, preparation)
             pdf.build_kept(config.data_dir, target, source)
-            note_pdf(conn, preparation, None)
+            note_pdf(conn, preparation, note)
         except (pdf.PdfError, privacy.PrivacyError, ResumeError) as error:
             note_pdf(conn, preparation, error)
     return preparation
 
 
-def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) -> tuple[Path, str]:
-    """Where a version's tailored PDF goes, and its LaTeX: your original fixed facts, the Writer's bullets and skills
-    with your details put back (on this computer only), and the Questionnaire's contact header. A cover letter: your
-    header, the version's date, the job, and the Writer's paragraphs."""
+def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) -> tuple[Path, str, str | None]:
+    """Where a version's tailored PDF goes, its LaTeX, and a note for the built PDF (else None). The LaTeX: your
+    original fixed facts, the Writer's bullets and skills with your details put back (on this computer only), and the
+    Questionnaire's contact header as it is now. A cover letter: that header, the version's date, the job, and the
+    Writer's paragraphs."""
     job_id, kind, number, sources, draft, created_on = conn.execute(VERSION, (preparation,)).fetchone()
     contact, target = questionnaire.load(conn)[0]["contact"], pdf.tailored(config.data_dir, job_id, number, kind)
     if kind == LETTER:
         title, company, _, _ = conn.execute(JOB, (job_id,)).fetchone()
         day = datetime.fromisoformat(created_on).astimezone()
         paragraphs = json.loads(draft)["paragraphs"]
-        return target, latex.cover_letter(contact, title, company, f"{day:%B} {day.day}, {day.year}", paragraphs)
-    found = originals(conn, sources)
-    shield = shield_for(conn, config, found)
+        text = latex.cover_letter(contact, title, company, f"{day:%B} {day.day}, {day.year}", paragraphs)
+        return target, text, None
+    found, draft = originals(conn, sources), json.loads(draft)
+    restore, note = put_back(conn, config, found, draft)
     by_id = {(entry.source, entry.tile.tile_id): entry.tile for entry in found}
-    tiles = [
-        _tailored(by_id[(chosen["source"], chosen["tile_id"])], chosen, shield)
-        for chosen in json.loads(draft)["entries"]
-    ]
-    return target, latex.resume(contact, tiles)
+    tiles = [_tailored(by_id[(chosen["source"], chosen["tile_id"])], chosen, restore) for chosen in draft["entries"]]
+    return target, latex.resume(contact, tiles), note
 
 
-def note_pdf(conn: sqlcipher3.Connection, preparation: int, error: Exception | None) -> None:
-    """A failed build keeps the draft and says why (the kind of error and its line, never your text)."""
+def put_back(
+    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], draft: dict
+) -> tuple[Callable[[str], str], str | None]:
+    """How a draft's placeholders are put back (on this computer only): each with the exact text it stood for when the
+    draft was written, kept with it, so a later change to your details can't put a different link or name in its
+    place; and a note when a bullet still shows a detail you have changed since (today's filter no longer knows it as
+    one of your details). A draft from before the details were kept: with today's, as then."""
+    today = shield_for(conn, config, entries)
+    if "details" not in draft:
+        return today.restore, None
+    changed = [DETAIL_KINDS[placeholder[1:-1].split("-")[0]]
+               for placeholder, value in draft["details"].items()
+               if not privacy.PLACEHOLDER.fullmatch(today.hide(value))]  # fmt: skip
+    note = DETAIL_CHANGED.format(" and ".join(dict.fromkeys(changed))) if changed else None
+    return partial(privacy.restore, details=draft["details"]), note
+
+
+def note_pdf(conn: sqlcipher3.Connection, preparation: int, note: Exception | str | None) -> None:
+    """A failed build keeps the draft and says why (the kind of error and its line, never your text); a built one keeps
+    its note, if any."""
     with conn:
-        conn.execute(NOTE, (f"PDF could not be built: {error}" if error else None, preparation))
+        conn.execute(NOTE, (f"PDF could not be built: {note}" if isinstance(note, Exception) else note, preparation))
 
 
 def originals(conn: sqlcipher3.Connection, sources: str) -> list[writer.Entry]:
@@ -160,10 +185,10 @@ def shield_for(conn: sqlcipher3.Connection, config: Config, entries: list[writer
     return privacy.shield(questionnaire.load(conn)[0]["contact"], latex_texts, [entry.tile for entry in entries])
 
 
-def _tailored(tile, chosen: dict, shield: privacy.Shield):
+def _tailored(tile, chosen: dict, restore: Callable[[str], str]):
     """One tile as the Writer chose it: its fixed facts unchanged, its bullets and skills the draft's."""
-    skills = {"skills": [shield.restore(skill) for skill in chosen["skills"]]} if tile.kind == "skills" else {}
-    return replace(tile, facts=tile.facts | skills, bullets=tuple(shield.restore(b["text"]) for b in chosen["bullets"]))
+    skills = {"skills": [restore(skill) for skill in chosen["skills"]]} if tile.kind == "skills" else {}
+    return replace(tile, facts=tile.facts | skills, bullets=tuple(restore(b["text"]) for b in chosen["bullets"]))
 
 
 def recover(conn: sqlcipher3.Connection) -> None:
