@@ -1,7 +1,8 @@
 """The one AI connector: ask a model for a JSON answer of a given shape, through Ollama on this computer, an
 OpenAI-compatible service or the Anthropic API, as one role's settings say. Keys come only from the keychain.
 
-Errors name the cause and the fix; they never include a key, the texts sent or the answer. Every answer comes with
+Errors name the cause and the fix; they never include a key, the texts sent or the answer (a failure keeps what came
+back apart, in `reply`, for the Failed tries page). Every answer comes with
 the tokens the service counted, so its cost can be worked out (app/llm/prices.py), even for a failed answer that was
 charged.
 """
@@ -38,6 +39,7 @@ class LLMError(Exception):
     def __init__(self, message: str, usage: Usage = NOTHING) -> None:
         super().__init__(message)
         self.usage = usage
+        self.reply: str | None = None  # what the service sent back, if anything (any key in it shown as [KEY])
 
 
 class StopScoring(LLMError):  # noqa: N818 (an instruction, not just an error)
@@ -84,9 +86,17 @@ def call(
     service's usual one; `timeout` is in seconds."""
     service = _service(role)
     key = None if role.service == "ollama" or role.key_name is None else _key(role)
-    with httpx.Client(transport=transport, timeout=timeout, follow_redirects=False, trust_env=False) as client:
+    came: list[httpx.Response] = []  # what the service sent back, read once the answer fails
+    with httpx.Client(
+        transport=transport, timeout=timeout, follow_redirects=False, trust_env=False,
+        event_hooks={"response": [came.append]},
+    ) as client:  # fmt: skip
         try:  # trust_env=False: no proxy settings or other surprises from the environment
             return service.answer(client, role, key, system, user, schema, retry, answer_limit)
+        except LLMError as error:
+            if came:
+                error.reply = came[-1].text.replace(key, "[KEY]") if key else came[-1].text
+            raise
         except (httpx.ConnectError, httpx.ConnectTimeout):  # never sent, so never charged
             if role.service == "ollama":
                 raise StopScoring("Ollama isn't running: start it with `ollama serve`.") from None

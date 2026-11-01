@@ -193,6 +193,53 @@ def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, mo
     assert 'href="/usage"' in text  # in the menu
 
 
+TRY = """INSERT INTO failed_tries (step_id, try_number, output_tokens, cost, reason, reply, reply_length, saved_on)
+    SELECT id, ?, 8192, ?, ?, ?, ?, '2026-10-30T10:05:00+00:00' FROM steps WHERE preparation_id = ?"""
+
+
+def test_the_failed_tries_page_shows_what_came_back(client, conn, job):
+    assert "No failed tries" in client.get("/failed-tries").text and 'href="/failed-tries"' in client.get("/usage").text
+    found = version(conn, job, 1, "by_hand", "Writer failed twice (x): check by hand, or press Retry.")
+    with conn:
+        conn.execute(TRY, (1, 0.17, "the answer was cut off", '{"entries": [{"text": "<b>[ME]</b>', 120_000, found))
+        conn.execute(TRY, (2, None, "no answer within 600 seconds", None, None, found))
+    text = client.get("/failed-tries").text
+    assert text.index("no answer within 600 seconds") < text.index("the answer was cut off")  # newest first
+    assert "&lt;b&gt;[ME]&lt;/b&gt;" in text and "<b>[ME]" not in text  # as it came, never run as a page
+    assert "(the first 34 of 120,000 characters)" in text and "Nothing came back." in text and "not counted" in text
+    assert "2026-10-30 10:05" in text and "Resume 1" in text and f'href="/jobs/{job}"' in text and "$0.17" in text
+    assert f'href="/failed-tries?version={found}">2 failed tries</a>' in client.get(f"/jobs/{job}/preparation").text
+    assert "cut off" in client.get(f"/failed-tries?version={found}").text
+    assert "No failed tries for this version" in client.get(f"/failed-tries?version={found + 1}").text
+
+
+def test_a_cover_letter_with_failed_tries_links_to_them(client, conn, job):
+    letter_version(conn, job, 1, "by_hand", "Writer failed twice.")
+    (letter,) = conn.execute("SELECT id FROM preparations WHERE kind = 'cover_letter'").fetchone()
+    with conn:
+        conn.execute(STEP, (letter, 0))
+        conn.execute(TRY, (1, 0, "reason", None, None, letter))
+    link = f'<a href="/failed-tries?version={letter}">1 failed try</a>'
+    assert f"Cover letter 1 · {link}" in client.get(f"/jobs/{job}/preparation").text
+    letter_version(conn, job, 2)  # the newest has none; the earlier one still links
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert f"($0.00 · {link})" in text and "Cover letter 2 ·" not in text
+
+
+def test_the_failed_tries_page_goes_page_by_page(client, conn, job, monkeypatch):
+    monkeypatch.setattr(drafts.queries, "PAGE_SIZE", 1)
+    found = version(conn, job, 1, "by_hand", "Writer failed twice.")
+    with conn:
+        for number in (1, 2):
+            conn.execute(TRY, (number, 0, f"reason {number}", None, None, found))
+    first = client.get("/failed-tries").text
+    assert "reason 2" in first and "reason 1" not in first and 'href="/failed-tries?page=2">Next' in first
+    second = client.get("/failed-tries?page=2").text
+    assert "reason 1" in second and "Next" not in second and 'href="/failed-tries?page=1">Previous' in second
+    for odd in ("9" * 5000, "²", "-1", "0"):  # never a crash
+        assert client.get(f"/failed-tries?page={odd}&version={odd}").status_code == 200
+
+
 def ask(client, job, words):
     return client.post(f"/jobs/{job}/request-changes", data={"csrf_token": csrf(client), "feedback": words}).text
 

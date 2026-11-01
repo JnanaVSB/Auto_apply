@@ -410,6 +410,23 @@ UPGRADES = (
     );
     CREATE INDEX steps_day ON steps (day);
     """,
+    # 14: every failed try of a step, kept whole for troubleshooting (the Failed tries page)
+    """
+    CREATE TABLE failed_tries (
+        id INTEGER PRIMARY KEY,
+        step_id INTEGER NOT NULL REFERENCES steps (id),
+        try_number INTEGER NOT NULL CHECK (try_number >= 1),  -- 1, or 2 for the retry
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost REAL CHECK (cost >= 0),  -- this try's dollars; NULL: not counted (no price)
+        reason TEXT NOT NULL,  -- why it failed, whole; never your text
+        reply TEXT,  -- what came back, if anything: details still as placeholders, at most 100,000 characters
+        reply_length INTEGER,  -- set only when the reply was cut: how long it was
+        saved_on TEXT NOT NULL
+    );
+    CREATE INDEX failed_tries_step ON failed_tries (step_id);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

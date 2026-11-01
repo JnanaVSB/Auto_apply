@@ -1,5 +1,5 @@
 """What the Writer made, kept apart from main.py and prepare.py: a job's state on the Ready pages, its tailored PDF,
-building that PDF again, the "changes vs your master" page, and the Usage page."""
+building that PDF again, the "changes vs your master" page, the Usage page and the Failed tries page."""
 
 import json
 from collections.abc import Callable
@@ -109,6 +109,20 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         return page(
             request, "usage.html", by=by, periods=list(SHOWN), rows=spending.history(conn, by)[: SHOWN[by]],
             spent=spending.spent(conn, spending.today()), limits=limits,
+        )  # fmt: skip
+
+    @app.get("/failed-tries")
+    async def failed_tries(request: Request) -> Response:
+        """The Writer's failed tries with what came back, for troubleshooting: newest first, a page at a time; with
+        ?version=, only that version's."""
+        number, version = (request.query_params.get(name, "") for name in ("page", "version"))
+        number = max(1, int(number)) if queries.PAGE_NUMBER.fullmatch(number) else 1
+        version = int(version) if queries.PAGE_NUMBER.fullmatch(version) else None
+        size = queries.PAGE_SIZE
+        rows = runs.failed_tries(request.app.state.conn, size + 1, (number - 1) * size, version)  # one more: a next?
+        return page(
+            request, "failed_tries.html", rows=rows[:size], more=len(rows) > size, number=number, version=version,
+            kinds={runs.KIND: "Resume", runs.LETTER: "Cover letter"},
         )  # fmt: skip
 
 

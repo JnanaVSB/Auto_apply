@@ -764,6 +764,25 @@ def test_version_13_adds_preparations_and_steps_and_keeps_every_job(tmp_path, mo
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
+def test_version_14_adds_failed_tries_and_keeps_every_step(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_13:
+        version_13.setattr(db, "UPGRADES", db.UPGRADES[:13])
+        version_13.setattr(db, "SCHEMA_VERSION", 13)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute(PREPARATION.format(1, "resume", 1, "writing", "NULL"))
+            conn.execute(STEP.format("writer", "failed", 0))
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT status FROM steps").fetchall() == [("failed",)]
+        assert conn.execute("SELECT count(*) FROM failed_tries").fetchone()[0] == 0  # none were kept before
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute("INSERT INTO failed_tries (step_id, try_number, reason, saved_on) VALUES (1, 0, 'x', 'now')")
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v13") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+
+
 PREPARATION = (
     "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, draft, created_on) "
     "VALUES ({}, 1, '{}', {}, '[]', '{{}}', '{}', {}, 'now')"

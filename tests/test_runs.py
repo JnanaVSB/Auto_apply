@@ -113,6 +113,35 @@ def test_two_failed_tries_need_checking_by_hand_and_both_are_counted(conn, data_
     assert cost == pytest.approx(0.018 + (1000 * 4 + 8192 * 20) / 1e6)  # the cut-off answer was charged too
 
 
+FAILED = "SELECT try_number, output_tokens, cost, reason, reply, reply_length FROM failed_tries ORDER BY id"
+
+
+def test_each_failed_try_is_kept_whole_with_what_came_back(conn, data_dir, job, writer_answers):
+    _, replies = writer_answers
+    cut = llm.LLMError("the answer was cut off at its length limit", llm.Usage(1000, 0, 8192))
+    cut.reply = "x" * (runs.REPLY + 5)
+    replies += [BAD, cut]
+    runs.prepare(conn, config(data_dir), job)
+    (first, second) = conn.execute(FAILED).fetchall()
+    assert first[:2] == (1, 500) and first[2] == pytest.approx(0.018) and first[4] == BAD and first[5] is None
+    assert first[3] == "an entry's id is not one of the labels E1, E2, ... given"  # whole, never cut to 300
+    assert second[:2] == (2, 8192) and second[3] == "the answer was cut off at its length limit"
+    assert second[4] == "x" * runs.REPLY and second[5] == runs.REPLY + 5  # cut, saying how long it was
+    assert runs.versions(conn, job)[0]["failed"] == 2
+    listed = runs.failed_tries(conn, 10, 0)
+    assert [found["try_number"] for found in listed] == [2, 1] and listed[0]["title"] == "Robot Learning Intern"
+    assert runs.failed_tries(conn, 10, 0, version=99) == []
+
+
+def test_a_failed_try_is_kept_even_when_the_retry_works(conn, data_dir, job, writer_answers):
+    _, replies = writer_answers
+    replies += [llm.TimedOut("no answer within 600 seconds"), GOOD]
+    runs.prepare(conn, config(data_dir), job)
+    assert version(conn)["status"] == "done" and one(conn, "SELECT status FROM steps") == ("done",)
+    ((number, _, cost, reason, reply, _),) = conn.execute(FAILED).fetchall()
+    assert (number, reason, reply) == (1, "no answer within 600 seconds", None) and cost > 0.3  # what was set aside
+
+
 def test_no_answer_in_time_counts_what_was_set_aside_then_retries(conn, data_dir, job, writer_answers):
     _, replies = writer_answers
     replies += [llm.TimedOut("no answer within 600 seconds"), GOOD]
@@ -155,6 +184,7 @@ def test_a_problem_a_retry_cant_fix_stops_after_one_call(conn, data_dir, job, wr
     found = version(conn)
     assert found["status"] == "stopped" and found["problem"].startswith(problem) and len(calls) == 1
     assert one(conn, "SELECT status, cost, reserved FROM steps") == ("failed", 0, 0)
+    assert one(conn, "SELECT try_number, cost, reply FROM failed_tries") == (1, 0, None)  # nothing came back
 
 
 def test_a_spending_limit_stops_before_anything_is_sent(conn, data_dir, job, writer_answers):

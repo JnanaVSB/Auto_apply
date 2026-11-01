@@ -1,5 +1,6 @@
 {% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
 {% set ask %}{% if doubts %} hx-confirm="{{ confirm }}"{% endif %}{% endset %}{# the browser's pop-up: OK proceeds anyway #}
+{% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
 {% set anyway %}<input type="hidden" name="anyway" value="{{ doubts | join(" ") }}">{% endset %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
@@ -53,7 +54,7 @@
     <tbody>
     {% for found in versions %}
     <tr><td>{% if found.status == "done" %}<a href="/jobs/{{ job_id }}/changes?version={{ found.version }}">{{ found.version }}</a>{% else %}{{ found.version }}{% endif %}</td>
-      <td>{{ found.created_on[:10] }}{% if found.feedback %}<br><span class="muted">you asked: {{ found.feedback }}</span>{% endif %}</td><td>{{ labels[found.status] }}</td>
+      <td>{{ found.created_on[:10] }}{% if found.feedback %}<br><span class="muted">you asked: {{ found.feedback }}</span>{% endif %}</td><td>{{ labels[found.status] }}{{ tries(found) }}</td>
       <td>{{ "at least " if found.uncounted }}${{ "%.2f" | format(found.cost) }}</td></tr>
     {% endfor %}
     </tbody>
@@ -76,6 +77,7 @@
   {% endif %}
   {% elif found %}<p class="error" role="alert">Cover letter {{ found.version }}: {{ found.problem }}</p>
   {% endif %}
+  {% if letter.versions and letter.versions[0].failed %}<p class="muted">Cover letter {{ letter.versions[0].version }}{{ tries(letter.versions[0]) }}</p>{% endif %}
   {% if letter_problem %}<p class="error" role="alert">{{ letter_problem }}</p>{% endif %}
   {% if can_letter %}
   <form method="post" action="/jobs/{{ job_id }}/cover-letter" hx-post="/jobs/{{ job_id }}/cover-letter" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
@@ -84,7 +86,7 @@
   </form>
   {% endif %}
   {% if letter.versions | length > 1 %}
-  <p class="muted">Earlier letters: {% for older in letter.versions[1:] %}{% if older.status == "done" %}<a href="/documents/{{ job_id }}/cover-letter-v{{ older.version }}.pdf" target="_blank" rel="noopener">{{ older.version }}</a>{% else %}{{ older.version }} ({{ labels[older.status] }}){% endif %} (${{ "%.2f" | format(older.cost) }}){{ ", " if not loop.last }}{% endfor %}</p>
+  <p class="muted">Earlier letters: {% for older in letter.versions[1:] %}{% if older.status == "done" %}<a href="/documents/{{ job_id }}/cover-letter-v{{ older.version }}.pdf" target="_blank" rel="noopener">{{ older.version }}</a>{% else %}{{ older.version }} ({{ labels[older.status] }}){% endif %} (${{ "%.2f" | format(older.cost) }}{{ tries(older) }}){{ ", " if not loop.last }}{% endfor %}</p>
   {% endif %}
   <form method="post" action="/jobs/{{ job_id }}/sources" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">

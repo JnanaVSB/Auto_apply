@@ -39,6 +39,12 @@ SEND_AGAIN = "UPDATE steps SET status = 'sent', tries = tries + 1, reserved = ? 
 ENDED = """UPDATE steps SET status = ?, input_tokens = input_tokens + ?, cached_tokens = cached_tokens + ?,
     output_tokens = output_tokens + ?, cost = cost + ?, reserved = 0, answer = ?, error = ?, done_on = ? WHERE id = ?"""
 LEFT_WAITING = "SELECT id, preparation_id, reserved FROM steps WHERE status = 'sent'"
+FAILED_TRY = """INSERT INTO failed_tries (step_id, try_number, input_tokens, cached_tokens, output_tokens, cost, reason,
+    reply, reply_length, saved_on) SELECT id, tries, ?, ?, ?, ?, ?, ?, ?, ? FROM steps WHERE id = ?"""
+FAILED_TRIES = """SELECT f.saved_on, p.job_id, j.title, j.company, p.kind, p.version, s.model, f.try_number,
+    f.input_tokens + f.cached_tokens, f.output_tokens, f.cost, f.reason, f.reply, f.reply_length
+    FROM failed_tries f JOIN steps s ON s.id = f.step_id JOIN preparations p ON p.id = s.preparation_id
+    JOIN jobs j ON j.id = p.job_id WHERE ?1 IS NULL OR p.id = ?1 ORDER BY f.id DESC LIMIT ?2 OFFSET ?3"""
 INTERRUPT = """UPDATE steps SET status = 'interrupted', cost = cost + reserved, reserved = 0, error = ?, done_on = ?
     WHERE id = ?"""
 LEFT_WRITING = "SELECT id FROM preparations WHERE status = 'writing'"
@@ -46,10 +52,12 @@ JOB_WRITING = "SELECT 1 FROM preparations WHERE job_id = ? AND status = 'writing
 VERSION = "SELECT job_id, kind, version, sources, draft, created_on FROM preparations WHERE id = ?"
 NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
 VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,
-    coalesce(sum(coalesce(s.cost, 0) + s.reserved), 0), coalesce(max(s.id IS NOT NULL AND s.cost IS NULL), 0)
+    coalesce(sum(coalesce(s.cost, 0) + s.reserved), 0), coalesce(max(s.id IS NOT NULL AND s.cost IS NULL), 0),
+    (SELECT count(*) FROM failed_tries f JOIN steps t ON t.id = f.step_id WHERE t.preparation_id = p.id)
     FROM preparations p LEFT JOIN steps s ON s.preparation_id = p.id WHERE p.job_id = ? AND p.kind = ?
     GROUP BY p.id ORDER BY p.version DESC"""
 ERROR = 300  # characters of a failed try's reason kept with its step
+REPLY = 100_000  # characters of a failed try's reply kept for the Failed tries page
 CLOSED = "Interrupted: the dashboard closed while the Writer was working"
 NO_BASE = "There is no finished version to change yet: press Prepare first."
 CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
@@ -80,9 +88,17 @@ def last_done(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> dic
 
 
 def versions(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> list[dict]:
-    """Every version of the job's resume, newest first, with what it cost (and whether some was not counted)."""
-    names = ("id", "version", "status", "created_on", "feedback", "cost", "uncounted")
+    """Every version of the job's resume, newest first, with what it cost (and whether some was not counted) and how
+    many of its tries failed."""
+    names = ("id", "version", "status", "created_on", "feedback", "cost", "uncounted", "failed")
     return [dict(zip(names, row, strict=True)) for row in conn.execute(VERSIONS, (job_id, kind))]
+
+
+def failed_tries(conn: sqlcipher3.Connection, limit: int, offset: int, version: int | None = None) -> list[dict]:
+    """The Writer's failed tries, newest first (only one version's, if given), each with what came back."""
+    names = ("saved_on", "job_id", "title", "company", "kind", "version", "model", "try_number", "read", "written",
+             "cost", "reason", "reply", "reply_length")  # fmt: skip
+    return [dict(zip(names, row, strict=True)) for row in conn.execute(FAILED_TRIES, (version, limit, offset))]
 
 
 def writing(conn: sqlcipher3.Connection, job_id: int) -> bool:
@@ -266,7 +282,7 @@ def _write(
         try:
             result = check(reply.text)
         except writer.BadAnswer as bad:
-            _ended(conn, step, "failed", reply.usage, spending.charged(role, reply.usage), bad)
+            _ended(conn, step, "failed", reply.usage, spending.charged(role, reply.usage), bad, reply=reply.text)
             problems.append(f"the answer was refused: {bad}")
             text = writer.again(user, str(bad))
             continue
@@ -289,14 +305,21 @@ def _send(conn: sqlcipher3.Connection, preparation: int, role: AIRole, largest: 
 
 def _ended(
     conn: sqlcipher3.Connection, step: int, status: str, usage: llm.Usage, cost: float | None,
-    error: Exception | None, answer: dict | None = None,
+    error: Exception | None, answer: dict | None = None, reply: str | None = None,
 ) -> None:  # fmt: skip
-    """The call ended: its tokens and cost replace what was set aside."""
+    """The call ended: its tokens and cost replace what was set aside. A failed try is also kept whole, with what came
+    back: the answer your laptop refused (`reply`), or what the service sent with its error."""
     with conn:
         conn.execute(ENDED, (
             status, *usage, cost, json.dumps(answer, ensure_ascii=False) if answer else None,
             str(error)[:ERROR] if error else None, _now(), step,
         ))  # fmt: skip
+        if status == "failed":
+            came = reply if reply is not None else getattr(error, "reply", None)  # a keychain error has none
+            cut = came is not None and len(came) > REPLY
+            conn.execute(FAILED_TRY, (
+                *usage, cost, str(error), came[:REPLY] if cut else came, len(came) if cut else None, _now(), step,
+            ))  # fmt: skip
 
 
 def _too_long(config: Config, job_id: int, base: dict | None) -> str:

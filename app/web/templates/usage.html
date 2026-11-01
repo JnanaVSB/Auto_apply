@@ -4,7 +4,7 @@
 <h1>Usage</h1>
 <p>Today: ${{ "%.2f" | format(spent.today) }} of your ${{ "%.2f" | format(limits.daily) }} daily limit.
   This month: ${{ "%.2f" | format(spent.month) }} of ${{ "%.2f" | format(limits.monthly) }}.
-  <a href="/settings/writer">Change the limits</a></p>
+  <a href="/settings/writer">Change the limits</a> · <a href="/failed-tries">Failed tries</a></p>
 <p class="hint">Every AI call the Writer made, local and paid. Dollars include what is set aside for a call still
   waiting; "at least" means some calls went to your own address without a price, so they were not counted. Compare
   with your Anthropic and OpenAI dashboards now and then: their bills can differ slightly.</p>

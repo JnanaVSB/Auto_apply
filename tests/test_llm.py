@@ -255,6 +255,33 @@ def test_a_failed_answer_still_says_what_was_charged(keys, role, reply, usage):
     with pytest.raises(llm.LLMError, match="cut off|declined") as raised:
         llm.call(role, "rules", "texts", SHAPE, transport=transport)
     assert raised.value.usage == llm.Usage(*usage)
+    assert json.loads(raised.value.reply) == reply  # what came back, for the Failed tries page
+
+
+@pytest.mark.parametrize(
+    ("role", "reply"),
+    [
+        (CLAUDE, httpx.Response(529, text=f"overloaded; your key {FAKE_KEY} is fine")),
+        (GROQ, httpx.Response(401, json={"error": f"invalid key {FAKE_KEY}"})),
+        (LOCAL, httpx.Response(404, json={"error": "model 'gemma4' not found, the runner said"})),
+    ],
+)
+def test_a_refusal_keeps_what_the_service_said_apart_and_never_the_key(keys, role, reply):
+    transport, _ = fake(reply)
+    with pytest.raises(llm.LLMError) as raised:
+        llm.call(role, "rules", "texts", SHAPE, transport=transport)
+    kept = raised.value.reply
+    assert FAKE_KEY not in kept and kept not in str(raised.value)  # never part of the message
+    assert ("[KEY]" in kept) is (role is not LOCAL) and (
+        "overloaded" in kept or "invalid" in kept or "runner said" in kept
+    )
+
+
+def test_nothing_came_back_from_a_call_that_broke(keys):
+    transport, _ = fake(httpx.ReadError("reset"))
+    with pytest.raises(llm.TimedOut) as raised:
+        llm.call(CLAUDE, "rules", "texts", SHAPE, transport=transport)
+    assert raised.value.reply is None
 
 
 @pytest.mark.parametrize(

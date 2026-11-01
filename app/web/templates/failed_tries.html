@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Failed tries{% endblock %}
+{% block content %}
+<h1>Failed tries</h1>
+<p class="hint">Every try of the Writer that failed, with what came back, to work out what went wrong. Replies show
+  your details as the Writer saw them, as placeholders like [ME]; they are kept only in your encrypted database.
+  {% if version %}<a href="/failed-tries">Show every version's</a>{% endif %}</p>
+{% set also %}{% if version %}&version={{ version }}{% endif %}{% endset %}
+{% if rows %}
+<table class="jobs">
+  <thead><tr><th>When (UTC)</th><th>Job</th><th>What</th><th>Model</th><th>Try</th><th>Why it failed</th><th>Tokens read / written</th><th>Dollars</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr><td>{{ row.saved_on[:16] | replace("T", " ") }}</td>
+    <td><a href="/jobs/{{ row.job_id }}">{{ row.title }}</a><br><span class="muted">{{ row.company }}</span></td>
+    <td>{{ kinds[row.kind] }} {{ row.version }}</td><td>{{ row.model }}</td><td>{{ row.try_number }}</td>
+    <td>{{ row.reason }}
+      {% if row.reply is not none %}<details><summary>Show reply{% if row.reply_length %} (the first {{ "{:,}".format(row.reply | length) }} of {{ "{:,}".format(row.reply_length) }} characters){% endif %}</summary><pre class="lines">{{ row.reply }}</pre></details>
+      {% else %}<br><span class="muted">Nothing came back.</span>{% endif %}</td>
+    <td>{{ "{:,}".format(row.read) }} / {{ "{:,}".format(row.written) }}</td>
+    <td>{% if row.cost is none %}not counted{% else %}${{ "%.2f" | format(row.cost) }}{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<nav class="actions">
+  {% if number > 1 %}<a href="/failed-tries?page={{ number - 1 }}{{ also }}">Previous</a>{% endif %}
+  {% if more %}<a href="/failed-tries?page={{ number + 1 }}{{ also }}">Next</a>{% endif %}
+</nav>
+{% else %}
+<p>No failed tries{% if version %} for this version{% endif %}.</p>
+{% endif %}
+{% endblock %}
