@@ -154,6 +154,7 @@ GOOD = bullet("Trained a robot arm with PPO.", 0)
     ("text", "problem"),
     [
         ("not json", "not JSON"),
+        ("[" * 100_000, "not JSON"),  # nested too deep to read
         (json.dumps({"entries": [], "notes": "", "extra": 1}), 'exactly the fields "entries" and "notes"'),
         (answer(notes=""), '"entries" must list at least one entry'),
         (json.dumps({"entries": [{"id": "E2", "bullets": [GOOD]}], "notes": ""}), 'exactly the fields "id"'),

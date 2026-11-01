@@ -205,7 +205,7 @@ def checked(text: str, entries: list[Entry], shield: Shield) -> Checked:
     raises BadAnswer saying what is wrong."""
     try:
         data = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nested too deep to read
         raise BadAnswer("the answer is not JSON") from None
     if not isinstance(data, dict) or set(data) != {"entries", "notes"}:
         raise BadAnswer('the answer must have exactly the fields "entries" and "notes"')

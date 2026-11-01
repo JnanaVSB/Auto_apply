@@ -64,7 +64,7 @@ def answer(
     try:
         data = reply.json()
         content = data["message"]["content"]
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, RecursionError, TypeError, KeyError):
         content = None
     if not isinstance(content, str):
         raise StopScoring(UNEXPECTED)

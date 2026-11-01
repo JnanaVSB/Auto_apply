@@ -59,6 +59,7 @@ def test_a_good_letter_is_kept_with_new_numbers_flagged():
     ("text", "problem"),
     [
         ("letter", "not JSON"),
+        ("[" * 100_000, "not JSON"),  # nested too deep to read
         (json.dumps({"paragraphs": GOOD, "from": ["E1"]}), 'exactly the fields "paragraphs", "from" and "notes"'),
         (answer(GOOD[:2]), "3 to 5 paragraphs"),
         (answer(GOOD * 2), "3 to 5 paragraphs"),

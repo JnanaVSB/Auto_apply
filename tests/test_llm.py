@@ -90,6 +90,9 @@ def test_ollama_retry_is_a_little_less_strict():
         (httpx.Response(200, json=["not", "an", "answer"]), llm.StopScoring, "did not answer as expected"),
         (httpx.Response(200, json={"done": True}), llm.StopScoring, "did not answer as expected"),
         (httpx.ReadTimeout("slow"), llm.TimedOut, "no answer within 120 seconds"),
+        (httpx.ConnectTimeout("slow"), llm.StopScoring, "Ollama isn't running"),  # never sent: not a time-out
+        (httpx.RemoteProtocolError("closed"), llm.TimedOut, "the connection broke before the whole answer came"),
+        (httpx.Response(200, text="[" * 100_000), llm.StopScoring, "did not answer as expected"),  # too deep
     ],
 )
 def test_ollama_problems_name_the_cause_and_the_fix(reply, error, message):
@@ -130,8 +133,15 @@ def test_anthropic_service(keys):
         (CLAUDE, httpx.Response(400, text="prompt is too long"), llm.TooLong, "longer than the model"),
         (CLAUDE, httpx.Response(200, json={"content": [], "stop_reason": "refusal"}), llm.LLMError, "declined"),
         (GROQ, httpx.ConnectError("no route"), llm.StopScoring, "Could not reach api.groq.com"),
+        (CLAUDE, httpx.ConnectTimeout("slow"), llm.StopScoring, "Could not reach api.anthropic.com"),  # never sent
+        (CLAUDE, httpx.InvalidURL("bad"), llm.StopScoring, "address in the settings can't be used"),
+        (GROQ, httpx.UnsupportedProtocol("ftp"), llm.StopScoring, "address in the settings can't be used"),
+        *((CLAUDE, broken, llm.TimedOut, "the connection broke before the whole answer came") for broken in (
+            httpx.ReadError("reset"), httpx.WriteError("reset"), httpx.RemoteProtocolError("closed"),
+            httpx.DecodingError("garbled"),
+        )),  # sent, so it may have been charged: counted like a time-out (app/council/runs.py)
     ],
-)
+)  # fmt: skip
 def test_cloud_problems_never_show_the_key(keys, role, reply, error, message):
     transport, _ = fake(reply)
     with pytest.raises(error, match=message) as raised:
@@ -247,7 +257,10 @@ def test_a_failed_answer_still_says_what_was_charged(keys, role, reply, usage):
     assert raised.value.usage == llm.Usage(*usage)
 
 
-@pytest.mark.parametrize("reply", [httpx.Response(200, text="<html>"), httpx.Response(200, json=["a"])])
+@pytest.mark.parametrize(
+    "reply",
+    [httpx.Response(200, text="<html>"), httpx.Response(200, json=["a"]), httpx.Response(200, text="[" * 100_000)],
+)
 @pytest.mark.parametrize("role", [OPENAI, CLAUDE])
 def test_a_cloud_answer_that_is_not_json_is_one_failed_try(keys, role, reply):
     transport, _ = fake(reply)

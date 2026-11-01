@@ -50,7 +50,7 @@ def checked(text: str, entries: list[Entry], ad: str) -> Checked:
     job ad are flagged."""
     try:
         found = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nested too deep to read
         raise BadAnswer("the answer is not JSON") from None
     if not isinstance(found, dict) or set(found) != {"paragraphs", "from", "notes"}:
         raise BadAnswer('the answer must have exactly the fields "paragraphs", "from" and "notes"')

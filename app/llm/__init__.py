@@ -49,7 +49,8 @@ class TooLong(LLMError):  # noqa: N818
 
 
 class TimedOut(LLMError):  # noqa: N818
-    """No answer in time; one failed try for this request only."""
+    """The request was sent, but no whole answer came (none in time, or the connection broke): one failed try for this
+    request only, which a paid service may still have charged."""
 
 
 def ask(
@@ -86,14 +87,18 @@ def call(
     with httpx.Client(transport=transport, timeout=timeout, follow_redirects=False, trust_env=False) as client:
         try:  # trust_env=False: no proxy settings or other surprises from the environment
             return service.answer(client, role, key, system, user, schema, retry, answer_limit)
-        except httpx.TimeoutException:
-            raise TimedOut(f"no answer within {timeout} seconds") from None
-        except httpx.TransportError:
+        except (httpx.ConnectError, httpx.ConnectTimeout):  # never sent, so never charged
             if role.service == "ollama":
                 raise StopScoring("Ollama isn't running: start it with `ollama serve`.") from None
             raise StopScoring(
                 f"Could not reach {urlsplit(role.address).hostname}: check your internet connection."
             ) from None
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol):  # never sent either
+            raise StopScoring("The model's address in the settings can't be used: check it there.") from None
+        except httpx.TimeoutException:
+            raise TimedOut(f"no answer within {timeout} seconds") from None
+        except httpx.HTTPError:  # sent, then the connection broke or the answer came garbled
+            raise TimedOut("the connection broke before the whole answer came") from None
 
 
 def check(role: AIRole, transport: httpx.BaseTransport | None = None) -> tuple[bool, str]:
@@ -136,7 +141,7 @@ def answer_data(reply: httpx.Response) -> dict:
     """A cloud service's answer as JSON; anything else is one failed try."""
     try:
         data = reply.json()
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: nested too deep to read
         data = None
     if not isinstance(data, dict):
         raise LLMError("the service did not answer as expected")
