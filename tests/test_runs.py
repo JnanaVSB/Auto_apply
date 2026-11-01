@@ -1,6 +1,7 @@
 """One press of Prepare, step by step, against a fake Writer: what is saved, what is counted, and every way it stops."""
 
 import json
+from contextlib import nullcontext
 
 import pytest
 from helpers import add_job, one
@@ -135,20 +136,22 @@ def test_your_own_address_without_a_price_is_not_counted(conn, data_dir, job, wr
 
 
 @pytest.mark.parametrize(
-    ("error", "problem"),
+    ("error", "problem", "halts"),
     [
         (llm.StopScoring("Anthropic refused the key (status 401): check the key saved in the keychain."),
-         "Anthropic refused the key (status 401)"),
-        (llm.StopScoring("No key is saved in the keychain under the name 'anthropic'."), "No key is saved"),
+         "Anthropic refused the key (status 401)", True),
+        (llm.StopScoring("No key is saved in the keychain under the name 'anthropic'."), "No key is saved", True),
         (llm.TooLong("the texts are longer than the model can read at once"),
-         "Too long for the model (the texts are longer than the model can read at once): raise the working size"),
-        (KeychainError("Could not read 'anthropic' from the OS keychain (KeyringLocked)."), "Could not read"),
+         "Too long for the model (the texts are longer than the model can read at once): raise the working size",
+         False),  # this job's texts only: the jobs waiting behind it go on
+        (KeychainError("Could not read 'anthropic' from the OS keychain (KeyringLocked)."), "Could not read", True),
     ],
 )  # fmt: skip
-def test_a_problem_a_retry_cant_fix_stops_after_one_call(conn, data_dir, job, writer_answers, error, problem):
+def test_a_problem_a_retry_cant_fix_stops_after_one_call(conn, data_dir, job, writer_answers, error, problem, halts):
     calls, replies = writer_answers
     replies += [error, GOOD]
-    runs.prepare(conn, config(data_dir), job)
+    with pytest.raises(runs.Halted, match=problem[:20]) if halts else nullcontext():  # every job would meet it
+        runs.prepare(conn, config(data_dir), job)
     found = version(conn)
     assert found["status"] == "stopped" and found["problem"].startswith(problem) and len(calls) == 1
     assert one(conn, "SELECT status, cost, reserved FROM steps") == ("failed", 0, 0)

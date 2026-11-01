@@ -71,7 +71,9 @@ def create_app(
     app.state.logins = logins or security.Logins()
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
-    app.state.preparer = Preparer(data_dir)  # the Writer, one job at a time
+    app.state.preparer = Preparer(  # the Writer, one job at a time
+        data_dir, lambda conn, job_id, waived: prepare.startable(conn, _scoring(), job_id, waived)
+    )
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)

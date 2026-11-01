@@ -41,9 +41,13 @@ def writer_chosen(tmp_path, data_dir, monkeypatch):
 def client(client, writer_chosen, monkeypatch):
     """Logged in; `client.started` lists the jobs Prepare started the Writer on (never really run here)."""
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
-    client.started = []
-    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="", kind="resume": client.started.append(
-        (job, words or kind) if words or kind != "resume" else job))  # fmt: skip
+    client.started, client.waived = [], []
+
+    def start(job, words="", kind="resume", waived=frozenset()):
+        client.started.append((job, words or kind) if words or kind != "resume" else job)
+        client.waived.append(waived)
+
+    monkeypatch.setattr(client.app.state.preparer, "start", start)
     log_in(client)
     return client
 
@@ -81,10 +85,10 @@ def test_prepare_queues_a_ready_job_once(client, conn, jobs):
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Fresh"]) == first
 
 
-@pytest.mark.parametrize("name", ["Older", "Low", "Gone"])
-def test_a_job_that_is_not_ready_is_never_queued(client, conn, jobs, name):
+@pytest.mark.parametrize(("name", "problem"), [("Older", "not-ready"), ("Low", "not-ready"), ("Gone", "closed")])
+def test_a_job_that_is_not_ready_is_never_queued(client, conn, jobs, name, problem):
     confirm_tiles(conn)
-    assert press(client, jobs[name]).headers["location"] == "/ready?problem=not-ready"
+    assert press(client, jobs[name]).headers["location"] == f"/ready?problem={problem}"
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs[name]) == (None,)
 
 
@@ -93,7 +97,9 @@ def test_a_skipped_job_is_never_queued(client, conn, jobs):
     assert press(client, jobs["Skipped"]).headers["location"] == "/ready?problem=skipped"
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Skipped"]) == (None,)
     assert not ready.queue(conn, jobs["Skipped"], "now")  # even without the page
-    assert "You skipped this job: turn off" in client.get("/ready?problem=skipped").text
+    assert "skipped (&#34;Not interested&#34;). To proceed anyway, press the button on the job&#39;s page" in (
+        client.get("/ready?problem=skipped").text
+    )
 
 
 def test_skipping_a_queued_job_takes_it_out_of_the_queue_and_undo_puts_it_back(client, conn, jobs):
@@ -129,12 +135,12 @@ def test_skip_hides_the_job_and_undo_brings_it_back(client, conn, jobs):
 
 
 def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
-    assert "confirm these first: Profile" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
-    assert "Not ready" in client.get(f"/jobs/{jobs['Older']}/preparation").text
+    assert "confirm these first: Profile" in client.get(f"/jobs/{jobs['Older']}/preparation").text  # first of all
     confirm_tiles(conn)
+    assert "Not ready" in client.get(f"/jobs/{jobs['Older']}/preparation").text
     assert 'action="/ready/' in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
-    assert press(client, jobs["Fresh"], back="job").headers["location"] == f"/jobs/{jobs['Fresh']}"
-    assert client.started == [jobs["Fresh"]]
+    assert 'id="preparation"' in press(client, jobs["Fresh"], back="job").text  # the box comes back
+    assert client.started == [jobs["Fresh"]] and client.waived == [frozenset()]
     assert 'hx-get="/jobs/' in client.get(f"/jobs/{jobs['Fresh']}").text
 
 
@@ -149,6 +155,35 @@ def test_the_job_page_box_offers_prepare_only_when_it_can(client, conn, jobs):
 def test_unknown_jobs_are_not_found(client, jobs, path):
     answer = client.get(path) if path.endswith("preparation") else client.post(path, data={"csrf_token": csrf(client)})
     assert answer.status_code == 404
+
+
+def test_a_skipped_closed_or_not_ready_job_asks_first_and_can_proceed_anyway(client, conn, jobs):
+    text = press(client, jobs["Skipped"], back="job", anyway="skipped").text  # unconfirmed entries: never asked
+    assert "Confirm the entries of every source this job uses first" in text and client.started == []
+    confirm_tiles(conn)
+    text = client.get(f"/jobs/{jobs['Skipped']}/preparation").text
+    assert 'hx-confirm="This job is skipped (&#34;Not interested&#34;). Press OK to proceed anyway."' in text
+    assert 'name="anyway" value="skipped"' in text and ">Prepare</button>" in text and ">Write cover letter<" in text
+    assert (
+        'value="closed"' in (text := client.get(f"/jobs/{jobs['Gone']}/preparation").text) and "No longer open." in text
+    )
+    assert "hx-confirm" not in client.get(f"/jobs/{jobs['Fresh']}/preparation").text  # nothing to ask
+    for name, doubt in (("Skipped", "skipped"), ("Gone", "closed"), ("Low", "not-ready")):
+        text = press(client, jobs[name], back="job", anyway="closed" if doubt != "closed" else "").text
+        assert "To proceed anyway, press the button" in text and jobs[name] not in client.started  # not asked
+        press(client, jobs[name], back="job", anyway=doubt)
+        assert client.started[-1] == jobs[name] and client.waived[-1] == {doubt}
+
+
+def test_a_waiting_job_starts_only_if_nothing_new_stops_it(client, conn, jobs):
+    startable = client.app.state.preparer.startable  # as the dashboard sets it up
+    assert startable(conn, jobs["Fresh"], frozenset()) and not startable(conn, 999, frozenset())
+    assert not startable(conn, jobs["Skipped"], frozenset()) and startable(conn, jobs["Skipped"], {"skipped"})
+    assert not startable(conn, jobs["Gone"], {"not-ready"}) and startable(conn, jobs["Gone"], {"closed"})
+    assert startable(conn, jobs["Low"], {"not-ready"})
+    with conn:  # skipped after you proceeded anyway with a job that isn't ready: let go
+        conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (jobs["Low"],))
+    assert not startable(conn, jobs["Low"], {"not-ready"})
 
 
 def test_a_closed_job_is_never_queued_even_without_the_page(conn, jobs):

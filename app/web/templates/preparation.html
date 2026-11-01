@@ -1,9 +1,9 @@
 {% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
+{% set ask %}{% if doubts %} hx-confirm="{{ confirm }}"{% endif %}{% endset %}{# the browser's pop-up: OK proceeds anyway #}
+{% set anyway %}<input type="hidden" name="anyway" value="{{ doubts | join(" ") }}">{% endset %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
-  {% if skipped %}
-  <p class="muted">Skipped ("Not interested"): kept out of the queue{% if queued %}. Your Prepare press of {{ queued[:10] }} counts again when you undo it{% endif %}.</p>
-  {% elif place == 0 or (place is none and working) %}
+  {% if place == 0 or (place is none and working) %}
   <p role="status">The Writer is working on it (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
   {% elif place %}
   <p role="status">Waiting for the Writer: {{ place }} job{{ "s" if place > 1 }} before it.</p>
@@ -20,25 +20,27 @@
     <button type="submit">Build the PDF again</button>
   </form>
   {% endif %}
-  {% elif not ready %}
-  <p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>
   {% elif missing %}
   <p class="error">Prepare needs confirmed entries: <a href="/resume-profile">confirm these first: {{ missing | join(", ") }}</a>.</p>
   {% elif not writer %}
   <p class="error">Choose the Writer's model on the <a href="/settings/writer">Writer settings</a> page first.</p>
   {% else %}
+  {% if "skipped" in doubts %}<p class="muted">Skipped ("Not interested"): kept out of the queue{% if queued %}. Your Prepare press of {{ queued[:10] }} counts again when you undo it{% endif %}.</p>{% endif %}
+  {% if "closed" in doubts %}<p class="muted">No longer open.</p>{% endif %}
+  {% if "not-ready" in doubts %}<p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>{% endif %}
   {% if latest and latest.status in ("stopped", "by_hand") %}<p class="error" role="alert">Version {{ latest.version }}: {{ latest.problem }}</p>{% endif %}
   {% if latest and latest.status == "done" %}<p class="muted">Version {{ latest.version }} was made from older entries: prepare it again from your current ones.</p>{% endif %}
   {% if notice %}<p class="error" role="alert">{{ notice }}</p>{% endif %}
-  <form method="post" action="/ready/{{ job_id }}/prepare" class="inline">
+  <form method="post" action="/ready/{{ job_id }}/prepare" hx-post="/ready/{{ job_id }}/prepare" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <input type="hidden" name="back" value="job">
+    <input type="hidden" name="back" value="job">{{ anyway }}
     <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
   </form>
   {% endif %}
+  {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}
   {% if changeable and place is none and not (latest and latest.status == "writing") %}
-  <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML" class="stacked">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">{{ anyway }}
     <label>Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept)
       <textarea name="feedback" rows="3" maxlength="2000" placeholder="For example: shorter, it is two pages; lead with the drone project">{{ typed }}</textarea></label>
     <button type="submit">Send to the Writer</button>
@@ -76,8 +78,8 @@
   {% endif %}
   {% if letter_problem %}<p class="error" role="alert">{{ letter_problem }}</p>{% endif %}
   {% if can_letter %}
-  <form method="post" action="/jobs/{{ job_id }}/cover-letter" hx-post="/jobs/{{ job_id }}/cover-letter" hx-target="#preparation" hx-swap="outerHTML" class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <form method="post" action="/jobs/{{ job_id }}/cover-letter" hx-post="/jobs/{{ job_id }}/cover-letter" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">{{ anyway }}
     <button type="submit">{{ "Write another cover letter" if found else "Write cover letter" }}</button>
   </form>
   {% endif %}

@@ -53,12 +53,18 @@ ERROR = 300  # characters of a failed try's reason kept with its step
 CLOSED = "Interrupted: the dashboard closed while the Writer was working"
 NO_BASE = "There is no finished version to change yet: press Prepare first."
 CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
+TOO_LONG = "Too long for the model ({}): raise the working size on the Writer settings page."
 DETAIL_CHANGED = ("PDF built, but a bullet still shows {} you have changed since: update that entry on the Resume "
                   "Profile page, then press Prepare for a fresh version.")  # fmt: skip
 DETAIL_KINDS = {
     "ME": "your name", "EMAIL": "an email address", "PHONE": "a phone number", "ADDRESS": "a street address",
     "LINK": "a link",
 }  # fmt: skip
+
+
+class Halted(Exception):
+    """A problem every job would meet (a key, the model's name, Ollama, the keychain): this version is stopped, and the
+    jobs waiting behind it are let go (app/web/preparer.py)."""
 
 
 def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST) -> dict | None:
@@ -114,6 +120,9 @@ def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: 
             status, problem, result = "stopped", NO_BASE if base is None else CHANGED.format(base["version"]), None
         else:
             status, problem, result = _write(conn, config, role, job_id, sources, preparation, base, feedback, kind)
+    except Halted as halt:
+        _finish(conn, preparation, "stopped", str(halt))
+        raise
     except Exception as error:  # never left "writing": the version can be retried
         _finish(conn, preparation, "by_hand", f"Something went wrong ({type(error).__name__}): press Retry.")
         raise
@@ -244,9 +253,12 @@ def _write(
             _ended(conn, step, "failed", llm.NOTHING, largest, error)  # free ($0) for the local model
             problems.append(str(error))
             continue
-        except (llm.StopScoring, llm.TooLong, KeychainError) as error:  # refused, never charged; a retry can't help
+        except llm.TooLong as error:  # refused, never charged; a retry can't help
             _ended(conn, step, "failed", llm.NOTHING, 0, error)
-            return "stopped", _stopped(error), None
+            return "stopped", TOO_LONG.format(error), None
+        except (llm.StopScoring, KeychainError) as error:  # the same, and every job would meet it
+            _ended(conn, step, "failed", llm.NOTHING, 0, error)
+            raise Halted(str(error)) from error  # it names the cause and the fix (a key, the model's name, Ollama...)
         except llm.LLMError as error:  # busy, cut off, declined, not JSON: one failed try
             _ended(conn, step, "failed", error.usage, spending.charged(role, error.usage), error)
             problems.append(str(error))
@@ -293,12 +305,6 @@ def _too_long(config: Config, job_id: int, base: dict | None) -> str:
     if built is None or built.pages <= 1 or not config.documents.one_page:
         return ""
     return f"\n(The previous version was {built.pages} pages: it must fit on one page.)"
-
-
-def _stopped(error: Exception) -> str:
-    if isinstance(error, llm.TooLong):
-        return f"Too long for the model ({error}): raise the working size on the Writer settings page."
-    return str(error)  # it names the cause and the fix (a key, the model's name, Ollama, the keychain)
 
 
 def _finish(

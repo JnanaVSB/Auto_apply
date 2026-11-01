@@ -4,6 +4,7 @@ dashboard closes: they show Prepare again). Each job is saved step by step as it
 
 import logging
 import threading
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,25 +17,33 @@ from app.council import runs
 
 PREPARE_LOCK = "prepare-lock.db"
 BUSY = "The Writer is working in another dashboard or terminal: press Prepare again when it has finished."
+NO_WRITER = ("The Writer was removed in Settings while jobs were waiting: choose one on the Writer settings page, "
+             "then press Prepare again.")  # fmt: skip
+HALTED = ("The Writer stopped: {} Any jobs that were waiting were let go: press Prepare on them again once that is "
+          "fixed.")  # fmt: skip
 log = logging.getLogger("app.web")
 
 
 @dataclass
 class Preparer:
     data_dir: Path
-    waiting: list[tuple[int, str, str]] = field(default_factory=list)  # (job, your words or "", kind), in press order
+    startable: Callable[[sqlcipher3.Connection, int, frozenset[str]], bool]  # app/web/prepare.py: a waiting job may go
+    waiting: list[tuple[int, str, str, frozenset[str]]] = field(default_factory=list)  # in press order: (job, your
+    # words or "", kind, the doubts the pop-up asked you about)
     current: int | None = None  # the job being written now
     notice: str | None = None  # why the last press could not run; shown in the job's box
     _thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def start(self, job_id: int, feedback: str = "", kind: str = runs.KIND) -> None:
+    def start(
+        self, job_id: int, feedback: str = "", kind: str = runs.KIND, waived: frozenset[str] = frozenset()
+    ) -> None:
         """You pressed Prepare (sent your changes, or asked for a cover letter): the job is written now, or after the
         jobs before it. A job holds one place at a time: another press while it waits or is written changes nothing."""
         with self._lock:
             if self._place(job_id) is not None:
                 return
-            self.waiting.append((job_id, feedback, kind))
+            self.waiting.append((job_id, feedback, kind, waived))
             self.notice = None
             if self._thread is None:
                 self._thread = threading.Thread(target=self._run, daemon=True)
@@ -62,13 +71,20 @@ class Preparer:
 
     def _run(self) -> None:
         while (job := self._next()) is not None:
+            job_id, feedback, kind, waived = job
             try:  # the lock for each job, so it is never held while waiting for a press
                 with (
                     closing(collect.lock(self.data_dir, PREPARE_LOCK, BUSY)),
                     closing(db.connect(self.data_dir)) as conn,
                 ):
                     runs.recover(conn)
-                    runs.prepare(conn, load_config(), *job)
+                    config = load_config()
+                    if config.ai.writer is None:
+                        self._stop(NO_WRITER)
+                    elif self.startable(conn, job_id, waived):  # else skipped, closed or no longer ready: let go
+                        runs.prepare(conn, config, job_id, feedback, kind)
+            except runs.Halted as halt:  # a key, the model's name, Ollama or the keychain: the same for every job
+                self._stop(HALTED.format(halt))
             except collect.CollectError as error:
                 self._stop(str(error))
             except ConfigError as error:
@@ -78,7 +94,7 @@ class Preparer:
             except Exception as error:  # one line only; never job data, your text or a crash report
                 log.error("Unexpected error in the Writer: %s", type(error).__name__)
 
-    def _next(self) -> tuple[int, str, str] | None:
+    def _next(self) -> tuple[int, str, str, frozenset[str]] | None:
         with self._lock:
             job = self.waiting.pop(0) if self.waiting else None
             self.current = job and job[0]

@@ -3,7 +3,7 @@
 Users see the tiles as the "Resume Profile" page (/resume-profile, template tiles.html) and a tile as an "entry"
 (see app/documents/tiles.py); only the code keeps the word "tile"."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,8 +33,12 @@ RESUME_CHANGED = "Your resume changed while this page was open: reload the page 
 
 TILES_FIRST = "Confirm the entries of every source this job uses first, on the Resume Profile page."
 PROFILE = "/resume-profile"  # the tiles page's address
-NOT_READY = 'Only a ready job can be prepared (or one you marked "Prepare anyway" on its page).'
-SKIPPED = 'You skipped this job: turn off "Not interested" on its page first, then press Prepare.'
+DOUBTS = {  # the job page's pop-up asks before the Writer works on such a job: you can proceed anyway
+    "skipped": 'This job is skipped ("Not interested").',
+    "closed": "This job is no longer open.",
+    "not-ready": "This job is not ready (no score at or above your threshold with your current resume).",
+}
+ANYWAY = " Press OK to proceed anyway."
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
 BUSY_JOB = "The Writer is still working on this job: try again when it's done."
 MAX_FEEDBACK = 2000
@@ -176,13 +180,15 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        if not (problem := _cannot(conn, current, job)):
+        waived = _waived(request)
+        if not (problem := _cannot(conn, current, job, waived)):
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
             if runs.writable(conn, job_id, latest := runs.latest(conn, job_id)):  # Retry a change: the same words
                 failed = latest is not None and latest["status"] in ("stopped", "by_hand")
-                request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "")
-        back = f"/jobs/{job_id}" if request.state.form.get("back") == "job" else "/ready"  # the page it was pressed on
-        return RedirectResponse(f"{back}?problem={problem}" if problem else back, 303)
+                request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "", waived=waived)
+        if request.state.form.get("back") == "job":  # pressed in the job's box: the box comes back
+            return box(request, job_id, prepare_problem=problem and PROBLEMS[problem])
+        return RedirectResponse(f"/ready?problem={problem}" if problem else "/ready", 303)
 
     @app.post("/ready/{job_id:int}/skip")
     async def skip_job(request: Request, job_id: int) -> Response:
@@ -202,9 +208,12 @@ def add_routes(
         """Your words to the Writer: a new version built on the newest finished one. Answers with the job's box."""
         conn, preparer = request.app.state.conn, request.app.state.preparer
         words = " ".join(CONTROL.sub("", request.state.form.get("feedback", "")).split())
-        base = runs.last_done(conn, queries.known(job_id))
-        if not _writer_chosen():
-            problem = NO_WRITER
+        job, waived = queries.job(conn, queries.known(job_id)), _waived(request)
+        if job is None:
+            raise HTTPException(404)
+        base = runs.last_done(conn, job_id)
+        if cannot := _cannot(conn, scoring(), job, waived):
+            problem = PROBLEMS[cannot]
         elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
             problem = BUSY_JOB
         elif base is None:
@@ -214,7 +223,7 @@ def add_routes(
         elif not words or len(words) > MAX_FEEDBACK:
             problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
         else:
-            preparer.start(job_id, words)
+            preparer.start(job_id, words, waived=waived)
             problem = None
         return box(request, job_id, problem, words if problem else "")
 
@@ -225,18 +234,19 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        if cannot := _cannot(conn, scoring(), job):
+        waived = _waived(request)
+        if cannot := _cannot(conn, scoring(), job, waived):
             problem = PROBLEMS[cannot]
         elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
             problem = BUSY_JOB
         else:
-            preparer.start(job_id, "", runs.LETTER)
+            preparer.start(job_id, "", runs.LETTER, waived)
             problem = None
         return box(request, job_id, letter_problem=problem)
 
     def box(
         request: Request, job_id: int, change_problem: str | None = None, typed: str = "",
-        letter_problem: str | None = None,
+        letter_problem: str | None = None, prepare_problem: str | None = None,
     ) -> HTMLResponse:  # fmt: skip
         conn, current = request.app.state.conn, scoring()
         job = queries.job(conn, queries.known(job_id))
@@ -245,15 +255,16 @@ def add_routes(
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         preparer = request.app.state.preparer
-        free = preparer.place(job_id) is None and not runs.writing(conn, job_id)
+        free, doubts = preparer.place(job_id) is None and not runs.writing(conn, job_id), _doubts(conn, current, job)
         return page(
-            request, "preparation.html", job_id=job_id, queued=queued, skipped=job["not_interested"], chosen=chosen,
-            own=own, files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
+            request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
+            files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
             versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=_writer_chosen(),
             one_page=_one_page(), change_problem=change_problem, typed=typed, letter_problem=letter_problem,
-            letter=drafts.letter(conn, data_dir, job_id), can_letter=free and _cannot(conn, current, job) is None,
+            letter=drafts.letter(conn, data_dir, job_id), prepare_problem=prepare_problem,
+            can_letter=free and _cannot(conn, current, job, doubts) is None,
             missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
-            ready=queries.job_scoring(conn, job_id, current)["status"] == "ready",
+            doubts=doubts, confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY,
         )  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/sources")
@@ -269,20 +280,45 @@ def add_routes(
         return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
-PROBLEMS = {"tiles": TILES_FIRST, "not-ready": NOT_READY, "skipped": SKIPPED, "writer": NO_WRITER}
+PROBLEMS = {"tiles": TILES_FIRST, "writer": NO_WRITER} | {
+    doubt: f"{text} To proceed anyway, press the button on the job's page and confirm."
+    for doubt, text in DOUBTS.items()
+}  # a doubt refused: the press came from a page that didn't ask (the Ready page, or one shown before it changed)
 
 
-def _cannot(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) -> str | None:
-    """Why the Writer can't work on this job (a PROBLEMS key), or None: Prepare and Write cover letter alike."""
-    if job["not_interested"]:
-        return "skipped"
+def startable(conn: sqlcipher3.Connection, current: queries.Scoring, job_id: int, waived: frozenset[str]) -> bool:
+    """Just before the Writer starts a job that waited its turn: not if you skipped it, it closed or stopped being ready
+    since you pressed (unless the pop-up asked you about that one). Such a job is let go: nothing is sent."""
+    job = queries.job(conn, job_id)
+    return job is not None and all(doubt in waived for doubt in _doubts(conn, current, job))
+
+
+def _cannot(
+    conn: sqlcipher3.Connection, current: queries.Scoring, job: dict, waived: Collection[str] = ()
+) -> str | None:
+    """Why the Writer can't work on this job (a PROBLEMS key), or None: Prepare, Request changes and Write cover letter
+    alike. `waived`: the doubts the pop-up asked you about, so the Writer proceeds anyway."""
+    if doubt := next((doubt for doubt in _doubts(conn, current, job) if doubt not in waived), None):
+        return doubt
     if writer_sources.unconfirmed(
         writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job["id"])[0]
     ):
         return "tiles"
-    if job["status"] != "open" or queries.job_scoring(conn, job["id"], current)["status"] != "ready":
-        return "not-ready"
     return None if _writer_chosen() else "writer"
+
+
+def _doubts(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) -> list[str]:
+    """The DOUBTS that hold for this job now."""
+    found = {
+        "skipped": job["not_interested"], "closed": job["status"] != "open",
+        "not-ready": queries.job_scoring(conn, job["id"], current)["status"] != "ready",
+    }  # fmt: skip
+    return [doubt for doubt, holds in found.items() if holds]
+
+
+def _waived(request: Request) -> frozenset[str]:
+    """The doubts the pop-up asked you about before this press (none from a page that didn't ask)."""
+    return frozenset(request.state.form.get("anyway", "").split())
 
 
 def _one_page() -> bool:

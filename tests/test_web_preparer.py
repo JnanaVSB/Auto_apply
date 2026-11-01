@@ -28,11 +28,15 @@ class FakeWriter:
 @pytest.fixture
 def fake(monkeypatch, tmp_path, data_dir):
     path = tmp_path / "config.yaml"
-    path.write_text(f"data_dir: {data_dir}\n", encoding="utf-8")
+    path.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n", encoding="utf-8")
     monkeypatch.setattr(config, "CONFIG_PATH", path)
     writer = FakeWriter()
     monkeypatch.setattr(preparing.runs, "prepare", writer)
     return writer
+
+
+def startable(conn, job_id, waived):
+    return True
 
 
 def finished(preparer):
@@ -44,7 +48,7 @@ def finished(preparer):
 
 
 def test_one_job_at_a_time_the_others_wait_their_turn(data_dir, fake):
-    preparer = Preparer(data_dir)
+    preparer = Preparer(data_dir, startable)
     for job_id in (1, 2, 1, 3):  # a second press on a job changes nothing
         preparer.start(job_id)
     for _ in range(WAIT * 100):
@@ -63,7 +67,7 @@ def test_one_job_at_a_time_the_others_wait_their_turn(data_dir, fake):
 
 
 def test_a_writer_running_elsewhere_lets_the_presses_go_and_says_why(data_dir, fake):
-    preparer = Preparer(data_dir)
+    preparer = Preparer(data_dir, startable)
     with closing(collect.lock(data_dir, preparing.PREPARE_LOCK, "busy")):
         preparer.recover()  # nothing to do while another Writer runs
         preparer.start(1)
@@ -74,5 +78,43 @@ def test_a_writer_running_elsewhere_lets_the_presses_go_and_says_why(data_dir, f
 def test_the_dashboard_marks_calls_an_earlier_one_left_waiting(data_dir, monkeypatch):
     found = []
     monkeypatch.setattr(preparing.runs, "recover", lambda conn: found.append(conn))
-    Preparer(data_dir).recover()
+    Preparer(data_dir, startable).recover()
     assert len(found) == 1
+
+
+def test_a_job_skipped_closed_or_no_longer_ready_while_it_waits_is_let_go(data_dir, fake):
+    asked = []
+    preparer = Preparer(data_dir, lambda conn, job_id, waived: asked.append((job_id, waived)) or job_id != 2)
+    preparer.start(1)
+    preparer.start(2, waived=frozenset({"not-ready"}))  # the pop-up asked about this; something new came since
+    preparer.start(3)
+    fake.go.set()
+    assert fake.done.wait(WAIT) and finished(preparer)
+    assert fake.started == [1, 3] and asked == [(1, frozenset()), (2, frozenset({"not-ready"})), (3, frozenset())]
+    assert preparer.notice is None
+
+
+def test_the_writer_removed_in_settings_while_jobs_wait_lets_them_go_and_says_why(data_dir, fake):
+    config.CONFIG_PATH.write_text(f"data_dir: {data_dir}\n", encoding="utf-8")
+    preparer = Preparer(data_dir, startable)
+    preparer.start(1)
+    preparer.start(2)
+    assert finished(preparer)
+    assert fake.started == [] and preparer.notice == preparing.NO_WRITER and preparer.place(2) is None
+
+
+def test_a_key_or_model_problem_lets_the_waiting_jobs_go_with_the_same_message(data_dir, fake, monkeypatch):
+    refused = "Anthropic refused the key (status 401): check the key saved in the keychain."
+
+    def halts(conn, settings, job_id, feedback="", kind="resume"):
+        fake.started.append(job_id)
+        assert fake.go.wait(WAIT)
+        raise preparing.runs.Halted(refused)
+
+    monkeypatch.setattr(preparing.runs, "prepare", halts)
+    preparer = Preparer(data_dir, startable)
+    for job_id in (1, 2, 3):
+        preparer.start(job_id)
+    fake.go.set()
+    assert finished(preparer)
+    assert fake.started == [1] and preparer.notice == preparing.HALTED.format(refused)

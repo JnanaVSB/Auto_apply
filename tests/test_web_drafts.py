@@ -51,9 +51,13 @@ def job(conn, data_dir, tmp_path, monkeypatch):
 @pytest.fixture
 def client(client, monkeypatch):
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
-    client.started = []
-    monkeypatch.setattr(client.app.state.preparer, "start", lambda job, words="", kind="resume": client.started.append(
-        (job, words or kind) if words or kind != "resume" else job))  # fmt: skip
+    client.started, client.waived = [], []
+
+    def start(job, words="", kind="resume", waived=frozenset()):
+        client.started.append((job, words or kind) if words or kind != "resume" else job)
+        client.waived.append(waived)
+
+    monkeypatch.setattr(client.app.state.preparer, "start", start)
     log_in(client)
     return client
 
@@ -223,6 +227,19 @@ def test_request_changes_waits_for_the_writer_and_current_entries(client, conn, 
     assert "Your entries changed since version 1" in ask(client, job, "Shorter.") and client.started == []
 
 
+def test_request_changes_on_a_skipped_job_asks_first(client, conn, job):
+    version(conn, job)
+    with conn:
+        conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (job,))
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "Request changes to version 1" in text and 'hx-confirm="This job is skipped' in text
+    assert "This job is skipped" in ask(client, job, "Shorter.") and client.started == []  # a page that didn't ask
+    client.post(f"/jobs/{job}/request-changes", data={"csrf_token": csrf(client), "feedback": "Shorter.",
+                                                      "anyway": "skipped"})  # fmt: skip
+    assert client.started == [(job, "Shorter.")] and client.waived == [{"skipped"}]
+    assert client.post("/jobs/999/request-changes", data={"csrf_token": csrf(client)}).status_code == 404
+
+
 def test_retry_after_a_failed_change_sends_the_same_words(client, conn, job):
     version(conn, job)
     with conn:
@@ -273,7 +290,9 @@ def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, con
     monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
     with conn:
         conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (job,))
-    assert "You skipped this job" in client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
+    assert "This job is skipped" in client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
+    client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client), "anyway": "skipped"})  # the pop-up's OK
+    assert client.started == [(job, "cover_letter")] and client.waived == [{"skipped"}]
     assert client.post("/jobs/999/cover-letter", data={"csrf_token": csrf(client)}).status_code == 404
 
 
