@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
+from app import questionnaire
 from app.config import ConfigError, SpendingSettings, load_config
 from app.council import runs, spending, writer
 from app.documents import pdf, privacy
@@ -18,20 +19,19 @@ from app.resume import ResumeError
 from app.web import queries
 
 SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each the Usage page lists; None: all
-VERSION = "SELECT id, version, status, problem, sources, draft, flags, writer, created_on FROM preparations "
-VERSION += "WHERE job_id = ? AND kind = 'resume' AND version = ?"
 
 
 def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) -> dict:
     """What the Ready page and the job's box show: the newest version, the Writer's place, what the PDF build found,
     the cost so far, and whether Prepare would write a new version."""
-    latest, base = runs.latest(conn, job_id), runs.last_done(conn, job_id)
+    latest, current = runs.latest(conn, job_id), runs.current(conn, job_id)
     done = latest is not None and latest["status"] == "done"
+    base = latest if done else runs.last_done(conn, job_id)
     return {
-        "base": base, "changeable": base is not None and not runs.outdated(conn, job_id, base),
-        "latest": latest, "place": preparer.place(job_id), "outdated": done and runs.outdated(conn, job_id, latest),
+        "base": base, "changeable": base is not None and not runs.outdated(base, current),
+        "latest": latest, "place": preparer.place(job_id), "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
-        "cost": spending.of_job(conn, job_id), "writable": runs.writable(conn, job_id, latest),
+        "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
     }  # fmt: skip
 
 
@@ -78,16 +78,12 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
     async def changes(request: Request, job_id: int) -> Response:
         """One version beside your master: each entry's original wording and the Writer's, new numbers marked."""
         conn, number = request.app.state.conn, request.query_params.get("version", "")
-        rows = conn.execute(
-            VERSION, (queries.known(job_id), int(number) if queries.PAGE_NUMBER.fullmatch(number) else 0)
-        )
-        found = rows.fetchone()
-        if found is None or found[5] is None:  # no such version, or no draft
+        version = runs.version(conn, queries.known(job_id), int(number) if queries.PAGE_NUMBER.fullmatch(number) else 0)
+        if version is None or version["draft"] is None:  # no such version, or no draft
             raise HTTPException(404)
-        version = dict(zip([column[0] for column in rows.description], found, strict=True))
         entries, draft = runs.originals(conn, version["sources"]), json.loads(version["draft"])
         try:
-            restore = runs.put_back(conn, load_config(), entries, draft)[0]
+            restore = runs.put_back(conn, load_config(), entries, draft, questionnaire.load(conn)[0]["contact"])[0]
         except (privacy.PrivacyError, ResumeError, ConfigError):  # shown as the Writer saw it, placeholders and all
             restore = str
         return page(

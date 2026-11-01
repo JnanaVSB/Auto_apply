@@ -234,11 +234,11 @@ def test_each_press_is_a_new_version_and_a_change_of_entries_makes_the_last_one_
                                                                                           writer_answers):  # fmt: skip
     writer_answers[1].extend([GOOD, answer(("E1", [bullet("Trained a robot arm.", 0)], []))])  # E1: now the only one
     runs.prepare(conn, config(data_dir), job)
-    assert not runs.outdated(conn, job, version(conn))
+    assert not runs.outdated(version(conn), runs.current(conn, job))
     tile_sets.confirm(conn, [LAB], "fingerprint-2")
-    assert runs.outdated(conn, job, version(conn))
+    assert runs.outdated(version(conn), runs.current(conn, job))
     runs.prepare(conn, config(data_dir), job)
-    assert version(conn)["version"] == 2 and not runs.outdated(conn, job, version(conn))
+    assert version(conn)["version"] == 2 and not runs.outdated(version(conn), runs.current(conn, job))
 
 
 def test_calls_a_closed_dashboard_left_waiting_are_marked_never_resent(conn, job):
@@ -404,7 +404,7 @@ LETTER = json.dumps({"paragraphs": ["I want this job.", "I trained a robot arm w
 
 def test_a_cover_letter_is_its_own_kind_drawn_from_the_resumes_entries(conn, data_dir, job, writer_answers, built):
     calls, replies = writer_answers
-    replies.extend([LETTER, GOOD, LETTER])
+    replies.extend([LETTER, GOOD, LETTER, LETTER])
     runs.prepare(conn, config(data_dir), job, kind=runs.LETTER)  # no resume yet: all your entries
     assert "E6 | publication" in calls[0]["user"] and calls[0]["shape"] is runs.letter.SHAPE
     runs.prepare(conn, config(data_dir), job)  # the resume: summary, lab, school
@@ -417,3 +417,6 @@ def test_a_cover_letter_is_its_own_kind_drawn_from_the_resumes_entries(conn, dat
     assert target == data_dir / "documents" / str(job) / "cover-letter-v2.pdf"
     assert "Dear Hiring Manager," in source and "I trained a robot arm with PPO.\\par" in source
     assert "Re: Robot Learning Intern, Acme" in source and "Alex Example" in source
+    tile_sets.confirm(conn, PROFILE, "fingerprint-2")  # the resume is now from older entries: all of them again
+    runs.prepare(conn, config(data_dir), job, kind=runs.LETTER)
+    assert "E6 | publication" in calls[3]["user"]

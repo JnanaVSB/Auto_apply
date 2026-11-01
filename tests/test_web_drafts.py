@@ -13,7 +13,7 @@ from test_writer import PROFILE
 from app import config, questionnaire
 from app.documents import pdf, tile_sets
 from app.resume import RESUME_FILE
-from app.web import drafts, main
+from app.web import drafts, main, queries
 
 DRAFT = {
     "entries": [
@@ -97,9 +97,22 @@ def test_the_changes_page_shows_each_entry_beside_the_writers_version(client, co
     assert "<p>Rust, Python</p>" in text and "left out: C++ (17, 20)" in text  # the skills chosen and left out
     assert text.count("left out</span>") == 3  # the summary, the drone project, the school
     assert "kept as written" in text and "[ME]" not in text and "(from 0)" in text and "(from 2)" in text
-    for address in (f"/jobs/{job}/changes?version=2", f"/jobs/{job}/changes?version=x", f"/jobs/{job}/changes",
-                    f"/jobs/{job + 1}/changes?version=1"):  # fmt: skip
+    version(conn, job, 2, status="stopped")  # no draft
+    assert client.get(f"/jobs/{job}/changes?version=1").status_code == 200  # that version, not the newest
+    for address in (f"/jobs/{job}/changes?version=2", f"/jobs/{job}/changes?version=3", f"/jobs/{job}/changes",
+                    f"/jobs/{job}/changes?version=x", f"/jobs/{job + 1}/changes?version=1"):  # fmt: skip
         assert client.get(address).status_code == 404
+
+
+def test_the_box_and_the_ready_page_check_a_version_without_loading_your_entries(client, conn, job, monkeypatch):
+    version(conn, job)
+    loads, scores, score = [], [], queries.job_scoring
+    monkeypatch.setattr(tile_sets, "tiles", lambda *found: loads.append(found) or [])
+    monkeypatch.setattr(queries, "job_scoring", lambda *found: scores.append(found) or score(*found))
+    assert "Done: version 1" in client.get(f"/jobs/{job}/preparation").text
+    assert len(scores) == 1  # the job's score, read once
+    assert "done: version 1" in client.get("/ready").text
+    assert loads == []  # only each set's number was read
 
 
 def test_the_changes_page_puts_back_what_each_placeholder_stood_for(client, conn, job):
@@ -294,6 +307,7 @@ def test_retry_after_a_failed_change_sends_the_same_words(client, conn, job):
         conn.execute("UPDATE preparations SET feedback = 'Lead with the lab.' WHERE id = ?", (failed,))
     text = client.get(f"/jobs/{job}/preparation").text
     assert "you asked: Lead with the lab." in text and ">Retry</button>" in text
+    assert "Request changes to version 1" in text  # built on the newest finished version
     client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client)})
     assert client.started == [(job, "Lead with the lab.")]
 
@@ -329,7 +343,7 @@ def test_write_cover_letter_starts_the_writer_and_the_box_shows_the_letter(clien
     assert client.get(f"/documents/{job}/cover-letter-v2.pdf").status_code == 404
 
 
-def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, conn, job, monkeypatch):
+def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, conn, data_dir, job, monkeypatch):
     monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: 0)
     text = client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
     assert "The Writer is still working on this job" in text and client.started == []
@@ -341,6 +355,12 @@ def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, con
     client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client), "anyway": "skipped"})  # the pop-up's OK
     assert client.started == [(job, "cover_letter")] and client.waived == [{"skipped"}]
     assert client.post("/jobs/999/cover-letter", data={"csrf_token": csrf(client)}).status_code == 404
+    assert ">Write cover letter</button>" in client.get(f"/jobs/{job}/preparation").text  # the pop-up asks first
+    tile_sets.confirm(conn, PROFILE, "another-resume")  # entries no longer confirmed for your current resume
+    assert ">Write cover letter</button>" not in client.get(f"/jobs/{job}/preparation").text
+    tile_sets.confirm(conn, PROFILE, CHOSEN.resume)
+    config.CONFIG_PATH.write_text(f"data_dir: {data_dir}\n", encoding="utf-8")  # no Writer chosen
+    assert ">Write cover letter</button>" not in client.get(f"/jobs/{job}/preparation").text
 
 
 def test_the_letters_pdf_can_be_built_again(client, conn, data_dir, job, monkeypatch):

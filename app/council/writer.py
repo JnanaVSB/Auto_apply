@@ -11,10 +11,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
-import sqlcipher3
-
 from app.config import PROJECT_DIR
-from app.documents import tile_sets, writer_sources
 from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check, restore
 from app.documents.tiles import Tile
 from app.resume import CONTROL
@@ -95,14 +92,6 @@ class Entry:
 class Checked(NamedTuple):
     draft: dict  # {"entries": [{"source", "tile_id", "bullets": [{"text", "from"}], "skills"}], "notes", "details"}
     flags: list[dict]  # numbers not in the cited originals: {"source", "tile_id", "bullet", "numbers"}
-
-
-def entries(conn: sqlcipher3.Connection, sources: list) -> list[Entry]:
-    """Every confirmed entry of the job's sources, in the order of your resume (see in_order)."""
-    found = [
-        (source, tile_sets.latest(conn, None if source == writer_sources.PROFILE else source)) for source in sources
-    ]
-    return in_order([(source, confirmed.tiles if confirmed else []) for source, confirmed in found])
 
 
 def in_order(sources: list[tuple]) -> list[Entry]:

@@ -8,7 +8,7 @@ from test_privacy import CONTACT
 from test_tiles import RESUME_CLS
 from test_uploads import OTHER, form
 
-from app.council import writer
+from app.council import runs, writer
 from app.council.writer import BadAnswer, Entry
 from app.documents import privacy, tile_sets, uploads
 from app.documents.privacy import PrivacyStop
@@ -61,17 +61,23 @@ def labelled(*tiles):
     return [Entry(f"E{number}", "profile", tile) for number, tile in enumerate(tiles, 1)]
 
 
+def recorded(conn, *sources):
+    """The sets a version records for these sources (their latest confirmed ones, as runs.current finds them)."""
+    return json.dumps([{"source": source, "set": tile_sets.latest_id(conn, None if source == "profile" else source)}
+                       for source in sources])  # fmt: skip
+
+
 def test_entries_follow_the_first_sources_order_and_others_join_their_kind(conn, both):
-    found = writer.entries(conn, ["profile", both])
+    found = runs.originals(conn, recorded(conn, "profile", both))
     assert [(entry.label, entry.source, entry.tile.tile_id) for entry in found] == [
         ("E1", "profile", "sum-1"), ("E2", "profile", "exp-1"), ("E3", both, "exp-1"), ("E4", both, "exp-2"),
         ("E5", "profile", "proj-1"), ("E6", "profile", "skills-1"), ("E7", "profile", "edu-1"),
         ("E8", "profile", "pub-1"), ("E9", both, "award-1"),
     ]  # fmt: skip
-    other_way = [(entry.source, entry.tile.tile_id) for entry in writer.entries(conn, [both, "profile"])]
+    other_way = [(entry.source, entry.tile.tile_id) for entry in runs.originals(conn, recorded(conn, both, "profile"))]
     assert other_way[:5] == [(both, "exp-1"), (both, "exp-2"), ("profile", "exp-1"), (both, "award-1"),
                              ("profile", "sum-1")]  # fmt: skip
-    assert writer.entries(conn, [12345]) == []  # nothing confirmed
+    assert runs.originals(conn, recorded(conn, 12345)) == []  # nothing confirmed
 
 
 def test_the_writer_is_sent_its_instructions_and_your_entries_wrapped_as_data(shield):

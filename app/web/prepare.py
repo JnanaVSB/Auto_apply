@@ -183,7 +183,8 @@ def add_routes(
         waived = _waived(request)
         if not (problem := _cannot(conn, current, job, waived)):
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
-            if runs.writable(conn, job_id, latest := runs.latest(conn, job_id)):  # Retry a change: the same words
+            latest = runs.latest(conn, job_id)
+            if runs.writable(latest, runs.current(conn, job_id)):  # Retry a change: the same words
                 failed = latest is not None and latest["status"] in ("stopped", "by_hand")
                 request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "", waived=waived)
         if request.state.form.get("back") == "job":  # pressed in the job's box: the box comes back
@@ -218,7 +219,7 @@ def add_routes(
             problem = BUSY_JOB
         elif base is None:
             problem = runs.NO_BASE
-        elif runs.outdated(conn, job_id, base):
+        elif runs.outdated(base, runs.current(conn, job_id)):
             problem = runs.CHANGED.format(base["version"])
         elif not words or len(words) > MAX_FEEDBACK:
             problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
@@ -256,15 +257,16 @@ def add_routes(
         chosen, own = writer_sources.of_job(conn, job_id)
         preparer = request.app.state.preparer
         free, doubts = preparer.place(job_id) is None and not runs.writing(conn, job_id), _doubts(conn, current, job)
+        missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
+        writer = _writer_chosen()
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
             files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
-            versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=_writer_chosen(),
+            versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=writer,
             one_page=_one_page(), change_problem=change_problem, typed=typed, letter_problem=letter_problem,
             letter=drafts.letter(conn, data_dir, job_id), prepare_problem=prepare_problem,
-            can_letter=free and _cannot(conn, current, job, doubts) is None,
-            missing=writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen),
-            doubts=doubts, confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY,
+            can_letter=free and not missing and writer, missing=missing, doubts=doubts,
+            confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY,
         )  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/sources")

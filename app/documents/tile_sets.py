@@ -47,6 +47,12 @@ def latest(conn: sqlcipher3.Connection, file_id: int | None = None) -> Confirmed
     return None if row is None else Confirmed(row[0], row[1], row[2], tiles(conn, row[0]))
 
 
+def latest_id(conn: sqlcipher3.Connection, file_id: int | None = None) -> int | None:
+    """The latest confirmed set's number only, without loading its tiles."""
+    row = conn.execute(LATEST, (file_id,)).fetchone()
+    return None if row is None else row[0]
+
+
 def tiles(conn: sqlcipher3.Connection, set_id: int | None) -> list[Tile]:
     """The tiles of one confirmed set, in order: a prepared resume names the sets it was made from."""
     return [

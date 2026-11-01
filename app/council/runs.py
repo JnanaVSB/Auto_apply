@@ -25,9 +25,9 @@ from app.resume import ResumeError, read_latex
 KIND, LETTER = "resume", "cover_letter"  # each kind has its own versions
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
-NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, created_on FROM preparations
+NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, writer, created_on FROM preparations
     WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
-LATEST, LAST_DONE = NEWEST.format(""), NEWEST.format("AND status = 'done'")
+LATEST, LAST_DONE, NUMBERED = NEWEST.format(""), NEWEST.format("AND status = 'done'"), NEWEST.format("AND version = ?")
 START = """INSERT INTO preparations (job_id, kind, version, based_on, feedback, sources, writer, status, created_on)
     VALUES (?, ?, (SELECT coalesce(max(version), 0) + 1 FROM preparations WHERE job_id = ? AND kind = ?), ?, ?, ?, ?,
     'writing', ?)"""
@@ -75,9 +75,9 @@ class Halted(Exception):
     jobs waiting behind it are let go (app/web/preparer.py)."""
 
 
-def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST) -> dict | None:
+def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST, *more: int) -> dict | None:
     """The job's newest version of its resume (or cover letter), or None."""
-    rows = conn.execute(query, (job_id, kind))
+    rows = conn.execute(query, (job_id, kind, *more))
     row = rows.fetchone()
     return dict(zip([column[0] for column in rows.description], row, strict=True)) if row else None
 
@@ -85,6 +85,11 @@ def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: st
 def last_done(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> dict | None:
     """The job's newest finished version: what Request changes builds on."""
     return latest(conn, job_id, kind, LAST_DONE)
+
+
+def version(conn: sqlcipher3.Connection, job_id: int, number: int) -> dict | None:
+    """One version of the job's resume, by its number, or None."""
+    return latest(conn, job_id, KIND, NUMBERED, number)
 
 
 def versions(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND) -> list[dict]:
@@ -106,25 +111,28 @@ def writing(conn: sqlcipher3.Connection, job_id: int) -> bool:
     return conn.execute(JOB_WRITING, (job_id,)).fetchone() is not None
 
 
-def writable(conn: sqlcipher3.Connection, job_id: int, version: dict | None) -> bool:
+def writable(version: dict | None, current: list[dict]) -> bool:
     """Whether Prepare writes a new version: none yet, the last one stopped or needs checking by hand (Retry), or it
     was made from older entries. Never while one is being written, nor twice from the same entries."""
     if version is None or version["status"] in ("stopped", "by_hand"):
         return True
-    return version["status"] == "done" and outdated(conn, job_id, version)
+    return version["status"] == "done" and outdated(version, current)
 
 
-def outdated(conn: sqlcipher3.Connection, job_id: int, version: dict) -> bool:
+def current(conn: sqlcipher3.Connection, job_id: int) -> list[dict]:
+    """The job's sources, each with its latest confirmed set: what a new version is made from."""
+    return [{"source": source, "set": _set(conn, source)} for source in writer_sources.of_job(conn, job_id)[0]]
+
+
+def outdated(version: dict, current: list[dict]) -> bool:
     """Whether a version was made from other entries than the job's sources have now (or from other sources)."""
-    sources = writer_sources.of_job(conn, job_id)[0]
-    return json.loads(version["sources"]) != [{"source": source, "set": _set(conn, source)} for source in sources]
+    return json.loads(version["sources"]) != current
 
 
 def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: str = "", kind: str = KIND) -> int:
     """One press of Prepare for one job's resume, of Request changes with your words (a new version built on the
     newest finished one), or of Write cover letter (kind LETTER); returns the new version's id. Needs a Writer."""
-    role, sources = config.ai.writer, writer_sources.of_job(conn, job_id)[0]
-    sets = [{"source": source, "set": _set(conn, source)} for source in sources]
+    role, sets = config.ai.writer, current(conn, job_id)
     base = last_done(conn, job_id) if feedback else None
     with conn:
         preparation = conn.execute(START, (
@@ -132,10 +140,10 @@ def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: 
             role.model_dump_json(), _now(),
         )).lastrowid  # fmt: skip
     try:
-        if feedback and (base is None or outdated(conn, job_id, base)):
+        if feedback and (base is None or outdated(base, sets)):
             status, problem, result = "stopped", NO_BASE if base is None else CHANGED.format(base["version"]), None
         else:
-            status, problem, result = _write(conn, config, role, job_id, sources, preparation, base, feedback, kind)
+            status, problem, result = _write(conn, config, role, job_id, sets, preparation, base, feedback, kind)
     except Halted as halt:
         _finish(conn, preparation, "stopped", str(halt))
         raise
@@ -167,20 +175,20 @@ def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) ->
         text = latex.cover_letter(contact, title, company, f"{day:%B} {day.day}, {day.year}", paragraphs)
         return target, text, None
     found, draft = originals(conn, sources), json.loads(draft)
-    restore, note = put_back(conn, config, found, draft)
+    restore, note = put_back(conn, config, found, draft, contact)
     by_id = {(entry.source, entry.tile.tile_id): entry.tile for entry in found}
     tiles = [_tailored(by_id[(chosen["source"], chosen["tile_id"])], chosen, restore) for chosen in draft["entries"]]
     return target, latex.resume(contact, tiles), note
 
 
 def put_back(
-    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], draft: dict
+    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], draft: dict, contact: dict
 ) -> tuple[Callable[[str], str], str | None]:
     """How a draft's placeholders are put back (on this computer only): each with the exact text it stood for when the
     draft was written, kept with it, so a later change to your details can't put a different link or name in its
     place; and a note when a bullet still shows a detail you have changed since (today's filter no longer knows it as
     one of your details). A draft from before the details were kept: with today's, as then."""
-    today = shield_for(conn, config, entries)
+    today = shield_for(conn, config, entries, contact)
     if "details" not in draft:
         return today.restore, None
     changed = [DETAIL_KINDS[placeholder[1:-1].split("-")[0]]
@@ -202,12 +210,15 @@ def originals(conn: sqlcipher3.Connection, sources: str) -> list[writer.Entry]:
     return writer.in_order([(found["source"], tile_sets.tiles(conn, found["set"])) for found in json.loads(sources)])
 
 
-def shield_for(conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry]) -> privacy.Shield:
-    """The privacy filter for these entries and their sources, as the Writer's text is hidden with."""
+def shield_for(
+    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], contact: dict
+) -> privacy.Shield:
+    """The privacy filter for these entries and their sources (and your Questionnaire's contact details), as the
+    Writer's text is hidden with."""
     sources = list(dict.fromkeys(entry.source for entry in entries))
     latex_texts = [read_latex(config.data_dir) if source == writer_sources.PROFILE else uploads.latex(conn, source)
                    for source in sources]  # fmt: skip
-    return privacy.shield(questionnaire.load(conn)[0]["contact"], latex_texts, [entry.tile for entry in entries])
+    return privacy.shield(contact, latex_texts, [entry.tile for entry in entries])
 
 
 def _tailored(tile, chosen: dict, restore: Callable[[str], str]):
@@ -232,18 +243,19 @@ def recover(conn: sqlcipher3.Connection) -> None:
 
 
 def _write(
-    conn: sqlcipher3.Connection, config: Config, role: AIRole, job_id: int, sources: list, preparation: int,
+    conn: sqlcipher3.Connection, config: Config, role: AIRole, job_id: int, sets: list[dict], preparation: int,
     base: dict | None, feedback: str, kind: str,
 ) -> tuple[str, str | None, writer.Checked | None]:  # fmt: skip
     title, company, locations, description = conn.execute(JOB, (job_id,)).fetchone()
-    job, found = (title, company, ", ".join(json.loads(locations)), description or ""), writer.entries(conn, sources)
+    job = (title, company, ", ".join(json.loads(locations)), description or "")
+    found = originals(conn, json.dumps(sets))
     if kind == LETTER:  # the entries your newest finished resume chose (owner choice X1), else all of them
         resume = last_done(conn, job_id)
-        current = resume is not None and not outdated(conn, job_id, resume)
+        fresh = resume is not None and not outdated(resume, sets)
         found = letter.chosen(found, {(e["source"], e["tile_id"]) for e in json.loads(resume["draft"])["entries"]}
-                              if current else None)  # fmt: skip
+                              if fresh else None)  # fmt: skip
     try:
-        shield = shield_for(conn, config, found)
+        shield = shield_for(conn, config, found, questionnaire.load(conn)[0]["contact"])
         if kind == LETTER:
             system, user = letter.request(*job, found, shield)
             shape, check = letter.SHAPE, lambda answer: letter.checked(answer, found, job[3])
@@ -340,8 +352,7 @@ def _finish(
 
 
 def _set(conn: sqlcipher3.Connection, source) -> int | None:
-    confirmed = tile_sets.latest(conn, None if source == writer_sources.PROFILE else source)
-    return confirmed.set_id if confirmed else None
+    return tile_sets.latest_id(conn, None if source == writer_sources.PROFILE else source)
 
 
 def _now() -> str:

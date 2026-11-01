@@ -78,6 +78,7 @@ def test_confirming_saves_a_new_set_and_keeps_the_older_ones(conn):
     second = tile_sets.confirm(conn, renamed, "fp1")
     assert second == first + 1 and tile_sets.latest(conn).tiles == renamed
     assert tile_sets.confirm(conn, renamed, "fp2") == second + 1  # the same tiles from a changed resume: a new set
+    assert tile_sets.latest_id(conn) == second + 1 and tile_sets.latest_id(conn, 12345) is None  # the number only
     assert conn.execute("SELECT count(*) FROM tiles WHERE set_id = ?", (first,)).fetchone()[0] == len(TILES)
 
 
