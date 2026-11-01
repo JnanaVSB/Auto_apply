@@ -125,6 +125,15 @@ def bullet(text, *cited):
     return {"text": text, "from": list(cited)}
 
 
+def test_new_numbers_are_the_ones_the_originals_lack_each_once():
+    found = writer.new_numbers(
+        "Cut 1,000 calls and 2500 runs to 40% in 2025, then 40% again.", "1000 calls, 2,500 runs"
+    )
+    assert found == ["40", "2025"]  # 1,000 and 1000 are the same number; 40 is listed once
+    cited = {"text": "Wrote the lab's data tools for 90% of its runs.", "from": [1]}
+    assert writer._new_numbers(cited, LAB) == ["90"]  # only the cited original counts (bullet 0 has 90%)
+
+
 def test_a_good_answer_is_kept_in_your_order_with_new_numbers_flagged(shield):
     entries = labelled(*PROFILE)
     text = answer(
