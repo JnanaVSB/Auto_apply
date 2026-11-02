@@ -196,7 +196,7 @@ def _view(request: Request, page, problem: str | None = None, typed: dict | None
         *(f"No key is saved under '{name}': add it on the Writer settings page." for name in missing),
         SWAP if switching else "",
     ]
-    costs = [row["cost"] for row in rows if row["member"] in MEMBERS]
+    costs = [row["cost"] for row in rows]
     return page(
         request, "council_settings.html", rows=rows, tier=tier(config), presets=NAMES, council=council,
         total=None if None in costs else sum(costs), warnings=[line for line in warnings if line],

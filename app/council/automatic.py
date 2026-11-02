@@ -30,16 +30,15 @@ def start_due(conn: sqlcipher3.Connection, config: Config, now: datetime | None 
         return None
     if not council.any_time and not _in_hours(now.strftime("%H:%M"), council.start, council.end):
         return f"Automatic preparation waits for the council hours ({council.start} to {council.end})."
-    roles = [config.ai.writer, *(getattr(config.ai, member) for member in REVIEWERS)]
-    if missing := missing_key(roles):
+    members = {m: getattr(config.ai, m) for m in REVIEWERS} | {added.id: added.role for added in config.ai.extra}
+    if missing := missing_key([config.ai.writer, *members.values()]):
         return f"Automatic preparation waits: no key is saved under '{missing}' (Settings)."
     try:
         resume = read_resume(config.data_dir).fingerprint
     except ResumeError:
         return "Automatic preparation waits: your resume can't be read."
     started = _started_today(conn, now)
-    each = estimate.version(conn, config.ai.writer, dict(zip(REVIEWERS, roles[1:], strict=True)), council.rounds,
-                            council.turns, half=True)  # fmt: skip
+    each = estimate.version(conn, config.ai.writer, members, council.rounds, council.turns, half=True)
     found = spending.spent(conn, spending.today())
     coming = _coming(conn, config)
     room = min(config.spending.daily - found.today, config.spending.monthly - found.month) - coming

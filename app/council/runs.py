@@ -35,7 +35,7 @@ FAILED_TRIES = """SELECT f.saved_on, p.job_id, j.title, j.company, p.kind, p.ver
     f.input_tokens + f.cached_tokens, f.output_tokens, f.cost, f.reason, f.reply, f.reply_length
     FROM failed_tries f JOIN steps s ON s.id = f.step_id JOIN preparations p ON p.id = s.preparation_id
     JOIN jobs j ON j.id = p.job_id WHERE ?1 IS NULL OR p.id = ?1 ORDER BY f.id DESC LIMIT ?2 OFFSET ?3"""
-JOB_WRITING = "SELECT 1 FROM preparations WHERE job_id = ? AND status = 'writing'"
+JOB_WRITING = "SELECT 1 FROM preparations WHERE job_id = ? AND status = 'writing' AND kind != 'pilot'"
 VERSION = "SELECT job_id, kind, version, sources, draft, created_on, wording FROM preparations WHERE id = ?"
 NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
 VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,

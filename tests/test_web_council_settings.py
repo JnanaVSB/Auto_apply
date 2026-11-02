@@ -74,6 +74,16 @@ def test_paid_presets_estimate_each_member_and_name_missing_keys(client, setting
     assert "under &#39;anthropic&#39;" not in council_page(client)
 
 
+def test_the_whole_job_total_counts_the_members_you_added(client, settings_file):
+    post(client, "/settings/council/preset", preset="recommended")
+    post(client, "/settings/council/members", name="Recruiter", instructions="Read it as a recruiter.")
+    assert "A whole job at most: $" in council_page(client)  # on the laptop: free
+    own = {"kind": "own", "address": "https://models.example.org/v1", "model": "my-model", "thinking": "off"}
+    post(client, "/settings/writer", member="x1", **own, confirm="on")
+    assert load_config(settings_file).ai.extra[0].role.model == "my-model"
+    assert "A member without a known price can't be estimated" in council_page(client)  # its own server: no price
+
+
 def test_the_council_form_saves_its_settings_with_the_usual_checks(client, settings_file):
     form = {"rounds": "4", "turns": "2", "start": "21:00", "end": "07:30", "daily_jobs": "12"}
     post(client, "/settings/council", **form)

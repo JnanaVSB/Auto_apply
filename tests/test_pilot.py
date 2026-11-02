@@ -12,7 +12,7 @@ from test_web_ready import scored
 
 from app import config as settings
 from app.config import AISettings, Config, CouncilSettings
-from app.council import flow, pilot, runner
+from app.council import flow, pilot, runner, runs
 from app.documents import privacy
 from app.resume import from_latex
 from app.web.council_settings import MEMBERS, PRESETS
@@ -183,6 +183,23 @@ def test_a_made_up_claim_is_caught_only_by_a_truth_checker_must_in_round_1(conn,
                      (version, round_, json.dumps(answer | {"verdict": "object"})))  # fmt: skip
     found = pilot.summary(conn, number, "laptop")
     assert (found["caught"], found["kept"]) == (caught, 1)  # still in the final wording here
+    rewritten = {
+        "entries": [
+            {"source": "profile", "tile_id": "exp-1", "bullets": [{"text": "Built it.", "from": [0]}], "skills": []}
+        ],
+        "responses": [{"objection": "1", "action": "dropped", "why": claim}],
+    }
+    with conn:
+        conn.execute("UPDATE preparations SET draft = ? WHERE id = ?", (json.dumps(rewritten), version))
+    assert pilot.summary(conn, number, "laptop")["kept"] == 0  # only the Writer's reply still names it
+
+
+def test_a_pilot_running_on_a_job_leaves_your_own_versions_alone(conn, data_dir, jobs):
+    number = pilot.create(conn, config(data_dir), jobs[:1], seed=1)
+    flow.start(conn, config(data_dir), jobs[0], pilot=(number, "laptop", LAPTOP))
+    assert not runs.writing(conn, jobs[0])  # your resume box, its buttons and Write cover letter work as usual
+    flow.start(conn, config(data_dir), jobs[0])
+    assert runs.writing(conn, jobs[0])
 
 
 def test_a_pilot_runs_whatever_the_settings_say(conn, data_dir, jobs):

@@ -253,7 +253,8 @@ def _normal(conn: sqlcipher3.Connection, config: Config, latest: dict | None) ->
             members = {name: AIRole(**role) for name, role in council["members"].items()}
             spent = conn.execute(SPENT, (latest["id"],)).fetchone()[0]
         else:
-            writer, members, spent = config.ai.writer, {m: getattr(config.ai, m) for m in REVIEWERS}, 0
+            members = {m: getattr(config.ai, m) for m in REVIEWERS} | {a.id: a.role for a in config.ai.extra}
+            writer, spent = config.ai.writer, 0
         if writer is None or None in members.values():
             return None
         full = estimate.version(conn, writer, members, config.council.rounds, config.council.turns, half=False)

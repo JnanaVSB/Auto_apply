@@ -517,6 +517,15 @@ def test_now_normal_price_switches_a_running_version_or_starts_one(client, conn,
     assert client.started == [job]  # a new version, at the normal price
 
 
+def test_now_normal_price_for_a_new_version_counts_the_members_you_added(conn, data_dir):
+    laptop = config.AIRole(model="gemma4:26b-a4b-it-q8_0")
+    ai = config.AISettings(writer=laptop, **dict.fromkeys(config.REVIEWERS, laptop))
+    assert drafts._normal(conn, config.Config(data_dir=data_dir, ai=ai), None) == 0  # all on the laptop: free
+    opus = config.AIRole(service="anthropic", model="claude-opus-5-5", key_name="anthropic")
+    added = ai.model_copy(update={"extra": [config.CustomMember(id="x1", name="Recruiter", role=opus)]})
+    assert drafts._normal(conn, config.Config(data_dir=data_dir, ai=added), None) > 0
+
+
 def test_continue_anyway_carries_on_a_version_stopped_for_a_closed_job(client, conn, job):
     from app.council import flow
 

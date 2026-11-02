@@ -10,7 +10,7 @@ from test_runs import LOCAL
 from test_web_ready import CHOSEN, scored
 
 from app import prepare
-from app.config import AIRole, AISettings, Config, CouncilSettings, SpendingSettings
+from app.config import AIRole, AISettings, Config, CouncilSettings, CustomMember, SpendingSettings
 from app.council import automatic, estimate, flow, runner
 from app.keychain import SERVICE
 from app.resume import from_latex
@@ -127,6 +127,16 @@ def test_a_job_starts_only_if_its_estimate_fits_what_is_left_after_the_jobs_runn
         conn.execute("DELETE FROM preparations WHERE id = 2")  # one of them gone: room for one more
     automatic.start_due(conn, config, NIGHT)
     assert one(conn, "SELECT count(*) FROM preparations")[0] == 2  # the one still running counts its estimate
+
+
+def test_a_member_you_added_counts_in_the_key_check_and_the_estimate(conn, data_dir, ready_jobs, fake_keychain):
+    config = settings(data_dir, daily=1, rounds=5)  # everyone else on the laptop: free
+    added = CustomMember(id="x1", name="Recruiter", role=OPUS)
+    config = config.model_copy(update={"ai": config.ai.model_copy(update={"extra": [added]})})
+    assert "no key is saved under 'anthropic'" in automatic.start_due(conn, config, NIGHT)
+    fake_keychain.store[(SERVICE, "anthropic")] = "fake-key"
+    assert "estimated cost doesn't fit" in automatic.start_due(conn, config, NIGHT)
+    assert one(conn, "SELECT count(*) FROM preparations")[0] == 1  # its Opus reviews would take the second past $1
 
 
 def test_a_job_stopped_because_your_entries_changed_starts_again(conn, data_dir, ready_jobs):

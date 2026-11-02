@@ -98,7 +98,7 @@ def summary(conn: sqlcipher3.Connection, pilot: int, lineup: str) -> dict:
         if planted:
             found["planted"] += 1
             found["caught"] += _caught(conn, steps, sources, json.loads(planted))
-            found["kept"] += bool(draft) and json.loads(planted)["claim"] in draft
+            found["kept"] += bool(draft) and json.loads(planted)["claim"] in json.dumps(json.loads(draft)["entries"])
         if status != "writing":
             found["finished"] += 1
             found["rounds"] += rounds
