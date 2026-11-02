@@ -31,6 +31,8 @@ PRIVATE_NETWORKS = tuple(
     )
 )
 Price = Annotated[float, Field(ge=0, le=1000)]  # dollars per 1M tokens
+Time = Annotated[str, Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")]  # 24-hour clock, e.g. 22:00
+REVIEWERS = ("truth", "hiring", "editor", "ats", "domain")  # the council's five permanent members, besides the Writer
 
 
 class ConfigError(Exception):
@@ -101,7 +103,7 @@ class AIRole(BaseModel):
     model: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")]
     address: str = ""  # Ollama and Anthropic have defaults; an OpenAI-compatible service needs its own
     key_name: Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")] | None = None  # the key's name in the keychain
-    thinking: Literal["off", "low", "medium", "high"] = "off"
+    thinking: Literal["off", "low", "medium", "high", "xhigh"] = "off"  # xhigh: Anthropic and OpenAI only
     context: Annotated[int, Field(ge=2048, le=262144, strict=True)] = 16384  # Ollama's working size, in word-pieces
     # Your own address's prices, if you know them; Anthropic and OpenAI use the price list shipped with the app
     price_input: Price | None = None
@@ -118,6 +120,8 @@ class AIRole(BaseModel):
     def _safe_address(self) -> "AIRole":
         parts = urlsplit(self.address)
         if self.service == "ollama":
+            if self.thinking == "xhigh":
+                raise ValueError('thinking "xhigh" is for Anthropic and OpenAI models only')
             if parts.scheme != "http" or parts.hostname not in LOCAL_HOSTS or parts.username or parts.password:
                 raise ValueError(
                     "Ollama must run on this computer (address http://127.0.0.1:11434): it has no password, so it "
@@ -152,11 +156,42 @@ def _private(host: str | None) -> bool:
     return any(address in network for network in PRIVATE_NETWORKS)
 
 
+class CustomMember(BaseModel):
+    """A council member you added, with its own instructions (data/skills/<id>.md) and model."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: Literal["x1", "x2", "x3"]
+    name: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 &'/-]{0,39}$")]  # as pages and the council name it
+    letters: bool = False  # also reviews cover letters
+    role: AIRole
+
+
 class AISettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     evaluator: AIRole = AIRole(model="gemma4:26b-a4b-it-q8_0")  # scores jobs (Stage B)
     writer: AIRole | None = None  # tailors resumes and writes cover letters; none until you choose one in Settings
+    # The council's reviewers: none until you choose them in Settings; all five are needed
+    truth: AIRole | None = None  # Truth checker
+    hiring: AIRole | None = None  # Hiring manager
+    editor: AIRole | None = None  # Writing editor
+    ats: AIRole | None = None  # ATS screener
+    domain: AIRole | None = None  # Domain expert
+    extra: Annotated[list[CustomMember], Field(max_length=3)] = []  # members you added
+    tier: Literal["laptop", "low", "recommended", "high"] | None = None  # the preset the members were filled from
+
+    @field_validator("extra")
+    @classmethod
+    def _one_each(cls, extra: list[CustomMember]) -> list[CustomMember]:
+        if len({member.id for member in extra}) != len(extra):
+            raise ValueError("each added member needs its own id (x1, x2 or x3)")
+        return extra
+
+    @property
+    def council_chosen(self) -> bool:
+        """Whether the Writer and all five reviewers are chosen."""
+        return self.writer is not None and all(getattr(self, member) for member in REVIEWERS)
 
 
 class SpendingSettings(BaseModel):
@@ -164,6 +199,24 @@ class SpendingSettings(BaseModel):
 
     daily: Annotated[float, Field(ge=1, le=500)] = 15  # dollars a day for paid AI calls
     monthly: Annotated[float, Field(ge=1, le=5000)] = 150  # dollars a month
+
+
+class CouncilSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rounds: Annotated[int, Field(ge=1, le=5, strict=True)] = 3  # the round limit
+    turns: Annotated[int, Field(ge=0, le=3, strict=True)] = 1  # discussion turns per round; 0: each reviews alone
+    automatic: bool = False  # start ready jobs by itself, within the council hours and the daily job cap
+    start: Time = "22:00"  # council hours: automatic preparation starts new jobs only from start to end
+    end: Time = "08:00"
+    any_time: bool = False  # no council hours: new jobs start at any time
+    daily_jobs: Annotated[int, Field(ge=1, le=200, strict=True)] = 20  # new jobs a day
+
+    @model_validator(mode="after")
+    def _some_hours(self) -> "CouncilSettings":
+        if self.start == self.end and not self.any_time:
+            raise ValueError("council hours need a start and an end that differ (or any_time: true)")
+        return self
 
 
 class DocumentSettings(BaseModel):
@@ -185,6 +238,13 @@ class Config(BaseModel):
     ai: AISettings = AISettings()
     documents: DocumentSettings = DocumentSettings()
     spending: SpendingSettings = SpendingSettings()
+    council: CouncilSettings = CouncilSettings()
+
+    @model_validator(mode="after")
+    def _automatic_needs_a_council(self) -> "Config":
+        if self.council.automatic and not self.ai.council_chosen:
+            raise ValueError("council.automatic needs the Writer and all five council members chosen first")
+        return self
 
 
 def load_config(path: Path | None = None) -> Config:

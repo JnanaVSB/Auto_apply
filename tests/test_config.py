@@ -177,6 +177,7 @@ AI_ROLE = "data_dir: data\nai:\n  evaluator:\n"
         ),
         ("    model: rm -rf /\n", "String should match pattern"),
         ("    model: m\n    thinking: off\n", "thinking: Input should be 'off'"),  # YAML reads a bare off as false
+        ("    model: m\n    thinking: xhigh\n", "Anthropic and OpenAI models only"),
     ],
 )
 def test_ai_role_settings_are_checked(tmp_path, role, problem):
@@ -213,6 +214,53 @@ def test_spending_limits_have_defaults_and_ranges(tmp_path):
     for setting, value in (("daily", 0.5), ("daily", 501), ("monthly", 0), ("monthly", 5001)):
         with pytest.raises(ConfigError, match=f"spending.{setting}"):
             load_config(write(tmp_path, f"data_dir: data\nspending:\n  {setting}: {value}\n"))
+
+
+LOCAL = "    service: ollama\n    model: gemma4:26b-a4b-it-q8_0\n"
+COUNCIL = "".join(f"  {member}:\n{LOCAL}" for member in ("writer", "truth", "hiring", "editor", "ats", "domain"))
+
+
+def test_the_council_has_defaults_and_ranges(tmp_path):
+    council = load_config(write(tmp_path, "data_dir: data\n")).council
+    assert (council.rounds, council.turns, council.daily_jobs) == (3, 1, 20)
+    assert (council.automatic, council.start, council.end, council.any_time) == (False, "22:00", "08:00", False)
+    for setting, value in (
+        ("rounds", 0), ("rounds", 6), ("turns", -1), ("turns", 4), ("daily_jobs", 0), ("daily_jobs", 201),
+        ("start", '"24:00"'), ("end", '"8:00"'), ("end", '"08:00; x"'),
+    ):  # fmt: skip
+        with pytest.raises(ConfigError, match=f"council.{setting}"):
+            load_config(write(tmp_path, f"data_dir: data\ncouncil:\n  {setting}: {value}\n"))
+    with pytest.raises(ConfigError, match="a start and an end that differ"):
+        load_config(write(tmp_path, 'data_dir: data\ncouncil:\n  start: "08:00"\n'))
+    hours = load_config(write(tmp_path, 'data_dir: data\ncouncil:\n  start: "08:00"\n  any_time: true\n')).council
+    assert hours.any_time
+
+
+def test_automatic_preparation_needs_the_writer_and_all_five_reviewers(tmp_path):
+    on = "council:\n  automatic: true\n"
+    config = load_config(write(tmp_path, f"data_dir: data\nai:\n{COUNCIL}{on}"))
+    assert config.council.automatic and config.ai.council_chosen
+    without_domain = COUNCIL.split("  domain:")[0]
+    with pytest.raises(ConfigError, match="needs the Writer and all five council members"):
+        load_config(write(tmp_path, f"data_dir: data\nai:\n{without_domain}{on}"))
+    assert not load_config(write(tmp_path, f"data_dir: data\nai:\n{without_domain}")).ai.council_chosen
+
+
+def test_added_members_have_their_own_id_name_and_model(tmp_path):
+    member = "  - id: {}\n    name: {}\n    letters: true\n    role:\n  " + LOCAL.replace("\n    ", "\n      ")
+    ai = "ai:\n  extra:\n" + member.format("x1", "Domain expert")
+    extra = load_config(write(tmp_path, f"data_dir: data\n{ai}")).ai.extra
+    assert [(added.id, added.name, added.letters, added.role.model) for added in extra] == [
+        ("x1", "Domain expert", True, "gemma4:26b-a4b-it-q8_0")
+    ]
+    for added, problem in (
+        (member.format("x1", "Domain expert") + member.format("x1", "Recruiter"), "its own id"),
+        (member.format("x4", "Recruiter"), "ai.extra.0.id"),
+        (member.format("x1", "Recruiter <b>"), "ai.extra.0.name"),
+        ("".join(member.format(f"x{n}", "Recruiter") for n in (1, 2, 3, 3)), "at most 3 items"),
+    ):
+        with pytest.raises(ConfigError, match=problem):
+            load_config(write(tmp_path, f"data_dir: data\nai:\n  extra:\n{added}"))
 
 
 @pytest.mark.parametrize(

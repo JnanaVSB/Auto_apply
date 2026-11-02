@@ -427,6 +427,113 @@ UPGRADES = (
     );
     CREATE INDEX failed_tries_step ON failed_tries (step_id);
     """,
+    # 15: Phase 4c, the council. preparations and steps are rebuilt (SQLite can't change a table's checks), every row
+    # kept; versions from Part 4b were Writer-only and sent at the normal price.
+    """
+    CREATE TABLE preparations_v15 (  -- one row per version of a job's tailored resume or cover letter, or a pilot's
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        kind TEXT NOT NULL CHECK (kind IN ('resume', 'cover_letter', 'pilot')),
+        version INTEGER NOT NULL CHECK (version >= 1),  -- 1, 2, ... per job and kind
+        based_on INTEGER REFERENCES preparations (id),  -- the version Request changes started from
+        feedback TEXT,  -- your words from Request changes
+        asked TEXT NOT NULL DEFAULT '[]',  -- JSON: your words sent while the council worked, each with its round
+        sources TEXT NOT NULL,  -- JSON: each source used with its confirmed tile set
+        writer TEXT NOT NULL,  -- JSON: the Writer's settings at the start (never a key)
+        council TEXT,  -- JSON: the reviewers' settings at the start (never a key); NULL: a Writer-only version (4b)
+        status TEXT NOT NULL CHECK (status IN ('writing', 'done', 'by_hand', 'stopped')),
+        round INTEGER NOT NULL DEFAULT 1 CHECK (round BETWEEN 1 AND 6),  -- at most 5, plus one for your words
+        agreed INTEGER CHECK (agreed IN (0, 1)),  -- the council's result; NULL: not finished, or no council
+        wording TEXT CHECK (wording IN ('original', 'writer')),  -- no agreement: the wording of objected entries
+        mode TEXT NOT NULL DEFAULT 'half' CHECK (mode IN ('half', 'normal')),  -- normal: "Now, normal price"
+        waived TEXT NOT NULL DEFAULT '[]',  -- JSON: the doubts you proceeded anyway with (skipped, closed, not-ready)
+        automatic INTEGER NOT NULL DEFAULT 0 CHECK (automatic IN (0, 1)),  -- started by automatic preparation
+        pilot_id INTEGER REFERENCES pilots (id),
+        lineup TEXT,  -- the pilot line-up it was made with
+        planted TEXT,  -- JSON: the pilot's made-up claim in its first draft; never in a PDF
+        problem TEXT,  -- why it stopped, paused or needs checking by hand; never your text
+        draft TEXT,  -- JSON: the checked answer with placeholders, and "details": their real text, kept only here
+        flags TEXT NOT NULL DEFAULT '[]',  -- JSON: e.g. numbers not in the original bullets
+        created_on TEXT NOT NULL,
+        finished_on TEXT,
+        UNIQUE (job_id, kind, version),
+        CHECK (status != 'done' OR draft IS NOT NULL),
+        CHECK ((kind = 'pilot') = (pilot_id IS NOT NULL) AND (kind = 'pilot') = (lineup IS NOT NULL))
+    );
+    INSERT INTO preparations_v15 (id, job_id, kind, version, based_on, feedback, sources, writer, status, mode, problem,
+        draft, flags, created_on, finished_on)
+        SELECT id, job_id, kind, version, based_on, feedback, sources, writer, status, 'normal', problem, draft, flags,
+        created_on, finished_on FROM preparations;
+    DROP TABLE preparations;
+    ALTER TABLE preparations_v15 RENAME TO preparations;
+    -- At most one version of a job's resume (or cover letter, or one pilot line-up's resume) is being written at a time
+    CREATE UNIQUE INDEX preparations_writing ON preparations (job_id, kind, coalesce(lineup, ''))
+        WHERE status = 'writing';
+    CREATE TABLE steps_v15 (  -- one row per AI call a preparation needs
+        id INTEGER PRIMARY KEY,
+        preparation_id INTEGER NOT NULL REFERENCES preparations (id),
+        round INTEGER NOT NULL DEFAULT 1 CHECK (round >= 1),
+        member TEXT NOT NULL DEFAULT 'writer'
+            CHECK (member IN ('writer', 'truth', 'hiring', 'editor', 'ats', 'domain', 'x1', 'x2', 'x3')),
+        turn INTEGER NOT NULL DEFAULT 0 CHECK (turn BETWEEN 0 AND 3),  -- 0: the draft or a member's own review;
+        -- 1 to 3: the council's discussion turns
+        service TEXT NOT NULL,
+        model TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'direct' CHECK (mode IN ('direct', 'batch', 'flex')),  -- batch, flex: half price
+        status TEXT NOT NULL CHECK (status IN ('sent', 'waiting', 'done', 'failed', 'interrupted')),
+        tries INTEGER NOT NULL DEFAULT 1 CHECK (tries >= 1),
+        waits INTEGER NOT NULL DEFAULT 0 CHECK (waits >= 0),  -- times the service said "busy, try later": not a try
+        retry_after TEXT,  -- waiting: not sent again before this time (NULL: with the next batch)
+        batch_id TEXT,  -- the Anthropic batch it was sent in, saved the moment the batch is created
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        cached_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,  -- thinking included
+        cost REAL CHECK (cost >= 0),  -- dollars, from the tokens the service reported; NULL: not counted (no price)
+        reserved REAL NOT NULL DEFAULT 0 CHECK (reserved >= 0),  -- the largest possible cost of the call waited for
+        day TEXT NOT NULL,  -- the date on this computer's clock when it was last sent
+        answer TEXT,  -- the checked answer
+        error TEXT,  -- a short reason; never your text or the answer
+        sent_on TEXT NOT NULL,
+        done_on TEXT,
+        UNIQUE (preparation_id, round, member, turn),
+        CHECK (member != 'writer' OR turn = 0),
+        CHECK (status = 'sent' OR reserved = 0),  -- once answered or interrupted, the reservation is cost or gone
+        CHECK (status = 'waiting' OR retry_after IS NULL),
+        CHECK (mode = 'batch' OR batch_id IS NULL)
+    );
+    INSERT INTO steps_v15 (id, preparation_id, round, member, service, model, status, tries, input_tokens,
+        cached_tokens, output_tokens, cost, reserved, day, answer, error, sent_on, done_on)
+        SELECT id, preparation_id, round, member, service, model, status, tries, input_tokens, cached_tokens,
+        output_tokens, cost, reserved, day, answer, error, sent_on, done_on FROM steps;
+    DROP TABLE steps;
+    ALTER TABLE steps_v15 RENAME TO steps;
+    CREATE INDEX steps_day ON steps (day);
+    CREATE TABLE batches (  -- one row per Anthropic batch (half price)
+        id INTEGER PRIMARY KEY,
+        batch_id TEXT NOT NULL UNIQUE,  -- Anthropic's id
+        status TEXT NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'saved', 'deleted')),  -- results saved here,
+        -- then deleted at Anthropic
+        adopted INTEGER NOT NULL DEFAULT 0 CHECK (adopted IN (0, 1)),  -- found again after a crash lost its id
+        sent_on TEXT NOT NULL,
+        saved_on TEXT,
+        deleted_on TEXT
+    );
+    CREATE TABLE pilots (  -- the same jobs through several line-ups, to compare them
+        id INTEGER PRIMARY KEY,
+        jobs TEXT NOT NULL,  -- JSON: the jobs' ids
+        planted TEXT NOT NULL,  -- JSON: the made-up claim slipped into the first draft of some of them, by job id
+        rounds INTEGER NOT NULL CHECK (rounds BETWEEN 1 AND 5),
+        turns INTEGER NOT NULL CHECK (turns BETWEEN 0 AND 3),
+        created_on TEXT NOT NULL
+    );
+    CREATE TABLE objection_marks (  -- your mark on a council member's objection: useful or not
+        step_id INTEGER NOT NULL REFERENCES steps (id),
+        objection TEXT NOT NULL,  -- its number, e.g. TC-1
+        useful INTEGER NOT NULL CHECK (useful IN (0, 1)),
+        marked_on TEXT NOT NULL,
+        PRIMARY KEY (step_id, objection)
+    );
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

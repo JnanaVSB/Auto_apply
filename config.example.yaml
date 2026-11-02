@@ -50,8 +50,9 @@ scoring:
 
 # The AI model for each role. Phase 3b uses only the evaluator, which scores jobs on this computer through Ollama:
 # nothing leaves the laptop. service: ollama, openai-compatible or anthropic; a cloud service also needs key_name, the
-# name its key is saved under in your keychain (never the key itself). thinking: "off", "low", "medium" or "high"
-# (keep the quotes). context: Ollama's working size in word-pieces; the whole resume and job ad must fit in it.
+# name its key is saved under in your keychain (never the key itself). thinking: "off", "low", "medium", "high" or
+# "xhigh" (Anthropic and OpenAI only; keep the quotes). The Writer and the council's five reviewers (truth, hiring,
+# editor, ats, domain) are chosen on the Settings page. context: Ollama's working size in word-pieces; the whole resume and job ad must fit in it.
 ai:
   evaluator:
     service: ollama
@@ -70,3 +71,14 @@ documents:
 spending:
   daily: 15  # dollars a day (1 to 500)
   monthly: 150  # dollars a month (1 to 5000)
+
+# The council: the Writer writes, the five reviewers review it alone, then discuss; the Writer revises, and so on until
+# all approve or the round limit is reached.
+council:
+  rounds: 3  # the round limit (1 to 5)
+  turns: 1  # discussion turns per round (0 to 3; 0: each reviewer reviews alone)
+  automatic: false  # prepare ready jobs by itself (needs the Writer and all five reviewers chosen)
+  start: "22:00"  # council hours: automatic preparation starts new jobs only from start to end (keep the quotes)
+  end: "08:00"
+  any_time: false  # true: new jobs start at any time
+  daily_jobs: 20  # new jobs a day (1 to 200); your own presses count too, but are never held back

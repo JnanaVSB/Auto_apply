@@ -783,6 +783,52 @@ def test_version_14_adds_failed_tries_and_keeps_every_step(tmp_path, monkeypatch
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
 
 
+def test_version_15_rebuilds_versions_and_steps_for_the_council_and_keeps_every_row(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_14:
+        version_14.setattr(db, "UPGRADES", db.UPGRADES[:14])
+        version_14.setattr(db, "SCHEMA_VERSION", 14)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute(PREPARATION.format(1, "resume", 1, "done", "'{}'"))
+            conn.execute(STEP.format("writer", "done", 0))
+            conn.execute("INSERT INTO failed_tries (step_id, try_number, reason, saved_on) VALUES (1, 1, 'x', 'now')")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute(
+            "SELECT kind, status, draft, mode, round, council, agreed, asked, waived, automatic FROM preparations"
+        ).fetchall() == [("resume", "done", "{}", "normal", 1, None, None, "[]", "[]", 0)]  # Part 4b: normal price
+        assert conn.execute("SELECT member, turn, mode, status, tries, waits, batch_id FROM steps").fetchall() == [
+            ("writer", 0, "direct", "done", 1, 0, None)
+        ]
+        assert conn.execute("SELECT count(*) FROM failed_tries JOIN steps ON steps.id = step_id").fetchone()[0] == 1
+        assert "steps_day" in {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        with conn:  # each pilot line-up writes its own version of the same job at the same time
+            conn.execute(
+                "INSERT INTO pilots (id, jobs, planted, rounds, turns, created_on) VALUES (1, '[1]', '{}', 3, 1, 'now')"
+            )
+            for number, lineup in enumerate(("laptop", "high"), 2):
+                conn.execute(PILOT.format(number, number - 1, lineup))
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute(PILOT.format(4, 3, "laptop"))  # but one line-up writes one at a time
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v14") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+
+
+PILOT = (
+    "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, pilot_id, lineup, created_on) "
+    "VALUES ({}, 1, 'pilot', {}, '[]', '{{}}', 'writing', 1, '{}', 'now')"
+)
+COUNCIL_STEP = (
+    "INSERT INTO steps (preparation_id, member, turn, mode, service, model, status, reserved, retry_after, batch_id, "
+    "day, sent_on) VALUES (1, '{}', {}, '{}', 'anthropic', 'm', '{}', {}, {}, {}, '2026-11-01', 'now')"
+)
+VERSION = (
+    "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, created_on, {}) "
+    "VALUES (2, 1, 'cover_letter', 1, '[]', '{{}}', 'writing', 'now', {})"
+)
+
+
 PREPARATION = (
     "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, draft, created_on) "
     "VALUES ({}, 1, '{}', {}, '[]', '{{}}', '{}', {}, 'now')"
@@ -805,6 +851,23 @@ STEP = (
         STEP.format("writer", "sent", 0),  # the same preparation, round and member
         STEP.format("editor", "done", 0.5),  # a reservation left after the answer came
         STEP.format("editor", "planned", 0),
+        STEP.format("judge", "done", 0),  # not a council member
+        COUNCIL_STEP.format("writer", 1, "direct", "done", 0, "NULL", "NULL"),  # the Writer takes no discussion turn
+        COUNCIL_STEP.format("truth", 4, "direct", "done", 0, "NULL", "NULL"),  # at most 3 turns
+        COUNCIL_STEP.format("truth", 0, "cheap", "done", 0, "NULL", "NULL"),
+        COUNCIL_STEP.format("truth", 0, "flex", "waiting", 0.2, "NULL", "NULL"),  # money set aside while not sent
+        COUNCIL_STEP.format("truth", 0, "flex", "done", 0, "'later'", "NULL"),  # a wait after the answer came
+        COUNCIL_STEP.format("truth", 0, "flex", "sent", 0.2, "NULL", "'b-1'"),  # a batch id without a batch
+        "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, created_on) "
+        "VALUES (2, 1, 'pilot', 1, '[]', '{}', 'writing', 'now')",  # a pilot version of no pilot or line-up
+        VERSION.format("lineup", "'laptop'"),  # a line-up outside a pilot
+        VERSION.format("round", 7),
+        VERSION.format("mode", "'full'"),
+        VERSION.format("agreed", 2),
+        VERSION.format("wording", "'mine'"),
+        VERSION.format("automatic", 2),
+        "INSERT INTO objection_marks (step_id, objection, useful, marked_on) VALUES (1, 'TC-1', 2, 'now')",
+        "INSERT INTO pilots (jobs, planted, rounds, turns, created_on) VALUES ('[]', '{}', 6, 1, 'now')",
         STEP.format("editor", "sent", -1),
     ],
 )
