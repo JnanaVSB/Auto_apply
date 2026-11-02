@@ -11,7 +11,7 @@ from app.council import runs
 from app.documents import tile_sets, uploads, writer_sources
 from app.documents.tiles import read_tiles
 from app.scoring import ready
-from app.web import main, preparer
+from app.web import main, prepare, preparer
 
 
 @pytest.fixture
@@ -33,7 +33,14 @@ def jobs(conn):
 def writer_chosen(tmp_path, data_dir, monkeypatch):
     """A made-up settings file with a local Writer chosen."""
     path = tmp_path / "config.yaml"
-    path.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n", encoding="utf-8")
+    path.write_text(
+        f"data_dir: {data_dir}\nai:\n"
+        + "".join(
+            f"  {member}:\n    model: gemma4:26b-a4b-it-q8_0\n"
+            for member in ("writer", "truth", "hiring", "editor", "ats", "domain")
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(config, "CONFIG_PATH", path)
 
 
@@ -43,11 +50,13 @@ def client(client, writer_chosen, monkeypatch):
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     client.started, client.waived = [], []
 
-    def start(job, words="", kind="resume", waived=frozenset()):
-        client.started.append((job, words or kind) if words or kind != "resume" else job)
+    def start(conn, config, job, kind="resume", feedback="", waived=frozenset(), mode="half", automatic=False,
+              writer_only=False):  # fmt: skip
+        client.started.append((job, feedback or kind) if feedback or kind != "resume" else job)
         client.waived.append(waived)
 
-    monkeypatch.setattr(client.app.state.preparer, "start", start)
+    monkeypatch.setattr(prepare.flow, "start", start)
+    monkeypatch.setattr(client.app.state.preparer, "wake", lambda: None)
     log_in(client)
     return client
 
@@ -175,17 +184,6 @@ def test_a_skipped_closed_or_not_ready_job_asks_first_and_can_proceed_anyway(cli
         assert client.started[-1] == jobs[name] and client.waived[-1] == {doubt}
 
 
-def test_a_waiting_job_starts_only_if_nothing_new_stops_it(client, conn, jobs):
-    startable = client.app.state.preparer.startable  # as the dashboard sets it up
-    assert startable(conn, jobs["Fresh"], frozenset()) and not startable(conn, 999, frozenset())
-    assert not startable(conn, jobs["Skipped"], frozenset()) and startable(conn, jobs["Skipped"], {"skipped"})
-    assert not startable(conn, jobs["Gone"], {"not-ready"}) and startable(conn, jobs["Gone"], {"closed"})
-    assert startable(conn, jobs["Low"], {"not-ready"})
-    with conn:  # skipped after you proceeded anyway with a job that isn't ready: let go
-        conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (jobs["Low"],))
-    assert not startable(conn, jobs["Low"], {"not-ready"})
-
-
 def test_a_closed_job_is_never_queued_even_without_the_page(conn, jobs):
     assert not ready.queue(conn, jobs["Gone"], "now")
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Gone"]) == (None,)
@@ -273,13 +271,15 @@ def test_prepare_without_a_writer_says_where_to_choose_one(client, conn, ready_j
 
 def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(client, conn, ready_job, monkeypatch):
     state = client.app.state.preparer
-    monkeypatch.setattr(state, "place", lambda job_id: 0)
+    with conn:
+        conn.execute(
+            "INSERT INTO preparations (job_id, kind, version, sources, writer, status, created_on) VALUES "
+            "(?, 'resume', 9, '[]', '{}', 'writing', 'now')", (ready_job,),
+        )  # fmt: skip
     text = client.get(f"/jobs/{ready_job}/preparation").text
     assert "The Writer is working on it" in text and 'hx-trigger="every 3s"' in text
-    monkeypatch.setattr(state, "place", lambda job_id: 2)
-    assert "Waiting for the Writer: 2 jobs before it." in client.get(f"/jobs/{ready_job}/preparation").text
-    monkeypatch.setattr(state, "place", lambda job_id: None)
     with conn:
+        conn.execute("DELETE FROM preparations")
         conn.execute(
             "INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on) VALUES "
             "(?, 'resume', 1, ?, '{}', 'done', '{}', '2026-10-30T10:00:00+00:00')",
@@ -292,3 +292,13 @@ def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(clien
         conn.execute("UPDATE preparations SET status = 'stopped', problem = 'Paused: today&#39;s limit.'")
     assert preparer.BUSY in client.get(f"/jobs/{ready_job}/preparation").text
     assert runs.latest(conn, ready_job)["status"] == "stopped"
+
+
+def test_resume_only_needs_no_council_and_prepare_does(client, conn, ready_job, data_dir):
+    config.CONFIG_PATH.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n",
+                                  encoding="utf-8")  # fmt: skip
+    text = press(client, ready_job, back="job").text
+    assert "Choose the council&#39;s members in Settings first, or press Resume only" in text and client.started == []
+    press(client, ready_job, back="job", writer_only="1")
+    assert client.started == [ready_job]
+    assert ">Resume only</button>" in client.get("/ready").text

@@ -21,8 +21,9 @@ from app.web import queries
 SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each the Usage page lists; None: all
 
 
-def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) -> dict:
-    """What the Ready page and the job's box show: the newest version (and whether it failed), the Writer's place, what
+def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
+    """What the Ready page and the job's box show: the newest version (and whether it failed), whether one is being
+    written (place 0), what
     the PDF build found, the cost so far, and whether Prepare would write a new version."""
     latest, current = runs.latest(conn, job_id), runs.current(conn, job_id)
     done = latest is not None and latest["status"] == "done"
@@ -30,7 +31,7 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) ->
     return {
         "base": base, "changeable": base is not None and not runs.outdated(base, current),
         "latest": latest, "failed": latest is not None and latest["status"] in runs.FAILED,
-        "place": preparer.place(job_id), "outdated": done and runs.outdated(latest, current),
+        "place": 0 if runs.writing(conn, job_id) else None, "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
     }  # fmt: skip

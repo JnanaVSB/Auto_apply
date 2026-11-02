@@ -1,10 +1,10 @@
-"""The Writer beside the dashboard: Prepare starts it for one job, in the background. One job at a time, under its own
-lock so a second dashboard can't run it too; jobs pressed while it is busy wait their turn here (forgotten if the
-dashboard closes: they show Prepare again). Each job is saved step by step as it goes (app/council/runs.py)."""
+"""The council's runner beside the dashboard (app/council/runner.py): a pass every minute, and at once after a press,
+under its own lock, so the terminal command or a second dashboard never sends at the same time. Each pass first starts
+what automatic preparation may start (app/council/automatic.py). Everything is saved step by step in the database, so
+closing the dashboard loses nothing: the next pass, here or in the terminal, carries on."""
 
 import logging
 import threading
-from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,101 +13,61 @@ import sqlcipher3
 
 from app import collect, db
 from app.config import ConfigError, load_config
-from app.council import runs
+from app.council import automatic, runner
 
-PREPARE_LOCK = "prepare-lock.db"
-BUSY = "The Writer is working in another dashboard or terminal: press Prepare again when it has finished."
-NO_WRITER = ("The Writer was removed in Settings while jobs were waiting: choose one on the Writer settings page, "
-             "then press Prepare again.")  # fmt: skip
-HALTED = ("The Writer stopped: {} Any jobs that were waiting were let go: press Prepare on them again once that is "
-          "fixed.")  # fmt: skip
-LET_GO = ("A job that waited its turn was let go, nothing sent: it was skipped, closed or stopped being ready after "
-          "you pressed. Press Prepare on it again to proceed anyway.")  # fmt: skip
+BUSY = "The council is running in another dashboard or the terminal: it carries on there."
 log = logging.getLogger("app.web")
 
 
 @dataclass
 class Preparer:
     data_dir: Path
-    startable: Callable[[sqlcipher3.Connection, int, frozenset[str]], bool]  # app/web/prepare.py: a waiting job may go
-    waiting: list[tuple[int, str, str, frozenset[str]]] = field(default_factory=list)  # in press order: (job, your
-    # words or "", kind, the doubts the pop-up asked you about)
-    current: int | None = None  # the job being written now
-    notice: str | None = None  # why the last press could not run; shown in the job's box
+    notice: str | None = None  # why the last pass could not run; shown in the job's box
+    waiting: str | None = None  # why automatic preparation waits
+    state: runner.State = field(default_factory=runner.State)  # services paused, until you save keys or settings
+    _again: bool = False
     _thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def start(
-        self, job_id: int, feedback: str = "", kind: str = runs.KIND, waived: frozenset[str] = frozenset()
-    ) -> None:
-        """You pressed Prepare (sent your changes, or asked for a cover letter): the job is written now, or after the
-        jobs before it. A job holds one place at a time: another press while it waits or is written changes nothing."""
+    def wake(self) -> None:
+        """A press, or the minute's check: a pass now (or right after the one running)."""
         with self._lock:
-            if self._place(job_id) is not None:
-                return
-            self.waiting.append((job_id, feedback, kind, waived))
-            self.notice = None
+            self._again = True
             if self._thread is None:
-                self._thread = threading.Thread(target=self._run, daemon=True)
+                self._thread = threading.Thread(target=self._passes, daemon=True)
                 self._thread.start()
 
-    def place(self, job_id: int) -> int | None:
-        """0 while the job is being written, 1 or more while it waits (how many go first), else None."""
-        with self._lock:
-            return self._place(job_id)
+    def tick(self, conn: sqlcipher3.Connection) -> None:
+        """Part of the once-a-minute check while the dashboard is open."""
+        self.wake()
 
-    def _place(self, job_id: int) -> int | None:
-        if job_id == self.current:
-            return 0
-        waiting = [job for job, *_ in self.waiting]
-        return waiting.index(job_id) + 1 if job_id in waiting else None
+    def resume(self) -> None:
+        """You saved a key or the settings: paused services are tried again."""
+        self.state = runner.State()
+        self.wake()
 
-    def recover(self) -> None:
-        """At the dashboard's start: calls an earlier dashboard left waiting are marked interrupted
-        (app/council/runs.py), unless a Writer is running elsewhere right now."""
+    def _passes(self) -> None:
+        while True:
+            with self._lock:
+                if not self._again:
+                    self._thread = None
+                    return
+                self._again = False
+            self._pass()
+
+    def _pass(self) -> None:
         try:
-            with closing(collect.lock(self.data_dir, PREPARE_LOCK, BUSY)), closing(db.connect(self.data_dir)) as conn:
-                runs.recover(conn)
-        except collect.CollectError:
-            pass  # a Writer runs elsewhere: it recovers when it starts its next job
-
-    def _run(self) -> None:
-        while (job := self._next()) is not None:
-            job_id, feedback, kind, waived = job
-            try:  # the lock for each job, so it is never held while waiting for a press
-                with (
-                    closing(collect.lock(self.data_dir, PREPARE_LOCK, BUSY)),
-                    closing(db.connect(self.data_dir)) as conn,
-                ):
-                    runs.recover(conn)
-                    config = load_config()
-                    if config.ai.writer is None:
-                        self._stop(NO_WRITER)
-                    elif self.startable(conn, job_id, waived):
-                        runs.prepare(conn, config, job_id, feedback, kind)
-                    else:  # skipped, closed or no longer ready since the press: let go, and the box says so
-                        self.notice = LET_GO
-            except runs.Halted as halt:  # a key, the model's name, Ollama or the keychain: the same for every job
-                self._stop(HALTED.format(halt))
-            except collect.CollectError as error:
-                self._stop(str(error))
-            except ConfigError as error:
-                self._stop(f"The settings can't be read: {error}")
-            except (db.DatabaseError, sqlcipher3.Error, OSError) as error:
-                self._stop(db.error_line(error))
-            except Exception as error:  # one line only; never job data, your text or a crash report
-                log.error("Unexpected error in the Writer: %s", type(error).__name__)
-
-    def _next(self) -> tuple[int, str, str, frozenset[str]] | None:
-        with self._lock:
-            job = self.waiting.pop(0) if self.waiting else None
-            self.current = job and job[0]
-            if job is None:
-                self._thread = None  # a press from now on starts a new run
-            return job
-
-    def _stop(self, notice: str) -> None:
-        """Nothing more can run now: the waiting jobs are let go, and the box says why."""
-        with self._lock:
-            self.waiting.clear()
-            self.notice = notice
+            with closing(collect.lock(self.data_dir, runner.LOCK, BUSY)), closing(db.connect(self.data_dir)) as conn:
+                config = load_config()
+                self.waiting = automatic.start_due(conn, config)
+                runner.run(conn, config, self.state)
+            self.notice = None
+        except collect.CollectError as error:
+            self.notice = str(error)
+        except ConfigError as error:
+            self.notice = f"The settings can't be read: {error}"
+        except (db.DatabaseError, sqlcipher3.Error, OSError) as error:
+            self.notice = db.error_line(error)
+        except Exception as error:  # one line only; never job data, your text or a crash report
+            log.error("Unexpected error in the council: %s", type(error).__name__)
+            self.notice = f"The council stopped on an unexpected error ({type(error).__name__}); it tries again."

@@ -29,7 +29,7 @@ START = """INSERT INTO preparations (job_id, kind, version, based_on, feedback, 
     WHERE job_id = ? AND kind = ?), ?, ?, ?, ?, ?, ?, ?, ?, 'writing', ?)"""
 VERSION = """SELECT p.id, p.job_id, p.kind, p.version, p.based_on, p.feedback, p.asked, p.sources, p.writer, p.council,
     p.waived, p.round, p.status, p.draft, j.status, j.not_interested,
-    (SELECT draft FROM preparations b WHERE b.id = p.based_on) FROM preparations p JOIN jobs j ON j.id = p.job_id
+    b.draft, b.version FROM preparations p JOIN jobs j ON j.id = p.job_id LEFT JOIN preparations b ON b.id = p.based_on
     WHERE p.id = ?"""
 STEPS = "SELECT round, member, turn, status, answer, sent_on FROM steps WHERE preparation_id = ?"
 ROUND = "UPDATE preparations SET round = ? WHERE id = ?"
@@ -40,7 +40,7 @@ CLOSED = "Job closed: preparation stopped. Steps already sent were finished and 
 SKIPPED = "You skipped this job: preparation stopped. Steps already sent were finished and saved."
 CHANGED = "Your entries changed: preparation stopped. It starts again once you confirm them."
 NO_WRITER = "The Writer gave no valid answer twice in round {}: check by hand, or press Retry."
-ONE_PAGE = "The PDF of this version is {} pages: it must fit on one page."
+ONE_PAGE = "The resume's PDF is {} pages: it must fit on one page."
 LETTER_UNCLEAR = ("No agreement: the Truth checker still objects to the letter as a whole or to an entry, so no "
                   "paragraph can be left out. Check it by hand.")  # fmt: skip
 
@@ -63,15 +63,15 @@ class Call(NamedTuple):
 
 def start(
     conn: sqlcipher3.Connection, config: Config, job_id: int, kind: str = runs.KIND, feedback: str = "",
-    waived: frozenset[str] = frozenset(), mode: str = "half", automatic: bool = False,
+    waived: frozenset[str] = frozenset(), mode: str = "half", automatic: bool = False, writer_only: bool = False,
 ) -> int:  # fmt: skip
     """A new version of the job's resume (or cover letter), waiting for its first step, with the Writer's and the
     reviewers' settings as they are now (a later change in Settings applies to new versions only). A change (your
-    words) builds on the newest finished version."""
-    added = [member for member in config.ai.extra if kind != runs.LETTER or member.letters]
+    words) builds on the newest finished version. `writer_only`: "Resume only", no council."""
+    added = [] if writer_only else [m for m in config.ai.extra if kind != runs.LETTER or m.letters]
     council = {
         "members": {member: getattr(config.ai, member).model_dump() for member in REVIEWERS
-                    if kind != runs.LETTER or member in reviewers.LETTER_MEMBERS}
+                    if not writer_only and (kind != runs.LETTER or member in reviewers.LETTER_MEMBERS)}
         | {member.id: member.role.model_dump() for member in added},
         "names": {member.id: member.name for member in added},
     }  # fmt: skip
@@ -82,6 +82,14 @@ def start(
             config.ai.writer.model_dump_json(), json.dumps(council), json.dumps(sorted(waived)), mode, int(automatic),
             _now(),
         )).lastrowid  # fmt: skip
+
+
+def ask(conn: sqlcipher3.Connection, preparation: int, words: str) -> None:
+    """Your words sent while the version is being written: used from the Writer's next round on (owner choice D)."""
+    with conn:
+        asked = json.loads(conn.execute("SELECT asked FROM preparations WHERE id = ?", (preparation,)).fetchone()[0])
+        conn.execute("UPDATE preparations SET asked = ? WHERE id = ?",
+                     (json.dumps([*asked, {"words": words, "on": _now()}]), preparation))  # fmt: skip
 
 
 def advance(conn: sqlcipher3.Connection, config: Config, preparation: int) -> list[Call]:
@@ -125,6 +133,11 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
         return []
     found = json.loads(written[1])
     _keep(conn, config, version, found)
+    if not seen.members:  # "Resume only": no council
+        if not waiting:
+            end(conn, preparation, "done", None)
+            _build(conn, config, preparation)
+        return []
     answers, before = None, None
     for turn in range(config.council.turns + 1):
         if turn and not _discuss(answers, before, turn):
@@ -198,7 +211,7 @@ def _writer(seen: _Seen, version: dict, steps: dict, number: int) -> list[Call]:
         )
         objections, asked = reviewers.objections(answers), " ".join([asked, _pages(seen, version)]).strip()
     elif version["based_on"]:
-        previous = json.loads(version["base"])
+        previous, asked = json.loads(version["base"]), " ".join([asked, _pages(seen, version, "base_version")]).strip()
     module = letter if seen.letter else writer
     system, user = module.request(*seen.job, seen.entries, seen.shield, previous, asked if previous else "", council)
 
@@ -307,11 +320,12 @@ def _flags(seen: _Seen, flags: list[dict]) -> list[str]:
             f"bullets: {', '.join(flag['numbers'])}" for flag in flags]  # fmt: skip
 
 
-def _pages(seen: _Seen, version: dict) -> str:
-    """ "The PDF ... must fit on one page" when the version's last built resume is longer, with the one-page setting."""
+def _pages(seen: _Seen, version: dict, which: str = "version") -> str:
+    """The note "The PDF ... must fit on one page" when the version's last built resume (or the one a change builds
+    on) is longer, with the one-page setting."""
     if seen.letter or not seen.one_page:
         return ""
-    built = pdf.built(pdf.tailored(seen.data_dir, version["job_id"], version["version"]))
+    built = pdf.built(pdf.tailored(seen.data_dir, version["job_id"], version[which]))
     return ONE_PAGE.format(built.pages) if built and built.pages > 1 else ""
 
 
@@ -341,7 +355,7 @@ def _stopped(conn: sqlcipher3.Connection, config: Config, version: dict) -> str 
 
 def _version(conn: sqlcipher3.Connection, preparation: int) -> dict:
     names = ("id", "job_id", "kind", "version", "based_on", "feedback", "asked", "sources", "writer", "council",
-             "waived", "round", "status", "draft", "job_status", "not_interested", "base")  # fmt: skip
+             "waived", "round", "status", "draft", "job_status", "not_interested", "base", "base_version")  # fmt: skip
     return dict(zip(names, conn.execute(VERSION, (preparation,)).fetchone(), strict=True))
 
 

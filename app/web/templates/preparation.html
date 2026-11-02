@@ -5,8 +5,6 @@
   <h2>Ready to Apply</h2>
   {% if place == 0 or (place is none and working) %}
   <p role="status">The Writer is working on it (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
-  {% elif place %}
-  <p role="status">Waiting for the Writer: {{ place }} job{{ "s" if place > 1 }} before it.</p>
   {% elif latest and latest.status == "done" and not outdated %}
   <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}.
     {% if built %}<a href="/documents/{{ job_id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ built.pages }} page{{ "s" if built.pages != 1 }}) ·{% endif %}
@@ -35,6 +33,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <input type="hidden" name="back" value="job">
     <button type="submit" class="primary">{{ "Retry" if failed else "Prepare" }}</button>
+    <button type="submit" name="writer_only" value="1" title="The Writer alone, without the council">Resume only</button>
   </form>
   {% endif %}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}

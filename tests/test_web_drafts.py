@@ -4,7 +4,7 @@ statuses and the Usage page. A made-up person and job; versions written straight
 import json
 
 import pytest
-from helpers import add_job, csrf, log_in
+from helpers import add_job, csrf, log_in, one
 from test_privacy import CONTACT
 from test_tiles import RESUME_CLS
 from test_web_scoring import CHOSEN, scored
@@ -13,7 +13,7 @@ from test_writer import PROFILE
 from app import config, questionnaire
 from app.documents import pdf, tile_sets
 from app.resume import RESUME_FILE
-from app.web import drafts, main, queries
+from app.web import drafts, main, prepare, queries
 
 DRAFT = {
     "entries": [
@@ -37,7 +37,14 @@ STEP = """INSERT INTO steps (preparation_id, service, model, status, cost, day, 
 @pytest.fixture
 def job(conn, data_dir, tmp_path, monkeypatch):
     path = tmp_path / "config.yaml"
-    path.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n", encoding="utf-8")
+    path.write_text(
+        f"data_dir: {data_dir}\nai:\n"
+        + "".join(
+            f"  {member}:\n    model: gemma4:26b-a4b-it-q8_0\n"
+            for member in ("writer", "truth", "hiring", "editor", "ats", "domain")
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(config, "CONFIG_PATH", path)
     (data_dir / RESUME_FILE).write_text(RESUME_CLS, encoding="utf-8")
     questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
@@ -53,11 +60,13 @@ def client(client, monkeypatch):
     monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
     client.started, client.waived = [], []
 
-    def start(job, words="", kind="resume", waived=frozenset()):
-        client.started.append((job, words or kind) if words or kind != "resume" else job)
+    def start(conn, config, job, kind="resume", feedback="", waived=frozenset(), mode="half", automatic=False,
+              writer_only=False):  # fmt: skip
+        client.started.append((job, feedback or kind) if feedback or kind != "resume" else job)
         client.waived.append(waived)
 
-    monkeypatch.setattr(client.app.state.preparer, "start", start)
+    monkeypatch.setattr(prepare.flow, "start", start)
+    monkeypatch.setattr(client.app.state.preparer, "wake", lambda: None)
     log_in(client)
     return client
 
@@ -277,16 +286,16 @@ def test_request_changes_needs_your_words(client, conn, job, words, problem):
     assert problem in text and client.started == []
 
 
-def test_request_changes_waits_for_the_writer_and_current_entries(client, conn, job, monkeypatch):
+def test_request_changes_while_writing_is_kept_for_the_next_round_and_needs_current_entries(client, conn, job):
     version(conn, job)
-    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: 1)
-    assert "The Writer is still working on this job" in ask(client, job, "Shorter.")
-    assert "Request changes to version" not in client.get(f"/jobs/{job}/preparation").text
-    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
+    writing = version(conn, job, number=2, status="writing")
+    ask(client, job, "Shorter.")
+    asked = json.loads(one(conn, "SELECT asked FROM preparations WHERE id = ?", writing)[0])
+    assert [item["words"] for item in asked] == ["Shorter."] and client.started == []  # added, not a new version
+    with conn:
+        conn.execute("UPDATE preparations SET status = 'stopped' WHERE id = ?", (writing,))
     tile_sets.confirm(conn, PROFILE[:2], CHOSEN.resume)  # your entries changed
     assert "Your entries changed since version 1" in ask(client, job, "Shorter.") and client.started == []
-    letter_version(conn, job, status="writing")  # being written by another dashboard: busy too
-    assert "The Writer is still working on this job" in ask(client, job, "Shorter.") and client.started == []
 
 
 def test_request_changes_on_a_skipped_job_asks_first(client, conn, job):
@@ -346,11 +355,12 @@ def test_write_cover_letter_starts_the_writer_and_the_box_shows_the_letter(clien
 
 
 def test_a_letter_needs_the_same_as_prepare_and_waits_for_the_writer(client, conn, data_dir, job, monkeypatch):
-    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: 0)
+    letter_version(conn, job, status="writing")
     text = client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text
     assert "The Writer is still working on this job" in text and client.started == []
     assert ">Write cover letter</button>" not in client.get(f"/jobs/{job}/preparation").text
-    monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
+    with conn:
+        conn.execute("DELETE FROM preparations WHERE kind = 'cover_letter'")
     with conn:
         conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (job,))
     assert "This job is skipped" in client.post(f"/jobs/{job}/cover-letter", data={"csrf_token": csrf(client)}).text

@@ -58,7 +58,7 @@ def create_app(
             conn.execute(f"PRAGMA busy_timeout = {BUSY_WAIT_MS}")
             app.state.conn = conn
             schedule = asyncio.create_task(_schedule(app))
-            await asyncio.to_thread(app.state.preparer.recover)  # calls an earlier dashboard left waiting
+            app.state.preparer.wake()  # carries on with whatever an earlier dashboard or the terminal left
             try:
                 yield
             finally:  # the dashboard is closing: so are the schedule, any collection and any scoring
@@ -71,9 +71,7 @@ def create_app(
     app.state.logins = logins or security.Logins()
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
-    app.state.preparer = Preparer(  # the Writer, one job at a time
-        data_dir, lambda conn, job_id, waived: prepare.startable(conn, _scoring(), job_id, waived)
-    )
+    app.state.preparer = Preparer(data_dir)  # the council's runner
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
@@ -329,7 +327,7 @@ async def _schedule(app: FastAPI) -> None:
     """The schedule's check, once a minute while the dashboard is open."""
     while True:
         await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
-        for runner in (app.state.collector, app.state.scorer):  # collections first: scoring then sees one running
+        for runner in (app.state.collector, app.state.scorer, app.state.preparer):  # collections first
             try:
                 runner.tick(app.state.conn)
             except Exception as error:  # e.g. the database busy for a moment: try again next minute

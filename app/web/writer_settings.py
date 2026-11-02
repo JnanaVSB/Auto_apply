@@ -49,6 +49,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         )
         if problem:
             return await _view(request, page, problem=problem, typed=form)
+        request.app.state.preparer.resume()  # a paused service is tried again
         return RedirectResponse(f"{PAGE}?saved=writer", 303)  # so reloading the page never saves twice
 
     @app.post(f"{PAGE}/test")
@@ -71,6 +72,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             delete_secret(name) if remove else set_secret(name, form["key"])
         except KeychainError as error:
             return await _view(request, page, problem=str(error))
+        request.app.state.preparer.resume()  # a service paused for its key is tried again
         return RedirectResponse(f"{PAGE}?saved={'removed' if remove else 'key'}", 303)
 
     @app.post("/settings/limits")

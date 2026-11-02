@@ -26,7 +26,7 @@
       {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
       {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
     {% set found = states[job.id] %}{% set latest = found.latest %}
-    <td>{% if found.place == 0 %}writing…{% elif found.place %}waiting for the Writer ({{ found.place }} before it)
+    <td>{% if found.place == 0 %}writing…
       {% elif not latest %}not started
       {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else "done" }}: version {{ latest.version }}
         <br>{% if found.built %}<a href="/documents/{{ job.id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a>{% if found.built.pages > 1 %} <span class="mark warn">{{ found.built.pages }} pages</span>{% endif %} · {% endif %}<a href="/jobs/{{ job.id }}/changes?version={{ latest.version }}">Changes</a>
@@ -40,6 +40,7 @@
       <form method="post" action="/ready/{{ job.id }}/prepare">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
         <button type="submit" class="primary">{{ "Retry" if found.failed else "Prepare" }}</button>
+        <button type="submit" name="writer_only" value="1" title="The Writer alone, without the council">Resume only</button>
       </form>
       {% endif %}
       {% if found.changeable and found.place is none %}<a class="button" href="/jobs/{{ job.id }}#preparation">Request changes</a>{% endif %}

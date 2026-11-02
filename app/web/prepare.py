@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException
 
 from app import questionnaire
 from app.config import ConfigError, load_config
-from app.council import runs
+from app.council import flow, runs
 from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import CONTROL, ResumeError, from_latex, read_latex
@@ -40,6 +40,7 @@ DOUBTS = {  # the job page's pop-up asks before the Writer works on such a job: 
 }
 ANYWAY = " Press OK to proceed anyway."
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
+NO_COUNCIL = "Choose the council's members in Settings first, or press Resume only for the Writer alone."
 BUSY_JOB = "The Writer is still working on this job: try again when it's done."
 MAX_FEEDBACK = 2000
 
@@ -165,7 +166,7 @@ def add_routes(
         chosen = {job_id: writer_sources.of_job(conn, job_id)[0] for job_id in ids}
         uses = {job_id: writer_sources.names(offered, chosen[job_id]) for job_id in ids}
         missing = {job_id: writer_sources.unconfirmed(offered, chosen[job_id]) for job_id in ids}
-        states = {job_id: drafts.state(conn, data_dir, request.app.state.preparer, job_id) for job_id in ids}
+        states = {job_id: drafts.state(conn, data_dir, job_id) for job_id in ids}
         skipped = request.query_params.get("skipped", "")
         return page(
             request, "ready.html", listing=listing, view=view, states=states, uses=uses, missing=missing,
@@ -180,13 +181,15 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        waived = _waived(request)
-        if not (problem := _cannot(conn, current, job, waived)):
+        waived, alone = _waived(request), request.state.form.get("writer_only") == "1"  # "Resume only"
+        if not (problem := _cannot(conn, current, job, waived, alone)):
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
             latest = runs.latest(conn, job_id)
             if runs.writable(latest, runs.current(conn, job_id)):  # Retry a change: the same words
                 failed = latest is not None and latest["status"] in runs.FAILED
-                request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "", waived=waived)
+                words = latest["feedback"] or "" if failed else ""
+                flow.start(conn, load_config(), job_id, feedback=words, waived=waived, writer_only=alone)
+                request.app.state.preparer.wake()
         if request.state.form.get("back") == "job":  # pressed in the job's box: the box comes back
             return box(request, job_id, prepare_problem=problem and PROBLEMS[problem])
         return RedirectResponse(f"/ready?problem={problem}" if problem else "/ready", 303)
@@ -206,25 +209,28 @@ def add_routes(
 
     @app.post("/jobs/{job_id:int}/request-changes")
     async def request_changes(request: Request, job_id: int) -> Response:
-        """Your words to the Writer: a new version built on the newest finished one. Answers with the job's box."""
+        """Your words to the Writer: a new version built on the newest finished one, or, while one is being written,
+        added to it for the Writer's next round (owner choice D). Answers with the job's box."""
         conn, preparer = request.app.state.conn, request.app.state.preparer
         words = " ".join(CONTROL.sub("", request.state.form.get("feedback", "")).split())
         job, waived = queries.job(conn, queries.known(job_id)), _waived(request)
         if job is None:
             raise HTTPException(404)
-        base = runs.last_done(conn, job_id)
+        base, latest = runs.last_done(conn, job_id), runs.latest(conn, job_id)
         if cannot := _cannot(conn, scoring(), job, waived):
             problem = PROBLEMS[cannot]
-        elif _busy(conn, preparer, job_id):
-            problem = BUSY_JOB
+        elif not words or len(words) > MAX_FEEDBACK:
+            problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
+        elif latest is not None and latest["status"] == "writing":
+            flow.ask(conn, latest["id"], words)
+            problem = None
         elif base is None:
             problem = runs.NO_BASE
         elif runs.outdated(base, runs.current(conn, job_id)):
             problem = runs.CHANGED.format(base["version"])
-        elif not words or len(words) > MAX_FEEDBACK:
-            problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
         else:
-            preparer.start(job_id, words, waived=waived)
+            flow.start(conn, load_config(), job_id, feedback=words, waived=waived)
+            preparer.wake()
             problem = None
         return box(request, job_id, problem, words if problem else "")
 
@@ -238,10 +244,11 @@ def add_routes(
         waived = _waived(request)
         if cannot := _cannot(conn, scoring(), job, waived):
             problem = PROBLEMS[cannot]
-        elif _busy(conn, preparer, job_id):
+        elif _busy(conn, job_id):
             problem = BUSY_JOB
         else:
-            preparer.start(job_id, "", runs.LETTER, waived)
+            flow.start(conn, load_config(), job_id, runs.LETTER, waived=waived)
+            preparer.wake()
             problem = None
         return box(request, job_id, letter_problem=problem)
 
@@ -256,12 +263,12 @@ def add_routes(
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         preparer = request.app.state.preparer
-        free, doubts = not _busy(conn, preparer, job_id), _doubts(conn, current, job)
+        free, doubts = not _busy(conn, job_id), _doubts(conn, current, job)
         missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
         writer = _writer_chosen()
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
-            files=uploads.offered(conn), **drafts.state(conn, data_dir, preparer, job_id),
+            files=uploads.offered(conn), **drafts.state(conn, data_dir, job_id),
             versions=runs.versions(conn, job_id), labels=runs.LABELS, notice=preparer.notice, writer=writer,
             one_page=_one_page(), change_problem=change_problem, typed=typed, letter_problem=letter_problem,
             letter=drafts.letter(conn, data_dir, job_id), prepare_problem=prepare_problem,
@@ -282,36 +289,32 @@ def add_routes(
         return RedirectResponse(f"/jobs/{job_id}", 303)
 
 
-PROBLEMS = {"tiles": TILES_FIRST, "writer": NO_WRITER} | {
+PROBLEMS = {"tiles": TILES_FIRST, "writer": NO_WRITER, "council": NO_COUNCIL} | {
     doubt: f"{text} To proceed anyway, press the button on the job's page and confirm."
     for doubt, text in DOUBTS.items()
 }  # a doubt refused: the press came from a page that didn't ask (the Ready page, or one shown before it changed)
 
 
-def startable(conn: sqlcipher3.Connection, current: queries.Scoring, job_id: int, waived: frozenset[str]) -> bool:
-    """Just before the Writer starts a job that waited its turn: not if you skipped it, it closed or stopped being ready
-    since you pressed (unless the pop-up asked you about that one). Such a job is let go: nothing is sent."""
-    job = queries.job(conn, job_id)
-    return job is not None and all(doubt in waived for doubt in _doubts(conn, current, job))
-
-
 def _cannot(
-    conn: sqlcipher3.Connection, current: queries.Scoring, job: dict, waived: Collection[str] = ()
+    conn: sqlcipher3.Connection, current: queries.Scoring, job: dict, waived: Collection[str] = (), alone: bool = False
 ) -> str | None:
     """Why the Writer can't work on this job (a PROBLEMS key), or None: Prepare, Request changes and Write cover letter
-    alike. `waived`: the doubts the pop-up asked you about, so the Writer proceeds anyway."""
+    alike. `waived`: the doubts the pop-up asked you about, so the Writer proceeds anyway; `alone`: Resume only, so no
+    council is needed."""
     if doubt := next((doubt for doubt in _doubts(conn, current, job) if doubt not in waived), None):
         return doubt
     if writer_sources.unconfirmed(
         writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job["id"])[0]
     ):
         return "tiles"
-    return None if _writer_chosen() else "writer"
+    if not _writer_chosen():
+        return "writer"
+    return None if alone or _council_chosen() else "council"
 
 
-def _busy(conn: sqlcipher3.Connection, preparer, job_id: int) -> bool:
-    """Whether the Writer is busy with this job: writing it or holding its place here, or writing it elsewhere."""
-    return preparer.place(job_id) is not None or runs.writing(conn, job_id)
+def _busy(conn: sqlcipher3.Connection, job_id: int) -> bool:
+    """Whether a version of this job (resume or cover letter) is being written."""
+    return runs.writing(conn, job_id)
 
 
 def _doubts(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) -> list[str]:
@@ -333,6 +336,13 @@ def _one_page() -> bool:
         return load_config().documents.one_page
     except ConfigError:  # shown on the Settings page; the default meanwhile
         return True
+
+
+def _council_chosen() -> bool:
+    try:
+        return load_config().ai.council_chosen
+    except ConfigError:
+        return False
 
 
 def _writer_chosen() -> bool:

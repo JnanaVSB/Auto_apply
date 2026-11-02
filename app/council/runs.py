@@ -1,10 +1,7 @@
-"""One press of Prepare: the Writer tailors your resume for one job (or writes a cover letter, app/council/letter.py),
-as a new version with one saved step. The step is
-written down before each AI call (with its largest possible cost set aside within your limits) and updated as soon as
-the call ends, so a call is never sent twice by itself and its cost is never lost. At most two calls per press: a bad
-answer, no answer in time, a busy service or a cut-off answer gets one retry. A version ends "done", "by_hand" (check
-by hand: Retry starts a new version) or "stopped" (nothing more was sent: fix the cause, then press Prepare again).
-Messages name the cause and the fix, never your text, the job ad or the answer."""
+"""A job's versions of its tailored resume and cover letter, their saved steps (one per AI call: app/council/runner.py
+writes them, app/council/flow.py decides them) and what is made of them: the PDF with your details put back on this
+computer only, the cost, the failed tries. Messages name the cause and the fix, never your text, the job ad or the
+answer."""
 
 import json
 from collections.abc import Callable
@@ -16,11 +13,10 @@ from pathlib import Path
 import sqlcipher3
 
 from app import llm, questionnaire
-from app.config import AIRole, Config
-from app.council import letter, spending, writer
+from app.config import Config
+from app.council import writer
 from app.documents import latex, pdf, privacy, tile_sets, uploads, writer_sources
-from app.keychain import KeychainError
-from app.resume import ResumeError, read_latex
+from app.resume import read_latex
 
 KIND, LETTER = "resume", "cover_letter"  # each kind has its own versions
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
@@ -29,26 +25,15 @@ JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
 NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, writer, created_on FROM preparations
     WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
 LATEST, LAST_DONE, NUMBERED = NEWEST.format(""), NEWEST.format("AND status = 'done'"), NEWEST.format("AND version = ?")
-START = """INSERT INTO preparations (job_id, kind, version, based_on, feedback, sources, writer, status, created_on)
-    VALUES (?, ?, (SELECT coalesce(max(version), 0) + 1 FROM preparations WHERE job_id = ? AND kind = ?), ?, ?, ?, ?,
-    'writing', ?)"""
-FINISH = "UPDATE preparations SET status = ?, problem = ?, draft = ?, flags = ?, finished_on = ? WHERE id = ?"
-FIRST_SEND = """INSERT INTO steps (preparation_id, service, model, status, cost, reserved, day, sent_on)
-    VALUES (?, ?, ?, 'sent', ?, ?, ?, ?)"""
-SEND_AGAIN = "UPDATE steps SET status = 'sent', tries = tries + 1, reserved = ? WHERE id = ?"
 # NULL + a cost stays NULL: a step whose price isn't known stays "not counted"
 ENDED = """UPDATE steps SET status = ?, input_tokens = input_tokens + ?, cached_tokens = cached_tokens + ?,
     output_tokens = output_tokens + ?, cost = cost + ?, reserved = 0, answer = ?, error = ?, done_on = ? WHERE id = ?"""
-LEFT_WAITING = "SELECT id, preparation_id, reserved FROM steps WHERE status = 'sent'"
 FAILED_TRY = """INSERT INTO failed_tries (step_id, try_number, input_tokens, cached_tokens, output_tokens, cost, reason,
     reply, reply_length, saved_on) SELECT id, tries, ?, ?, ?, ?, ?, ?, ?, ? FROM steps WHERE id = ?"""
 FAILED_TRIES = """SELECT f.saved_on, p.job_id, j.title, j.company, p.kind, p.version, s.model, f.try_number,
     f.input_tokens + f.cached_tokens, f.output_tokens, f.cost, f.reason, f.reply, f.reply_length
     FROM failed_tries f JOIN steps s ON s.id = f.step_id JOIN preparations p ON p.id = s.preparation_id
     JOIN jobs j ON j.id = p.job_id WHERE ?1 IS NULL OR p.id = ?1 ORDER BY f.id DESC LIMIT ?2 OFFSET ?3"""
-INTERRUPT = """UPDATE steps SET status = 'interrupted', cost = cost + reserved, reserved = 0, error = ?, done_on = ?
-    WHERE id = ?"""
-LEFT_WRITING = "SELECT id FROM preparations WHERE status = 'writing'"
 JOB_WRITING = "SELECT 1 FROM preparations WHERE job_id = ? AND status = 'writing'"
 VERSION = "SELECT job_id, kind, version, sources, draft, created_on, wording FROM preparations WHERE id = ?"
 NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
@@ -59,7 +44,6 @@ VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,
     GROUP BY p.id ORDER BY p.version DESC"""
 ERROR = 300  # characters of a failed try's reason kept with its step
 REPLY = 100_000  # characters of a failed try's reply kept for the Failed tries page
-CLOSED = "Interrupted: the dashboard closed while the Writer was working"
 NO_BASE = "There is no finished version to change yet: press Prepare first."
 CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
 TOO_LONG = "Too long for the model ({}): raise the working size on the Writer settings page."
@@ -69,11 +53,6 @@ DETAIL_KINDS = {
     "ME": "your name", "EMAIL": "an email address", "PHONE": "a phone number", "ADDRESS": "a street address",
     "LINK": "a link",
 }  # fmt: skip
-
-
-class Halted(Exception):
-    """A problem every job would meet (a key, the model's name, Ollama, the keychain): this version is stopped, and the
-    jobs waiting behind it are let go (app/web/preparer.py)."""
 
 
 def latest(conn: sqlcipher3.Connection, job_id: int, kind: str = KIND, query: str = LATEST, *more: int) -> dict | None:
@@ -128,38 +107,6 @@ def current(conn: sqlcipher3.Connection, job_id: int) -> list[dict]:
 def outdated(version: dict, current: list[dict]) -> bool:
     """Whether a version was made from other entries than the job's sources have now (or from other sources)."""
     return json.loads(version["sources"]) != current
-
-
-def prepare(conn: sqlcipher3.Connection, config: Config, job_id: int, feedback: str = "", kind: str = KIND) -> int:
-    """One press of Prepare for one job's resume, of Request changes with your words (a new version built on the
-    newest finished one), or of Write cover letter (kind LETTER); returns the new version's id. Needs a Writer."""
-    role, sets = config.ai.writer, current(conn, job_id)
-    base = last_done(conn, job_id) if feedback else None
-    with conn:
-        preparation = conn.execute(START, (
-            job_id, kind, job_id, kind, base and base["id"], feedback or None, json.dumps(sets),
-            role.model_dump_json(), _now(),
-        )).lastrowid  # fmt: skip
-    try:
-        if feedback and (base is None or outdated(base, sets)):
-            status, problem, result = "stopped", NO_BASE if base is None else CHANGED.format(base["version"]), None
-        else:
-            status, problem, result = _write(conn, config, role, job_id, sets, preparation, base, feedback, kind)
-    except Halted as halt:
-        _finish(conn, preparation, "stopped", str(halt))
-        raise
-    except Exception as error:  # never left "writing": the version can be retried
-        _finish(conn, preparation, "by_hand", f"Something went wrong ({type(error).__name__}): press Retry.")
-        raise
-    _finish(conn, preparation, status, problem, result)
-    if status == "done":
-        try:
-            target, source, note = pdf_source(conn, config, preparation)
-            pdf.build_kept(config.data_dir, target, source)
-            note_pdf(conn, preparation, note)
-        except (pdf.PdfError, privacy.PrivacyError, ResumeError) as error:
-            note_pdf(conn, preparation, error)
-    return preparation
 
 
 def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) -> tuple[Path, str, str | None]:
@@ -233,94 +180,6 @@ def _tailored(tile, chosen: dict, restore: Callable[[str], str]):
     return replace(tile, facts=tile.facts | skills, bullets=tuple(restore(b["text"]) for b in chosen["bullets"]))
 
 
-def recover(conn: sqlcipher3.Connection) -> None:
-    """Calls a closed dashboard left waiting: marked interrupted, never sent again by themselves, their set-aside
-    amount counted as possibly charged; their versions need checking by hand. Only while holding the Writer's lock,
-    so no Writer is running anywhere."""
-    with conn:
-        charged = {}
-        for step, preparation, reserved in conn.execute(LEFT_WAITING).fetchall():
-            conn.execute(INTERRUPT, (CLOSED, _now(), step))
-            charged[preparation] = reserved
-        for (preparation,) in conn.execute(LEFT_WRITING).fetchall():
-            reserved = charged.get(preparation, 0)
-            maybe = f"; it may have been charged up to ${reserved:.2f}" if reserved else ""
-            conn.execute(FINISH, ("by_hand", f"{CLOSED}{maybe}. Press Retry.", None, "[]", _now(), preparation))
-
-
-def _write(
-    conn: sqlcipher3.Connection, config: Config, role: AIRole, job_id: int, sets: list[dict], preparation: int,
-    base: dict | None, feedback: str, kind: str,
-) -> tuple[str, str | None, writer.Checked | None]:  # fmt: skip
-    title, company, locations, description = conn.execute(JOB, (job_id,)).fetchone()
-    job = (title, company, ", ".join(json.loads(locations)), description or "")
-    found = originals(conn, json.dumps(sets))
-    if kind == LETTER:  # the entries your newest finished resume chose (owner choice X1), else all of them
-        resume = last_done(conn, job_id)
-        fresh = resume is not None and not outdated(resume, sets)
-        found = letter.chosen(found, {(e["source"], e["tile_id"]) for e in json.loads(resume["draft"])["entries"]}
-                              if fresh else None)  # fmt: skip
-    try:
-        shield = shield_for(conn, config, found, questionnaire.load(conn)[0]["contact"])
-        if kind == LETTER:
-            system, user = letter.request(*job, found, shield)
-            shape, check = letter.SHAPE, lambda answer: letter.checked(answer, found, job[3])
-        else:
-            previous = json.loads(base["draft"]) if base else None
-            system, user = writer.request(*job, found, shield, previous, feedback + _too_long(config, job_id, base))
-            shape, check = writer.SHAPE, lambda answer: writer.checked(answer, found, shield)
-    except (privacy.PrivacyError, ResumeError) as error:
-        return "stopped", str(error), None
-    except privacy.PrivacyStop as stop:
-        return "stopped", f"Privacy check stopped this: {stop}. Change that, then try again.", None
-    step, problems, text = None, [], user
-    for retry in (False, True):
-        largest = spending.largest(role, system + text, writer.ANSWER_LIMIT)
-        with conn:  # checked and set aside together, so two calls can't both fit in the same room
-            if refusal := spending.refusal(conn, role, largest, config.spending, spending.today()):
-                return "stopped", "; ".join([*problems, refusal]), None
-            step = _send(conn, preparation, role, largest, step)
-        try:
-            reply = llm.call(role, system, text, shape, retry=retry, answer_limit=writer.ANSWER_LIMIT,
-                             timeout=writer.TIMEOUT_SECONDS)  # fmt: skip
-        except llm.TimedOut as error:  # a paid service may still finish and charge: counted (owner choice M)
-            ended(conn, step, "failed", llm.NOTHING, largest, error)  # free ($0) for the local model
-            problems.append(str(error))
-            continue
-        except llm.TooLong as error:  # refused, never charged; a retry can't help
-            ended(conn, step, "failed", llm.NOTHING, 0, error)
-            return "stopped", TOO_LONG.format(error), None
-        except (llm.StopScoring, KeychainError) as error:  # the same, and every job would meet it
-            ended(conn, step, "failed", llm.NOTHING, 0, error)
-            raise Halted(str(error)) from error  # it names the cause and the fix (a key, the model's name, Ollama...)
-        except llm.LLMError as error:  # busy, cut off, declined, not JSON: one failed try
-            ended(conn, step, "failed", error.usage, spending.charged(role, error.usage), error)
-            problems.append(str(error))
-            continue
-        try:
-            result = check(reply.text)
-        except writer.BadAnswer as bad:
-            ended(conn, step, "failed", reply.usage, spending.charged(role, reply.usage), bad, reply=reply.text)
-            problems.append(f"the answer was refused: {bad}")
-            text = writer.again(user, str(bad))
-            continue
-        ended(conn, step, "done", reply.usage, spending.charged(role, reply.usage), None, result.draft)
-        return "done", None, result
-    return "by_hand", f"Writer failed twice ({'; then '.join(problems)}): check by hand, or press Retry.", None
-
-
-def _send(conn: sqlcipher3.Connection, preparation: int, role: AIRole, largest: float | None, step: int | None) -> int:
-    """Write the call down before it is sent, with its largest possible cost set aside (0 when it is free or not
-    counted). The first try adds the step; the retry sends the same step again."""
-    if step is not None:
-        conn.execute(SEND_AGAIN, (largest or 0, step))
-        return step
-    cost = None if largest is None else 0  # NULL: this service's price isn't known, so it is not counted
-    return conn.execute(
-        FIRST_SEND, (preparation, role.service, role.model, cost, largest or 0, spending.today(), _now())
-    ).lastrowid
-
-
 def ended(
     conn: sqlcipher3.Connection, step: int, status: str, usage: llm.Usage, cost: float | None,
     error: Exception | None, answer: dict | None = None, reply: str | None = None,
@@ -338,23 +197,6 @@ def ended(
             conn.execute(FAILED_TRY, (
                 *usage, cost, str(error), came[:REPLY] if cut else came, len(came) if cut else None, _now(), step,
             ))  # fmt: skip
-
-
-def _too_long(config: Config, job_id: int, base: dict | None) -> str:
-    """For a change to a version whose PDF went over one page (with the one-page setting on): a note saying so."""
-    built = pdf.built(pdf.tailored(config.data_dir, job_id, base["version"])) if base else None
-    if built is None or built.pages <= 1 or not config.documents.one_page:
-        return ""
-    return f"\n(The previous version was {built.pages} pages: it must fit on one page.)"
-
-
-def _finish(
-    conn: sqlcipher3.Connection, preparation: int, status: str, problem: str | None,
-    result: writer.Checked | None = None,
-) -> None:  # fmt: skip
-    draft, flags = (json.dumps(result.draft, ensure_ascii=False), json.dumps(result.flags)) if result else (None, "[]")
-    with conn:
-        conn.execute(FINISH, (status, problem, draft, flags, _now(), preparation))
 
 
 def _set(conn: sqlcipher3.Connection, source) -> int | None:
