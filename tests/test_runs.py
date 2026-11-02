@@ -399,7 +399,7 @@ def test_a_privacy_stop_in_your_words_sends_nothing(conn, data_dir, job, writer_
 
 
 LETTER = json.dumps({"paragraphs": ["I want this job.", "I trained a robot arm with PPO.", "Thank you."],
-                     "from": ["E1"], "notes": "Short."})  # fmt: skip
+                     "from": ["E1"], "notes": "Short.", "responses": []})  # fmt: skip
 
 
 def test_a_cover_letter_is_its_own_kind_drawn_from_the_resumes_entries(conn, data_dir, job, writer_answers, built):

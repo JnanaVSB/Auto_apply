@@ -25,8 +25,9 @@ def shield():
     return privacy.shield(CONTACT, [RESUME_CLS], PROFILE)
 
 
-def answer(paragraphs=GOOD, cited=("E1",), notes="Robot learning first."):
-    return json.dumps({"paragraphs": list(paragraphs), "from": list(cited), "notes": notes})
+def answer(paragraphs=GOOD, cited=("E1",), notes="Robot learning first.", responses=()):
+    return json.dumps({"paragraphs": list(paragraphs), "from": list(cited), "notes": notes,
+                       "responses": list(responses)})  # fmt: skip
 
 
 def test_a_letter_draws_on_the_resumes_entries_relabelled_or_on_all():
@@ -51,8 +52,8 @@ def test_a_good_letter_is_kept_with_new_numbers_flagged():
     assert draft == {
         "paragraphs": [GOOD[0], GOOD[1], "In 3 cities and 12 labs, I would help. Thanks."],
         "from": [{"source": "profile", "tile_id": "proj-1"}, {"source": "profile", "tile_id": "exp-1"}],
-        "notes": "Short.",
-    }
+        "notes": "Short.", "responses": [], "missed": [],
+    }  # fmt: skip
     assert flags == [{"paragraph": 2, "numbers": ["12"]}]  # 90 is in the lab's bullets, 3 in the ad
 
 
@@ -61,7 +62,7 @@ def test_a_good_letter_is_kept_with_new_numbers_flagged():
     [
         ("letter", "not JSON"),
         ("[" * 100_000, "not JSON"),  # nested too deep to read
-        (json.dumps({"paragraphs": GOOD, "from": ["E1"]}), 'exactly the fields "paragraphs", "from" and "notes"'),
+        (json.dumps({"paragraphs": GOOD, "from": ["E1"], "notes": ""}), 'exactly the fields "paragraphs", "from"'),
         (answer(GOOD[:2]), "3 to 5 paragraphs"),
         (answer(GOOD * 2), "3 to 5 paragraphs"),
         (answer(notes=["x"]), '"notes" must be text'),
@@ -93,3 +94,22 @@ def test_the_letters_latex_adds_your_details_and_escapes_everything():
     assert "I scored 100\\% on \\textbackslash{}input\\{/etc/passwd\\}.\\par" in body
     assert body.rstrip().endswith("Sincerely,\\par\nAlex Example\n\\end{document}")
     assert body.split(r"\vspace{1em}")[0] in latex.resume(CONTACT, [])  # the same header as the resume
+
+
+def test_a_letter_revision_is_sent_the_previous_letter_your_words_and_the_council(shield):
+    previous = {"paragraphs": ["I want this job.", "I trained arms.", "Thanks."]}
+    system, user = letter.request(*JOB, labelled(LAB), shield, previous, "Warmer.", "Truth checker: approve")
+    assert system.endswith("Answer with the whole letter again, in the same shape.")
+    assert user.endswith(
+        "<previous>\nP1: I want this job.\nP2: I trained arms.\nP3: Thanks.\n</previous>\n\n<feedback>\nWarmer.\n"
+        "</feedback>\n\n<council>\nTruth checker: approve\n</council>"
+    )
+    draft, _ = letter.checked(answer(responses=[{"objection": "WE-1", "action": "fixed", "why": "Shorter."}]),
+                              labelled(LAB), AD, {"WE-1": "should", "TC-2": "must"})  # fmt: skip
+    assert draft["missed"] == [{"objection": "TC-2", "severity": "must"}]
+
+
+@pytest.mark.parametrize("dash", ["—", "–", "--"])
+def test_a_long_dash_is_never_written_into_your_letter(dash):
+    with pytest.raises(BadAnswer, match="paragraph 2 uses a long dash"):
+        letter.checked(answer([GOOD[0], f"I trained arms {dash} fast.", GOOD[2]]), labelled(LAB), AD)
