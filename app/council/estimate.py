@@ -20,15 +20,23 @@ def version(
     conn: sqlcipher3.Connection, writer: AIRole, members: dict[str, AIRole], rounds: int, turns: int, half: bool
 ) -> float | None:
     """The most a version can cost, in dollars: the Writer and each member in every round and discussion turn."""
+    costs = [member(conn, "writer", writer, rounds, turns, half),
+             *(member(conn, name, role, rounds, turns, half) for name, role in members.items())]  # fmt: skip
+    return None if None in costs else sum(costs)
+
+
+def member(conn: sqlcipher3.Connection, name: str, role: AIRole, rounds: int, turns: int, half: bool) -> float | None:
+    """The most one member (or the Writer) can cost in a version."""
+    if name == "writer":
+        calls = [FIRST if number == 1 else REVISION for number in range(1, rounds + 1)]
+    else:
+        calls = [(REVIEW[0] + (LATER if number > 1 else 0) + (DISCUSSION if turn else 0), REVIEW[1])
+                 for number in range(1, rounds + 1) for turn in range(turns + 1)]  # fmt: skip
     total = 0.0
-    for number in range(1, rounds + 1):
-        calls = [("writer", writer, *(FIRST if number == 1 else REVISION))]
-        calls += [(member, role, REVIEW[0] + (LATER if number > 1 else 0) + (DISCUSSION if turn else 0), REVIEW[1])
-                  for member, role in members.items() for turn in range(turns + 1)]  # fmt: skip
-        for member, role, reading, writing in calls:
-            if (cost := _call(conn, member, role, reading, writing, half)) is None:
-                return None
-            total += cost
+    for reading, writing in calls:
+        if (cost := _call(conn, name, role, reading, writing, half)) is None:
+            return None
+        total += cost
     return total
 
 

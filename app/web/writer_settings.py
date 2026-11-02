@@ -1,5 +1,6 @@
 """The Writer page (/settings/writer), kept apart from main.py: which model writes your resumes, its keys, a free
-test, the spending limits and the one-page switch. Keys go only into the keychain: never shown back, never in a file."""
+test, the spending limits and the one-page switch. With ?member=, the same picker chooses a council member's model
+(app/web/council_settings.py). Keys go only into the keychain: never shown back, never in a file."""
 
 import re
 from collections.abc import Callable
@@ -11,7 +12,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import llm
-from app.config import OPENAI_HOST, AIRole, ConfigError, load_config
+from app.config import OPENAI_HOST, REVIEWERS, AIRole, Config, ConfigError, load_config
+from app.council import reviewers
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
 from app.llm import ollama, prices
 from app.web import actions
@@ -40,22 +42,22 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     async def choose_writer(request: Request) -> Response:
         form = request.state.form
         try:
-            current = load_config().ai.writer
+            config = load_config()
         except ConfigError as error:
             return page(request, "writer_settings.html", file_problem=str(error))
-        role, problem = _role(form, current, await run_in_threadpool(ollama.installed, OLLAMA))
-        problem = problem or actions.update_settings(
-            lambda old: old | {"ai": dict(old.get("ai") or {}) | {"writer": role}}
-        )
+        member = _member(request, config)
+        role, problem = _role(form, _role_of(config, member), await run_in_threadpool(ollama.installed, OLLAMA))
+        problem = problem or actions.update_settings(lambda old: old | {"ai": _with(old.get("ai") or {}, member, role)})
         if problem:
             return await _view(request, page, problem=problem, typed=form)
         request.app.state.preparer.resume()  # a paused service is tried again
-        return RedirectResponse(f"{PAGE}?saved=writer", 303)  # so reloading the page never saves twice
+        return RedirectResponse(f"{PAGE}?member={member}&saved=writer", 303)  # reloading never saves twice
 
     @app.post(f"{PAGE}/test")
     async def test_writer(request: Request) -> Response:
         try:
-            role = load_config().ai.writer
+            config = load_config()
+            role = _role_of(config, _member(request, config))
             result = (False, "Choose a model first.") if role is None else await run_in_threadpool(llm.check, role)
         except (ConfigError, KeychainError) as error:
             result = (False, str(error))
@@ -86,6 +88,27 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         if problem:
             return await _view(request, page, problem=problem, typed=form)
         return RedirectResponse(f"{PAGE}?saved=limits", 303)
+
+
+def _member(request: Request, config: Config) -> str:
+    """Which member the page chooses a model for: the Writer, a reviewer, or a member you added (else not found)."""
+    member = request.query_params.get("member") or getattr(request.state, "form", {}).get("member") or "writer"
+    if member not in ("writer", *REVIEWERS, *(added.id for added in config.ai.extra)):
+        raise HTTPException(404)
+    return member
+
+
+def _role_of(config: Config, member: str) -> AIRole | None:
+    if member.startswith("x"):
+        return next(added.role for added in config.ai.extra if added.id == member)
+    return getattr(config.ai, member)
+
+
+def _with(ai: dict, member: str, role: dict) -> dict:
+    """The settings file's ai section with one member's model replaced."""
+    if member.startswith("x"):
+        return ai | {"extra": [added | ({"role": role} if added["id"] == member else {}) for added in ai["extra"]]}
+    return ai | {member: role}
 
 
 def _role(form: dict[str, str], current: AIRole | None, installed: list[str]) -> tuple[dict, str | None]:
@@ -134,7 +157,7 @@ def _kind(role: AIRole) -> str:
     return {"ollama": "local", "anthropic": "anthropic"}.get(role.service) or ("own" if role.own else "openai")
 
 
-def _keys() -> dict[str, bool | None]:
+def saved_keys() -> dict[str, bool | None]:
     """Whether each key is saved; None when the keychain can't be read."""
     try:
         return {name: get_secret(name) is not None for name in KEYS}
@@ -167,7 +190,9 @@ async def _view(
         config = load_config()
     except ConfigError as error:
         return page(request, "writer_settings.html", file_problem=str(error))
-    writer, evaluator, keys = config.ai.writer, config.ai.evaluator, _keys()
+    member = _member(request, config)
+    writer, evaluator, keys = _role_of(config, member), config.ai.evaluator, saved_keys()
+    name = reviewers.name(member, {added.id: added.name for added in config.ai.extra}) if member != "writer" else ""
     local_scorer = evaluator.service == "ollama"
     warnings = [
         SWAP if writer and writer.service == "ollama" and local_scorer
@@ -178,6 +203,7 @@ async def _view(
     ]  # fmt: skip
     return page(
         request, "writer_settings.html", writer=writer, kind=writer and _kind(writer), keys=keys, names=KEYS,
+        member=member, member_name=name,
         values=_values(writer, evaluator, typed), installed=await run_in_threadpool(ollama.installed, OLLAMA),
         models={kind: prices.models(kind) for kind in ("anthropic", "openai")}, checked=prices.checked(),
         spending=config.spending, one_page=config.documents.one_page, warnings=[line for line in warnings if line],

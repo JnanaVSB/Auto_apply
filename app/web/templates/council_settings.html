@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Council settings{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro value(name, default) %}{{ typed[name] if typed and name in typed else default }}{% endmacro %}
+{% block content %}
+<h1>Council settings</h1>
+<p><a href="/settings">Back to Settings</a> · <a href="/settings/writer">Writer settings and keys</a></p>
+{% if file_problem %}
+<p class="error" role="alert">{{ file_problem }}</p>
+<p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
+{% else %}
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if saved %}<p class="result" role="status">{{ saved }}</p>{% endif %}
+{% for line in warnings %}<p class="error">{{ line }}</p>{% endfor %}
+
+<h2>Line-up: {{ tier }}</h2>
+<form method="post" action="/settings/council/preset" class="actions">{{ csrf_field() }}
+  {% for key, name in presets.items() %}<button type="submit" name="preset" value="{{ key }}">{{ name }}</button>{% endfor %}
+</form>
+<p class="hint">A preset fills in the Writer and the five reviewers; change any of them below. Laptop is free; the
+  others need your Anthropic and OpenAI keys (Writer settings, Keys).</p>
+<table>
+  <thead><tr><th>Member</th><th>Model</th><th>Estimated per job</th><th></th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr><td>{{ row.name }}{% if row.letters %} <span class="muted">(also letters)</span>{% endif %}</td>
+    <td>{% if row.role %}{{ row.role.model }} <span class="muted">({{ "laptop" if row.role.service == "ollama" else row.role.service }}, thinking {{ row.role.thinking }})</span>{% else %}<span class="error">none chosen</span>{% endif %}</td>
+    <td>{% if row.cost is none %}{{ "not counted" if row.role else "" }}{% elif row.cost == 0 %}free{% else %}up to ${{ "%.2f" | format(row.cost) }}{% endif %}</td>
+    <td><a href="/settings/writer?member={{ row.member }}">Change</a></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="hint">{% if total is not none %}A whole job at most: ${{ "%.2f" | format(total) }} at half price, at your round limit with
+  every discussion turn{% else %}A member without a known price can't be estimated{% endif %}; most jobs end sooner.</p>
+
+<h2>How the council works</h2>
+<form method="post" action="/settings/council" class="stacked">{{ csrf_field() }}
+  <label>Round limit (1 to 5) <input name="rounds" inputmode="numeric" value="{{ value('rounds', council.rounds) }}"></label>
+  <label>Discussion turns per round (0 to 3; 0: each reviewer reviews alone)
+    <input name="turns" inputmode="numeric" value="{{ value('turns', council.turns) }}"></label>
+  <label><input type="checkbox" name="automatic"{% if council.automatic %} checked{% endif %}> Automatic preparation:
+    prepare ready jobs by itself, newest first</label>
+  <label>Council hours: new jobs start automatically from <input name="start" value="{{ value('start', council.start) }}" size="5">
+    to <input name="end" value="{{ value('end', council.end) }}" size="5"></label>
+  <label><input type="checkbox" name="any_time"{% if council.any_time %} checked{% endif %}> Any time</label>
+  <label>New jobs a day (1 to 200; your presses count, but are never held back)
+    <input name="daily_jobs" inputmode="numeric" value="{{ value('daily_jobs', council.daily_jobs) }}"></label>
+  <button type="submit" class="primary">Save</button>
+</form>
+
+<h2>Members you added</h2>
+{% for member in extra %}
+<form method="post" action="/settings/council/members" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="id" value="{{ member.id }}">
+  <label>Name <input name="name" maxlength="40" value="{{ member.name }}"></label>
+  <label><input type="checkbox" name="letters"{% if member.letters %} checked{% endif %}> Also reviews cover letters</label>
+  <label>Instructions <textarea name="instructions" rows="6" maxlength="20000">{{ added[member.id] }}</textarea></label>
+  <button type="submit">Save {{ member.name }}</button>
+</form>
+<form method="post" action="/settings/council/members/{{ member.id }}/remove" class="inline">{{ csrf_field() }}
+  <button type="submit">Remove {{ member.name }}</button></form>
+{% endfor %}
+{% if extra | length < 3 %}
+<form method="post" action="/settings/council/members" class="stacked">{{ csrf_field() }}
+  <label>Name <input name="name" maxlength="40" value="{{ value('name', '') }}" placeholder="For example: Recruiter"></label>
+  <label><input type="checkbox" name="letters"> Also reviews cover letters</label>
+  <label>Instructions (kept only in your data folder)
+    <textarea name="instructions" rows="6" maxlength="20000" placeholder="What this member looks for, and when an objection is a must.">{{ value('instructions', '') }}</textarea></label>
+  <button type="submit">Add a member</button>
+</form>
+<p class="hint">A new member starts on the laptop's gemma; press Change in the table to choose its model.</p>
+{% endif %}
+{% endif %}
+{% endblock %}

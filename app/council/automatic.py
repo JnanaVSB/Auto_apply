@@ -31,7 +31,7 @@ def start_due(conn: sqlcipher3.Connection, config: Config, now: datetime | None 
     if not council.any_time and not _in_hours(now.strftime("%H:%M"), council.start, council.end):
         return f"Automatic preparation waits for the council hours ({council.start} to {council.end})."
     roles = [config.ai.writer, *(getattr(config.ai, member) for member in REVIEWERS)]
-    if missing := _no_key(roles):
+    if missing := missing_key(roles):
         return f"Automatic preparation waits: no key is saved under '{missing}' (Settings)."
     try:
         resume = read_resume(config.data_dir).fingerprint
@@ -65,7 +65,7 @@ def _in_hours(time: str, start: str, end: str) -> bool:
     return start <= time < end if start < end else time >= start or time < end
 
 
-def _no_key(roles: list[AIRole]) -> str | None:
+def missing_key(roles: list[AIRole]) -> str | None:
     """The name of a paid member's key that isn't saved (or can't be read), else None."""
     for role in roles:
         paid = role.service == "anthropic" or urlsplit(role.address).hostname == OPENAI_HOST

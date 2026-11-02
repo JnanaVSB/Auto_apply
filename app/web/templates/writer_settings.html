@@ -7,9 +7,10 @@
     </select></label>
 {% endmacro %}
 {% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro member_field() %}<input type="hidden" name="member" value="{{ member }}">{% endmacro %}
 {% block content %}
-<h1>Writer settings</h1>
-<p><a href="/settings">Back to Settings</a></p>
+<h1>{{ "Model for the " ~ member_name if member_name else "Writer settings" }}</h1>
+<p><a href="/settings">Back to Settings</a> · <a href="/settings/council">Council settings</a></p>
 {% if file_problem %}
 <p class="error" role="alert">{{ file_problem }}</p>
 <p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
@@ -18,7 +19,7 @@
 {% if saved %}<p class="result" role="status">{{ saved }}</p>{% endif %}
 {% for line in warnings %}<p class="error">{{ line }}</p>{% endfor %}
 
-<h2>Which model writes your resumes</h2>
+<h2>{{ "Which model this member uses" if member_name else "Which model writes your resumes" }}</h2>
 {% if writer is none %}
 <p>None chosen yet: choose one below. Prepare works once a Writer is chosen.</p>
 {% elif kind == "local" %}
@@ -28,13 +29,13 @@
 {% else %}
 <p>In use: <strong>{{ models[kind][writer.model][0] if writer.model in models[kind] else writer.model }}</strong> from {{ "Anthropic" if kind == "anthropic" else "OpenAI" }} with the key "{{ writer.key_name }}", thinking {{ writer.thinking }}.</p>
 {% endif %}
-<form method="post" action="/settings/writer/test" class="inline">{{ csrf_field() }}
+<form method="post" action="/settings/writer/test" class="inline">{{ csrf_field() }}{{ member_field() }}
   <button type="submit"{% if writer is none %} disabled{% endif %}>Test</button></form>
 <span class="hint">Free: it only asks whether the model can be used, and sends nothing of yours.</span>
 {% if test %}<p class="{{ 'result' if test[0] else 'error' }}" role="status">{{ test[1] }}</p>{% endif %}
 
 <h3>On this laptop (Ollama)</h3>
-<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}{{ member_field() }}
   <input type="hidden" name="kind" value="local">
   <p class="hint">Free, and nothing leaves the laptop. The same model and working size as scoring avoid slow switching.</p>
   {% if installed %}
@@ -53,7 +54,7 @@
 
 {% for service, label in [("anthropic", "Anthropic (Claude)"), ("openai", "OpenAI")] %}
 <h3>{{ label }}</h3>
-<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}{{ member_field() }}
   <input type="hidden" name="kind" value="{{ service }}">
   <p class="hint">Paid, at the normal price; counted within your limits. Uses the key "{{ service }}" (Keys below).
     Prices per 1M tokens (read / written), checked {{ checked }}.</p>
@@ -63,13 +64,13 @@
       <option value="{{ model }}"{% if values[service].model == model %} selected{% endif %}>{{ name }}: ${{ price.input }} / ${{ price.output }}</option>
       {% endfor %}
     </select></label>
-  {{ thinking(values[service].thinking, ["low", "medium", "high"] if service == "anthropic" else ["off", "low", "medium", "high"]) }}
+  {{ thinking(values[service].thinking, ["low", "medium", "high", "xhigh"] if service == "anthropic" else ["off", "low", "medium", "high", "xhigh"]) }}
   <button type="submit">Use this</button>
 </form>
 {% endfor %}
 
 <h3>Your own address</h3>
-<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}
+<form method="post" action="/settings/writer" class="stacked">{{ csrf_field() }}{{ member_field() }}
   <input type="hidden" name="kind" value="own">
   <p class="hint">A server you host or rent that accepts OpenAI-style requests. Use only hosts you are allowed to use
     (never the ASU network). https://, or http:// on a private network written as numbers (e.g. http://192.168.1.5:8000/v1).</p>
