@@ -16,7 +16,7 @@ from typing import NamedTuple
 import httpx
 
 from app.config import AIRole
-from app.llm import Busy, Expired, LLMError, Reply, StopScoring, TooLong, Usage, answer_data, refused, tokens
+from app.llm import Busy, Expired, LLMError, Reply, StopScoring, TimedOut, TooLong, Usage, answer_data, refused, tokens
 
 API_VERSION = "2026-10-21"
 ANSWER_LIMIT = 8000  # word-pieces, unless the request asks for more
@@ -75,7 +75,10 @@ def send_batch(client: httpx.Client, role: AIRole, key: str, requests: list[Batc
     reply = client.post(f"{role.address}/v1/messages/batches", json=body, headers=_headers(key))
     if reply.status_code != 200:
         raise refused("Anthropic", reply.status_code, role.model)
-    return _batch_id(answer_data(reply).get("id"))
+    try:
+        return _batch_id(answer_data(reply).get("id"))
+    except LLMError:  # accepted, but its id can't be read: the batch may exist, like a lost answer
+        raise TimedOut("Anthropic's answer to the batch could not be read") from None
 
 
 def batch_ended(client: httpx.Client, role: AIRole, key: str, batch_id: str) -> bool:

@@ -34,8 +34,8 @@ HELD = "SELECT DISTINCT preparation_id FROM steps WHERE status IN ('sent', 'wait
 STEP = "SELECT id, tries, waits, mode FROM steps WHERE preparation_id = ? AND round = ? AND member = ? AND turn = ?"
 INSERT = """INSERT INTO steps (preparation_id, round, member, turn, service, model, mode, status, cost, reserved, day,
     sent_on) VALUES (?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?)"""
-AGAIN = """UPDATE steps SET status = 'sent', mode = ?, retry_after = NULL, batch_id = NULL, reserved = ?, day = ?
-    WHERE id = ?"""
+AGAIN = """UPDATE steps SET status = 'sent', mode = ?, retry_after = NULL, batch_id = NULL, reserved = ?, day = ?,
+    sent_on = ? WHERE id = ?"""
 WAIT = """UPDATE steps SET status = 'waiting', tries = tries + ?, waits = waits + ?, retry_after = ?, batch_id = NULL,
     reserved = 0, error = ? WHERE id = ?"""
 DUE = "SELECT 1 FROM steps WHERE id = ? AND status = 'waiting' AND (retry_after IS NULL OR retry_after <= ?)"
@@ -130,7 +130,7 @@ def _reserve(conn: sqlcipher3.Connection, config: Config, calls: list[flow.Call]
                     cost, largest or 0, day, now.isoformat(timespec="seconds"),
                 )).lastrowid, 1  # fmt: skip
             else:
-                conn.execute(AGAIN, (mode, largest or 0, day, step[0]))
+                conn.execute(AGAIN, (mode, largest or 0, day, now.isoformat(timespec="seconds"), step[0]))
                 step_id, tries = step[0], step[1]
         sent.append((call, step_id, mode, largest, tries))
     return sent
@@ -149,8 +149,14 @@ def _send_batch(conn: sqlcipher3.Connection, config: Config, state: State, sent:
         state.paused["anthropic"] = str(error)
         _wait_all(conn, sent, None, str(error))
         return
-    except llm.LLMError as error:
+    except llm.TimedOut:  # sent, its answer lost: the batch may exist, so the calls stay sent, to be found by their
+        return  # names after ADOPT_AFTER (or sent again after GIVE_UP)
+    except llm.Busy as error:  # nothing made: sent again later
         _wait_all(conn, sent, now + timedelta(minutes=WAITS[0]), str(error))
+        return
+    except llm.LLMError as error:  # refused outright: a used try for each call, so it is never sent again and again
+        for found in sent:
+            _failed(conn, found, llm.NOTHING, 0, Exception(f"Anthropic refused the batch: {error}"))
         return
     with conn:
         conn.execute(
@@ -170,12 +176,24 @@ def _send_direct(conn: sqlcipher3.Connection, config: Config, state: State, sent
     with ThreadPoolExecutor(AT_ONCE) as pool:
         futures = [(found, pool.submit(_ask, found, _text(conn, *found[0:2], found[4]))) for found in cloud]
         for found in laptop:
+            saved += _settled(conn, config, state, futures, now)  # cloud answers already in: saved before it
             if not _open(found[0].role, state, now):  # Ollama went off in this pass: the rest wait
                 _wait_all(conn, [found], state.ollama_after, state.paused.get("ollama", "Ollama isn't running"))
                 continue
             saved += _outcome(conn, config, state, found, _ask(found, _text(conn, *found[0:2], found[4])), now)
-        for found, future in futures:
-            saved += _outcome(conn, config, state, found, future.result(), now)
+        saved += _settled(conn, config, state, futures, now, wait=True)
+    return saved
+
+
+def _settled(
+    conn: sqlcipher3.Connection, config: Config, state: State, futures: list, now: datetime, wait: bool = False
+) -> int:
+    """Saves the cloud answers that have come (with `wait`, all of them, waiting for each), taking them off the
+    list, so a stop during a long laptop call loses none already paid for."""
+    saved = 0
+    for item in [item for item in futures if wait or item[1].done()]:
+        futures.remove(item)
+        saved += _outcome(conn, config, state, item[0], item[1].result(), now)
     return saved
 
 
@@ -248,10 +266,10 @@ def _failed(
 
 
 def _collect(conn: sqlcipher3.Connection, config: Config, state: State, now: datetime) -> int:
-    """Finished Anthropic batches: each answer saved (a bad one sent again once), then the batch deleted there;
-    batches a crash lost are found again first."""
-    out = conn.execute("SELECT 1 FROM batches WHERE status = 'sent' UNION SELECT 1 FROM steps WHERE status = 'sent' "
-                       "AND mode = 'batch'").fetchone()  # fmt: skip
+    """Finished Anthropic batches: each answer saved (a bad one sent again once), then the batch deleted there (a
+    failed delete is tried again at the next pass); batches a crash lost are found again first."""
+    out = conn.execute("SELECT 1 FROM batches WHERE status IN ('sent', 'saved') UNION SELECT 1 FROM steps "
+                       "WHERE status = 'sent' AND mode = 'batch'").fetchone()  # fmt: skip
     if "anthropic" in state.paused or out is None:
         return 0
     saved = 0
@@ -276,6 +294,7 @@ def _collect(conn: sqlcipher3.Connection, config: Config, state: State, now: dat
                 with conn:
                     conn.execute("UPDATE batches SET status = 'saved', saved_on = ? WHERE batch_id = ?",
                                  (now.isoformat(timespec="seconds"), batch))  # fmt: skip
+            for (batch,) in conn.execute("SELECT batch_id FROM batches WHERE status = 'saved'").fetchall():
                 anthropic.delete_batch(client, ANTHROPIC, key, batch)
                 with conn:
                     conn.execute("UPDATE batches SET status = 'deleted', deleted_on = ? WHERE batch_id = ?",

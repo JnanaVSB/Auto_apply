@@ -1,6 +1,7 @@
 """The council's runner against fake services: the laptop, OpenAI (Flex) and Anthropic (batches) are all played here,
 with a made-up person, job and answers; nothing here reaches a real AI."""
 
+from concurrent.futures import Future
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
@@ -274,6 +275,99 @@ def test_an_orphan_no_batch_holds_is_sent_again_after_a_day(conn, data_dir, job,
     assert one(conn, "SELECT status FROM steps")[0] == "sent" and batches["sent"] == []
     run(conn, config, now=NOW + timedelta(hours=26))
     assert batches["sent"] == [["aa-1"]] and one(conn, "SELECT reserved > 0 FROM steps")[0]  # set aside again
+
+
+def test_a_batch_whose_answer_was_lost_is_found_again_never_sent_twice(conn, data_dir, job, models, batches,
+                                                                       monkeypatch):  # fmt: skip
+    config = settings(data_dir, writer_=OPUS)
+    fake, replies = runner.anthropic.send_batch, [llm.Busy("Anthropic is busy"), llm.TimedOut("the connection broke")]
+
+    def send(*args):
+        reply = replies.pop(0) if replies else None
+        if not isinstance(reply, llm.Busy):
+            fake(*args)  # made at Anthropic, and then its answer lost (or not)
+        if reply:
+            raise reply
+        return f"b{len(batches['sent'])}"
+
+    monkeypatch.setattr(runner.anthropic, "send_batch", send)
+    flow.start(conn, config, job)
+    run(conn, config)  # busy: nothing made, sent again later, not a try
+    assert one(conn, "SELECT status, tries, retry_after IS NOT NULL FROM steps") == ("waiting", 1, 1)
+    later = NOW + timedelta(days=2)
+    run(conn, config, now=later)
+    assert batches["sent"] == [["aa-1"]] and one(conn, "SELECT status, batch_id FROM steps") == ("sent", None)
+    batches["listed"] = ["b1"]
+    run(conn, config, now=later + timedelta(minutes=6))  # found, but not ended: waited for, never sent again
+    assert batches["sent"] == [["aa-1"]] and one(conn, "SELECT status FROM steps")[0] == "sent"
+    batches["ended"].add("b1")
+    batches["results"]["b1"] = {"aa-1": llm.Reply(GOOD, USED)}
+    run(conn, config, now=later + timedelta(minutes=12))
+    assert one(conn, "SELECT batch_id, adopted, status FROM batches") == ("b1", 1, "deleted")
+    assert batches["sent"] == [["aa-1"]] and one(conn, STATE)[0] == "done"
+
+
+def test_a_batch_whose_delete_failed_is_deleted_at_a_later_pass(conn, data_dir, job, models, batches, monkeypatch):
+    config = settings(data_dir, writer_=OPUS)
+    failing = [llm.Busy("Anthropic is busy")]
+
+    def delete(client, role, key, batch):
+        if failing:
+            raise failing.pop()
+        batches["deleted"].append(batch)
+
+    monkeypatch.setattr(runner.anthropic, "delete_batch", delete)
+    flow.start(conn, config, job)
+    run(conn, config)
+    batches["ended"].add("b1")
+    batches["results"]["b1"] = {"aa-1": llm.Reply(GOOD, USED)}
+    run(conn, config)
+    assert one(conn, "SELECT status FROM batches")[0] == "saved" and one(conn, STATE)[0] == "done"
+    run(conn, config, now=NOW + timedelta(minutes=2))  # nothing else to do: the delete is tried again
+    assert batches["deleted"] == ["b1"] and one(conn, "SELECT status FROM batches")[0] == "deleted"
+
+
+def test_a_batch_anthropic_refuses_uses_a_try_each_time(conn, data_dir, job, models, batches, monkeypatch):
+    config = settings(data_dir, writer_=OPUS)
+    refused = llm.LLMError("Anthropic refused the request (status 400).")
+    monkeypatch.setattr(runner.anthropic, "send_batch", lambda *args: (_ for _ in ()).throw(refused))
+    flow.start(conn, config, job)
+    run(conn, config)
+    run(conn, config)  # sent again once
+    assert one(conn, "SELECT status, tries, reserved, cost FROM steps") == ("failed", 2, 0, 0)  # not charged
+    reasons = [reason for (reason,) in conn.execute("SELECT reason FROM failed_tries")]
+    assert reasons == ["Anthropic refused the batch: Anthropic refused the request (status 400)."] * 2
+    run(conn, config)
+    assert one(conn, STATE)[0] == "by_hand"  # never sent again and again
+
+
+class AtOnce:
+    """Cloud calls answered the moment they are sent, so the order answers are saved in is plain to see."""
+
+    def __init__(self, workers):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *error):
+        return False
+
+    def submit(self, ask, *args):
+        future = Future()
+        future.set_result(ask(*args))
+        return future
+
+
+def test_cloud_answers_are_saved_before_the_next_laptop_call(conn, data_dir, job, models, monkeypatch):
+    config = settings(data_dir, truth=SOL)
+    seen, call = [], runner.llm.call
+    monkeypatch.setattr(runner, "ThreadPoolExecutor", AtOnce)
+    monkeypatch.setattr(runner.llm, "call", lambda role, *args, **kwargs: seen.append(one(
+        conn, "SELECT status FROM steps WHERE member = 'truth'")) or call(role, *args, **kwargs))  # fmt: skip
+    flow.start(conn, config, job)
+    run(conn, config)
+    assert seen[1:3] == [("sent",), ("done",)]  # the Truth checker's answer saved before the laptop's next call
 
 
 def test_a_call_a_stopped_runner_left_out_is_counted_and_sent_again(conn, data_dir, job, models):
