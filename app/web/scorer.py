@@ -12,6 +12,7 @@ import sqlcipher3
 
 from app import collect, db, llm, score
 from app.config import Config, ConfigError, load_config
+from app.council import runner
 from app.fetch import Fetcher
 from app.keychain import KeychainError
 from app.resume import ResumeError, read_resume
@@ -95,12 +96,14 @@ class Scorer:
             self._thread.join(STOP_WAIT_SECONDS)
 
     def due(self, conn: sqlcipher3.Connection, config: Config, now: datetime | None = None) -> bool:
-        """True when automatic scoring is on, nothing scores yet, no collection runs, today's time is not used up,
-        the last failure is RETRY_AFTER ago, and there is something to do."""
+        """True when automatic scoring is on, nothing scores yet, no collection runs, the council has no laptop work,
+        today's time is not used up, the last failure is RETRY_AFTER ago, and there is something to do."""
         settings, now = config.scoring, now or datetime.now(UTC)
         if not settings.automatic or self.running or (self.failed_at and now - self.failed_at < RETRY_AFTER):
             return False
         if queue.collection_running(conn) or queue.used_today(conn) >= settings.minutes_per_day * 60:
+            return False
+        if runner.laptop_work(conn):  # the council's laptop calls go first: one at a time on the graphics card
             return False
         try:
             resume = read_resume(config.data_dir)

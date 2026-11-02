@@ -90,28 +90,38 @@ def advance(conn: sqlcipher3.Connection, config: Config, preparation: int) -> li
     if version["status"] != "writing":
         return []
     if problem := _stopped(conn, config, version):
-        _end(conn, preparation, "stopped", problem)
+        end(conn, preparation, "stopped", problem)
         return []
     try:
         return _next(conn, config, version)
     except (privacy.PrivacyError, ResumeError, reviewers.NoInstructions) as error:  # nothing sent: fix it, Retry
-        _end(conn, preparation, "stopped", str(error))
+        end(conn, preparation, "stopped", str(error))
     except privacy.PrivacyStop as stop:
-        _end(conn, preparation, "stopped", f"Privacy check stopped this: {stop}. Change that, then try again.")
+        end(conn, preparation, "stopped", f"Privacy check stopped this: {stop}. Change that, then try again.")
     return []
 
 
-def _next(conn: sqlcipher3.Connection, config: Config, version: dict) -> list[Call]:
+def pending(conn: sqlcipher3.Connection, config: Config, preparation: int) -> list[Call]:
+    """The calls already sent (or waiting to be sent again) that still need their answer, built again exactly as they
+    were sent, so their answers can be checked when they come (an Anthropic batch, a busy service). Whatever the
+    version's status: steps already sent always finish and are saved."""
+    try:
+        return _next(conn, config, _version(conn, preparation), waiting=True)
+    except (privacy.PrivacyError, privacy.PrivacyStop, ResumeError, reviewers.NoInstructions):
+        return []
+
+
+def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: bool = False) -> list[Call]:
+    """The calls not yet sent; or, `waiting`, the ones sent and still unanswered."""
     preparation, number = version["id"], version["round"]
     steps = {(row[0], row[1], row[2]): row[3:] for row in conn.execute(STEPS, (preparation,))}
     seen = _Seen.of(conn, config, version)
     written = steps.get((number, "writer", 0))
-    if written is None:
-        return _writer(seen, version, steps, number)
-    if written[0] in WAITING:
-        return []
+    if written is None or written[0] in WAITING:
+        return _writer(seen, version, steps, number) if (written is None) is not waiting else []
     if written[0] != "done":
-        _end(conn, preparation, "by_hand", NO_WRITER.format(number))
+        if not waiting:
+            end(conn, preparation, "by_hand", NO_WRITER.format(number))
         return []
     found = json.loads(written[1])
     _keep(conn, config, version, found)
@@ -120,14 +130,17 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict) -> list[Ca
         if turn and not _discuss(answers, before, turn):
             break
         rows = {member: steps.get((number, member, turn)) for member in seen.members}
-        if missing := [member for member, row in rows.items() if row is None]:
-            return [_review(seen, version, steps, found, number, member, turn, answers) for member in missing]
-        if any(row[0] in WAITING for row in rows.values()):
-            return []
+        missing = [member for member, row in rows.items() if row is None]
+        held = [member for member, row in rows.items() if row is not None and row[0] in WAITING]
+        if missing or held:
+            return [_review(seen, version, steps, found, number, member, turn, answers)
+                    for member in (held if waiting else missing)]  # fmt: skip
         before, answers = answers, {m: json.loads(row[1]) if row[0] == "done" else None for m, row in rows.items()}
+    if waiting:
+        return []
     late = [asked for asked in json.loads(version["asked"]) if asked["on"] > written[2]]  # after this round's Writer
     if all(answer and answer["verdict"] == "approve" for answer in answers.values()) and not late:
-        _end(conn, preparation, "done", None, agreed=True)
+        end(conn, preparation, "done", None, agreed=True)
         _build(conn, config, preparation)
         return []
     if number < config.council.rounds or (late and number < MOST_ROUNDS):
@@ -250,7 +263,7 @@ def _no_agreement(conn: sqlcipher3.Connection, config: Config, version: dict, dr
     labels = {entry.label: (entry.source, entry.tile.tile_id) for entry in seen.entries}
     if seen.letter:
         if truth is None or any(not where.startswith("P") for where in musts):
-            _end(conn, version["id"], "by_hand", LETTER_UNCLEAR, agreed=False)
+            end(conn, version["id"], "by_hand", LETTER_UNCLEAR, agreed=False)
             return
         objected, wording = sorted({int(where[1:]) - 1 for where in musts}), "original" if musts else None
     elif truth is None or "" in musts:
@@ -259,7 +272,7 @@ def _no_agreement(conn: sqlcipher3.Connection, config: Config, version: dict, dr
     else:
         objected = [list(labels[label]) for label in dict.fromkeys(where.split(".")[0] for where in musts)]
         wording = "original" if objected else None
-    _end(conn, version["id"], "done", None, agreed=False, wording=wording, draft=draft | {"objected": objected})
+    end(conn, version["id"], "done", None, agreed=False, wording=wording, draft=draft | {"objected": objected})
     _build(conn, config, version["id"])
 
 
@@ -332,7 +345,7 @@ def _version(conn: sqlcipher3.Connection, preparation: int) -> dict:
     return dict(zip(names, conn.execute(VERSION, (preparation,)).fetchone(), strict=True))
 
 
-def _end(
+def end(
     conn: sqlcipher3.Connection, preparation: int, status: str, problem: str | None, agreed: bool | None = None,
     wording: str | None = None, draft: dict | None = None,
 ) -> None:  # fmt: skip

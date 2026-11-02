@@ -26,6 +26,10 @@ STEP = """INSERT INTO steps (preparation_id, round, member, turn, service, model
 
 @pytest.fixture
 def job(conn, data_dir):
+    return made_up_job(conn, data_dir)
+
+
+def made_up_job(conn, data_dir) -> int:
     """A made-up job, Profile (confirmed for the made-up resume) and Questionnaire."""
     (data_dir / RESUME_FILE).write_text(RESUME_CLS, encoding="utf-8")
     questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))

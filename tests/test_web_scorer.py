@@ -152,6 +152,9 @@ def ready(data_dir, conn):
 
 
 NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
+COUNCIL = """INSERT INTO preparations (job_id, kind, version, sources, writer, council, status, created_on)
+    VALUES (1, 'resume', 1, '[]', '{{"service": "anthropic"}}', '{{"members": {{"truth": {{"service": "{}"}}}}}}',
+    'writing', 'now')"""
 
 
 @pytest.mark.parametrize(
@@ -169,6 +172,8 @@ NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
         (lambda s, c, conf: c.execute("INSERT INTO scoring_days VALUES (?, 7200)", (queue.today(),)), False),
         (lambda s, c, conf: (conf.data_dir / RESUME_FILE).unlink(), False),
         (lambda s, c, conf: c.execute("UPDATE jobs SET status = 'no longer available'"), False),  # nothing to do
+        (lambda s, c, conf: c.execute(COUNCIL.format("ollama")), False),  # the council's laptop work goes first
+        (lambda s, c, conf: c.execute(COUNCIL.format("anthropic")), True),  # cloud work doesn't use the card
     ],
 )
 def test_automatic_scoring_starts_only_when_it_has_work_and_the_moment_is_right(data_dir, conn, ready, change, due):

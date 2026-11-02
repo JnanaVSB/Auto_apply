@@ -284,27 +284,27 @@ def _write(
             reply = llm.call(role, system, text, shape, retry=retry, answer_limit=writer.ANSWER_LIMIT,
                              timeout=writer.TIMEOUT_SECONDS)  # fmt: skip
         except llm.TimedOut as error:  # a paid service may still finish and charge: counted (owner choice M)
-            _ended(conn, step, "failed", llm.NOTHING, largest, error)  # free ($0) for the local model
+            ended(conn, step, "failed", llm.NOTHING, largest, error)  # free ($0) for the local model
             problems.append(str(error))
             continue
         except llm.TooLong as error:  # refused, never charged; a retry can't help
-            _ended(conn, step, "failed", llm.NOTHING, 0, error)
+            ended(conn, step, "failed", llm.NOTHING, 0, error)
             return "stopped", TOO_LONG.format(error), None
         except (llm.StopScoring, KeychainError) as error:  # the same, and every job would meet it
-            _ended(conn, step, "failed", llm.NOTHING, 0, error)
+            ended(conn, step, "failed", llm.NOTHING, 0, error)
             raise Halted(str(error)) from error  # it names the cause and the fix (a key, the model's name, Ollama...)
         except llm.LLMError as error:  # busy, cut off, declined, not JSON: one failed try
-            _ended(conn, step, "failed", error.usage, spending.charged(role, error.usage), error)
+            ended(conn, step, "failed", error.usage, spending.charged(role, error.usage), error)
             problems.append(str(error))
             continue
         try:
             result = check(reply.text)
         except writer.BadAnswer as bad:
-            _ended(conn, step, "failed", reply.usage, spending.charged(role, reply.usage), bad, reply=reply.text)
+            ended(conn, step, "failed", reply.usage, spending.charged(role, reply.usage), bad, reply=reply.text)
             problems.append(f"the answer was refused: {bad}")
             text = writer.again(user, str(bad))
             continue
-        _ended(conn, step, "done", reply.usage, spending.charged(role, reply.usage), None, result.draft)
+        ended(conn, step, "done", reply.usage, spending.charged(role, reply.usage), None, result.draft)
         return "done", None, result
     return "by_hand", f"Writer failed twice ({'; then '.join(problems)}): check by hand, or press Retry.", None
 
@@ -321,7 +321,7 @@ def _send(conn: sqlcipher3.Connection, preparation: int, role: AIRole, largest: 
     ).lastrowid
 
 
-def _ended(
+def ended(
     conn: sqlcipher3.Connection, step: int, status: str, usage: llm.Usage, cost: float | None,
     error: Exception | None, answer: dict | None = None, reply: str | None = None,
 ) -> None:  # fmt: skip
