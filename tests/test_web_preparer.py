@@ -91,7 +91,7 @@ def test_a_job_skipped_closed_or_no_longer_ready_while_it_waits_is_let_go(data_d
     fake.go.set()
     assert fake.done.wait(WAIT) and finished(preparer)
     assert fake.started == [1, 3] and asked == [(1, frozenset()), (2, frozenset({"not-ready"})), (3, frozenset())]
-    assert preparer.notice is None
+    assert preparer.notice == preparing.LET_GO
 
 
 def test_the_writer_removed_in_settings_while_jobs_wait_lets_them_go_and_says_why(data_dir, fake):

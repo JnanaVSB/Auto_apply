@@ -377,7 +377,7 @@ UPGRADES = (
         writer TEXT NOT NULL,  -- JSON: the Writer's settings at the start (never a key)
         status TEXT NOT NULL CHECK (status IN ('writing', 'done', 'by_hand', 'stopped')),
         problem TEXT,  -- why it stopped or needs checking by hand; never your text
-        draft TEXT,  -- JSON: the checked answer, contact details still as placeholders
+        draft TEXT,  -- JSON: the checked answer with placeholders, and "details": their real text, kept only here
         flags TEXT NOT NULL DEFAULT '[]',  -- JSON: e.g. numbers not in the original bullets
         created_on TEXT NOT NULL,
         finished_on TEXT,

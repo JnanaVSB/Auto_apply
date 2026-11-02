@@ -163,10 +163,10 @@ def test_a_skipped_closed_or_not_ready_job_asks_first_and_can_proceed_anyway(cli
     confirm_tiles(conn)
     text = client.get(f"/jobs/{jobs['Skipped']}/preparation").text
     assert 'hx-confirm="This job is skipped (&#34;Not interested&#34;). Press OK to proceed anyway."' in text
-    assert 'name="anyway" value="skipped"' in text and ">Prepare</button>" in text and ">Write cover letter<" in text
-    assert (
-        'value="closed"' in (text := client.get(f"/jobs/{jobs['Gone']}/preparation").text) and "No longer open." in text
-    )
+    assert """hx-vals='{"anyway": "skipped"}'""" in text and 'name="anyway"' not in text  # sent only after OK
+    assert ">Prepare</button>" in text and ">Write cover letter<" in text
+    text = client.get(f"/jobs/{jobs['Gone']}/preparation").text
+    assert """hx-vals='{"anyway": "closed"}'""" in text and "No longer open." in text
     assert "hx-confirm" not in client.get(f"/jobs/{jobs['Fresh']}/preparation").text  # nothing to ask
     for name, doubt in (("Skipped", "skipped"), ("Gone", "closed"), ("Low", "not-ready")):
         text = press(client, jobs[name], back="job", anyway="closed" if doubt != "closed" else "").text

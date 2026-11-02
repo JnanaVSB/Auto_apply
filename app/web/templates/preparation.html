@@ -1,7 +1,6 @@
 {% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
-{% set ask %}{% if doubts %} hx-confirm="{{ confirm }}"{% endif %}{% endset %}{# the browser's pop-up: OK proceeds anyway #}
+{% set ask %}{% if doubts %} hx-confirm="{{ confirm }}" hx-vals='{{ {"anyway": doubts | join(" ")} | tojson }}'{% endif %}{% endset %}{# the browser's pop-up: only its OK sends "proceed anyway" (a press without the page's script is refused) #}
 {% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
-{% set anyway %}<input type="hidden" name="anyway" value="{{ doubts | join(" ") }}">{% endset %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
   {% if place == 0 or (place is none and working) %}
@@ -34,14 +33,14 @@
   {% if notice %}<p class="error" role="alert">{{ notice }}</p>{% endif %}
   <form method="post" action="/ready/{{ job_id }}/prepare" hx-post="/ready/{{ job_id }}/prepare" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <input type="hidden" name="back" value="job">{{ anyway }}
+    <input type="hidden" name="back" value="job">
     <button type="submit" class="primary">{{ "Retry" if failed else "Prepare" }}</button>
   </form>
   {% endif %}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}
   {% if changeable and place is none and not (latest and latest.status == "writing") %}
   <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">{{ anyway }}
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept)
       <textarea name="feedback" rows="3" maxlength="2000" placeholder="For example: shorter, it is two pages; lead with the drone project">{{ typed }}</textarea></label>
     <button type="submit">Send to the Writer</button>
@@ -81,7 +80,7 @@
   {% if letter_problem %}<p class="error" role="alert">{{ letter_problem }}</p>{% endif %}
   {% if can_letter %}
   <form method="post" action="/jobs/{{ job_id }}/cover-letter" hx-post="/jobs/{{ job_id }}/cover-letter" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">{{ anyway }}
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <button type="submit">{{ "Write another cover letter" if found else "Write cover letter" }}</button>
   </form>
   {% endif %}

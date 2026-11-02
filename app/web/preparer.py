@@ -21,6 +21,8 @@ NO_WRITER = ("The Writer was removed in Settings while jobs were waiting: choose
              "then press Prepare again.")  # fmt: skip
 HALTED = ("The Writer stopped: {} Any jobs that were waiting were let go: press Prepare on them again once that is "
           "fixed.")  # fmt: skip
+LET_GO = ("A job that waited its turn was let go, nothing sent: it was skipped, closed or stopped being ready after "
+          "you pressed. Press Prepare on it again to proceed anyway.")  # fmt: skip
 log = logging.getLogger("app.web")
 
 
@@ -81,8 +83,10 @@ class Preparer:
                     config = load_config()
                     if config.ai.writer is None:
                         self._stop(NO_WRITER)
-                    elif self.startable(conn, job_id, waived):  # else skipped, closed or no longer ready: let go
+                    elif self.startable(conn, job_id, waived):
                         runs.prepare(conn, config, job_id, feedback, kind)
+                    else:  # skipped, closed or no longer ready since the press: let go, and the box says so
+                        self.notice = LET_GO
             except runs.Halted as halt:  # a key, the model's name, Ollama or the keychain: the same for every job
                 self._stop(HALTED.format(halt))
             except collect.CollectError as error:
