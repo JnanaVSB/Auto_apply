@@ -28,6 +28,7 @@ from app.web import (
     council_settings,
     council_view,
     drafts,
+    pilot,
     prepare,
     queries,
     security,
@@ -331,6 +332,7 @@ def create_app(
     writer_settings.add_routes(app, _page)
     council_settings.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
+    pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
     return app
 

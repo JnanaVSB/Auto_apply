@@ -25,12 +25,12 @@ from app.resume import ResumeError, read_resume
 MOST_ROUNDS = 6  # the round limit is at most 5; one more when your words came after the last Writer
 WAITING = ("sent", "waiting")
 START = """INSERT INTO preparations (job_id, kind, version, based_on, feedback, sources, writer, council, waived, mode,
-    automatic, status, created_on) VALUES (?, ?, (SELECT coalesce(max(version), 0) + 1 FROM preparations
-    WHERE job_id = ? AND kind = ?), ?, ?, ?, ?, ?, ?, ?, ?, 'writing', ?)"""
+    automatic, pilot_id, lineup, status, created_on) VALUES (?, ?, (SELECT coalesce(max(version), 0) + 1 FROM
+    preparations WHERE job_id = ? AND kind = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'writing', ?)"""
 VERSION = """SELECT p.id, p.job_id, p.kind, p.version, p.based_on, p.feedback, p.asked, p.sources, p.writer, p.council,
-    p.waived, p.round, p.status, p.draft, j.status, j.not_interested,
-    b.draft, b.version FROM preparations p JOIN jobs j ON j.id = p.job_id LEFT JOIN preparations b ON b.id = p.based_on
-    WHERE p.id = ?"""
+    p.waived, p.round, p.status, p.draft, j.status, j.not_interested, b.draft, b.version, t.rounds, t.turns, t.planted,
+    p.planted FROM preparations p JOIN jobs j ON j.id = p.job_id LEFT JOIN preparations b ON b.id = p.based_on
+    LEFT JOIN pilots t ON t.id = p.pilot_id WHERE p.id = ?"""
 STEPS = "SELECT round, member, turn, status, answer, sent_on FROM steps WHERE preparation_id = ?"
 ROUND = "UPDATE preparations SET round = ? WHERE id = ?"
 DRAFT = "UPDATE preparations SET draft = ?, flags = ? WHERE id = ?"
@@ -64,10 +64,12 @@ class Call(NamedTuple):
 def start(
     conn: sqlcipher3.Connection, config: Config, job_id: int, kind: str = runs.KIND, feedback: str = "",
     waived: frozenset[str] = frozenset(), mode: str = "half", automatic: bool = False, writer_only: bool = False,
+    pilot: tuple[int, str, dict] | None = None,
 ) -> int:  # fmt: skip
     """A new version of the job's resume (or cover letter), waiting for its first step, with the Writer's and the
     reviewers' settings as they are now (a later change in Settings applies to new versions only). A change (your
-    words) builds on the newest finished version. `writer_only`: "Resume only", no council."""
+    words) builds on the newest finished version. `writer_only`: "Resume only", no council. `pilot`: a pilot's
+    version (its id, the line-up's name, and the line-up's models by member), kept apart from yours."""
     added = [] if writer_only else [m for m in config.ai.extra if kind != runs.LETTER or m.letters]
     council = {
         "members": {member: getattr(config.ai, member).model_dump() for member in REVIEWERS
@@ -75,12 +77,16 @@ def start(
         | {member.id: member.role.model_dump() for member in added},
         "names": {member.id: member.name for member in added},
     }  # fmt: skip
+    writer = config.ai.writer.model_dump_json()
+    if pilot:
+        kind, roles = "pilot", pilot[2]
+        writer, council = json.dumps(roles["writer"]), {"members": {m: roles[m] for m in REVIEWERS}, "names": {}}
     base = runs.last_done(conn, job_id, kind) if feedback else None
     with conn:
         return conn.execute(START, (
             job_id, kind, job_id, kind, base and base["id"], feedback or None, json.dumps(runs.current(conn, job_id)),
-            config.ai.writer.model_dump_json(), json.dumps(council), json.dumps(sorted(waived)), mode, int(automatic),
-            _now(),
+            writer, json.dumps(council), json.dumps(sorted(waived)), mode, int(automatic), pilot and pilot[0],
+            pilot and pilot[1], _now(),
         )).lastrowid  # fmt: skip
 
 
@@ -132,6 +138,8 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
             end(conn, preparation, "by_hand", NO_WRITER.format(number))
         return []
     found = json.loads(written[1])
+    if number == 1 and version["claims"] and not version["planted"] and not waiting:
+        found = _plant(conn, version, found)
     _keep(conn, config, version, found)
     if not seen.members:  # "Resume only": no council
         if not waiting:
@@ -139,7 +147,8 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
             _build(conn, config, preparation)
         return []
     answers, before = None, None
-    for turn in range(config.council.turns + 1):
+    rounds, turns = version["pilot_rounds"] or config.council.rounds, version["pilot_turns"]
+    for turn in range((config.council.turns if turns is None else turns) + 1):
         if turn and not _discuss(answers, before, turn):
             break
         rows = {member: steps.get((number, member, turn)) for member in seen.members}
@@ -156,7 +165,7 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
         end(conn, preparation, "done", None, agreed=True)
         _build(conn, config, preparation)
         return []
-    if number < config.council.rounds or (late and number < MOST_ROUNDS):
+    if number < rounds or (late and number < MOST_ROUNDS):
         with conn:
             conn.execute(ROUND, (number + 1, preparation))
         return advance(conn, config, preparation)
@@ -297,11 +306,35 @@ def _keep(conn: sqlcipher3.Connection, config: Config, version: dict, found: dic
     with conn:
         conn.execute(DRAFT, (draft, json.dumps(found["flags"]), version["id"]))
     version["draft"] = draft
-    if version["kind"] != runs.LETTER:
+    if version["kind"] != runs.LETTER:  # a letter has no page limit
         _build(conn, config, version["id"])
 
 
+def _plant(conn: sqlcipher3.Connection, version: dict, found: dict) -> dict:
+    """A pilot's made-up claim, slipped into the first bullet of the first job or project in the Writer's first
+    draft before the reviewers read it (owner choice 17 b): the Truth checker should catch it. Recorded with the
+    version; never in a PDF."""
+    claim = json.loads(version["claims"]).get(str(version["job_id"]))
+    written = [item for item in found["draft"]["entries"] if item["bullets"]]
+    item = next(
+        (item for item in written if item["tile_id"].startswith(("exp", "proj"))), written[0] if written else None
+    )
+    if claim is None or item is None:
+        return found
+    bullet = item["bullets"][0]
+    bullet["text"] = f"{bullet['text'].rstrip('.')}, {claim}."
+    planted = {"source": item["source"], "tile_id": item["tile_id"], "bullet": 0, "claim": claim}
+    with conn:
+        conn.execute("UPDATE steps SET answer = ? WHERE preparation_id = ? AND round = 1 AND member = 'writer'",
+                     (json.dumps(found, ensure_ascii=False), version["id"]))  # fmt: skip
+        conn.execute("UPDATE preparations SET planted = ? WHERE id = ?", (json.dumps(planted), version["id"]))
+    version["planted"] = json.dumps(planted)
+    return found
+
+
 def _build(conn: sqlcipher3.Connection, config: Config, preparation: int) -> None:
+    if conn.execute("SELECT kind FROM preparations WHERE id = ?", (preparation,)).fetchone()[0] == "pilot":
+        return  # never a PDF of a pilot's version: it may hold a made-up claim
     try:
         target, source, note = runs.pdf_source(conn, config, preparation)
         pdf.build_kept(config.data_dir, target, source)
@@ -355,7 +388,8 @@ def _stopped(conn: sqlcipher3.Connection, config: Config, version: dict) -> str 
 
 def _version(conn: sqlcipher3.Connection, preparation: int) -> dict:
     names = ("id", "job_id", "kind", "version", "based_on", "feedback", "asked", "sources", "writer", "council",
-             "waived", "round", "status", "draft", "job_status", "not_interested", "base", "base_version")  # fmt: skip
+             "waived", "round", "status", "draft", "job_status", "not_interested", "base", "base_version",
+             "pilot_rounds", "pilot_turns", "claims", "planted")  # fmt: skip
     return dict(zip(names, conn.execute(VERSION, (preparation,)).fetchone(), strict=True))
 
 

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Pilot: {{ job.title }}{% endblock %}
+{% block content %}
+<h1>{{ job.title }} <span class="muted">at {{ job.company }}</span></h1>
+<p><a href="/pilot">Back to the pilot</a> · <a href="/jobs/{{ job.id }}">The job</a></p>
+<table class="changes">
+  <thead><tr>{% for lineup, name in names.items() %}<th>{{ name }}</th>{% endfor %}</tr></thead>
+  <tbody><tr>
+  {% for lineup in names %}{% set result = found[lineup] %}
+  <td>{% if not result %}<span class="muted">not run</span>
+    {% elif not result.draft %}<span class="muted">{{ result.status }}</span>
+    {% else %}<p class="muted">{{ {1: "council agreed", 0: "no agreement"}.get(result.agreed, result.status) }}, {{ result.rounds }} round{{ "s" if result.rounds != 1 }}</p>
+      {% for item in result.draft.entries %}<p><strong>{{ labels.get((item.source, item.tile_id), item.tile_id) }}</strong></p>
+        <ul>{% for bullet in item.bullets %}<li>{% if result.planted and result.planted.tile_id == item.tile_id and result.planted.claim in bullet.text %}<mark>{{ bullet.text }}</mark>{% else %}{{ bullet.text }}{% endif %}</li>{% endfor %}
+        {% if item.skills %}<li>{{ item.skills | join(", ") }}</li>{% endif %}</ul>{% endfor %}
+      {% if result.planted %}<p class="error">Made-up claim (never in a PDF): {{ result.planted.claim }}</p>
+      {% elif result.status == "done" %}<form method="post" action="/pilot/use/{{ result.id }}"><input type="hidden" name="csrf_token" value="{{ csrf }}">
+        <button type="submit">Use this one for the job</button></form>{% endif %}
+    {% endif %}</td>{% endfor %}
+  </tr></tbody>
+</table>
+<h2>Objections</h2>
+{% for lineup, name in names.items() %}{% set result = found[lineup] %}{% if result and result.objections %}
+<h3>{{ name }}</h3>
+<ul>{% for item in result.objections %}<li>Round {{ item.round }}, {{ item.member }}{% if item.turn %} (discussion){% endif %}: {{ item.id }} ({{ item.severity }}{% if item.where %}, {{ item.where }}{% endif %}) {{ item.problem }}
+  {% for useful, label in ((1, "Useful"), (0, "Not useful")) %}<form method="post" action="/pilot/marks" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="step" value="{{ item.step }}">
+    <input type="hidden" name="objection" value="{{ item.id }}"><input type="hidden" name="useful" value="{{ useful }}">
+    <input type="hidden" name="back" value="/pilot/{{ number }}/jobs/{{ job.id }}">
+    <button type="submit"{% if item.marked == useful %} class="primary"{% endif %}>{{ label }}</button></form>{% endfor %}</li>{% endfor %}</ul>
+{% endif %}{% endfor %}
+{% endblock %}

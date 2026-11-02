@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Pilot{% endblock %}
+{% block content %}
+<h1>Pilot</h1>
+{% if not pilot %}
+<p>Choose the jobs every line-up will prepare (the 20 newest ready jobs from 20 companies are ticked). Five of them get a
+  made-up claim in the Writer's first draft, to count how many each line-up's Truth checker catches; pilot versions
+  never become a PDF.</p>
+<form method="post" action="/pilot" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  {% for job in jobs %}<label><input type="checkbox" name="job_{{ job.id }}"{% if job.id in chosen %} checked{% endif %}>
+    {{ job.title }} <span class="muted">at {{ job.company }}</span></label>{% endfor %}
+  <button type="submit" class="primary">Start the pilot</button>
+</form>
+{% else %}
+<p class="muted">Started {{ pilot.created_on[:10] }}: {{ jobs | length }} jobs, round limit {{ pilot.rounds }},
+  {{ pilot.turns }} discussion turn{{ "s" if pilot.turns != 1 }} per round, {{ planted | length }} made-up claims.</p>
+<table>
+  <thead><tr><th></th>{% for key, name in names.items() %}<th>{{ name }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% set rows = [
+    ("Jobs finished", "finished"), ("Council agreed", "agreed"), ("No agreement", "no_agreement"),
+    ("Check by hand or stopped", "by_hand"), ("Rounds per job", "rounds"), ("Minutes per job", "minutes"),
+    ("Tokens per job", "tokens"), ("Dollars per job", "cost"), ("Made-up claims caught (round 1)", "caught"),
+    ("Made-up claims still in the final wording", "kept"), ("Objections you marked useful", "useful"),
+    ("Objections you marked not useful", "not_useful"), ("Writer's missed replies", "missed"),
+    ("of which must", "missed_must"), ("Renumbered objections", "renumbered")] %}
+  {% for label, key in rows %}<tr><td>{{ label }}</td>{% for lineup in names %}{% set found = summaries[lineup] %}
+    <td>{% if not found.jobs %}-{% elif key in ("rounds", "minutes") %}{{ "%.1f" | format(found[key]) }}{% elif key == "cost" %}${{ "%.3f" | format(found[key]) }}{% elif key == "caught" %}{{ found.caught }} of {{ found.planted }}{% else %}{{ found[key] }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
+  <tr><td></td>{% for lineup in names %}<td>{% if not summaries[lineup].jobs %}
+    <form method="post" action="/pilot/{{ pilot.id }}/run/{{ lineup }}"><input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit">Run {{ names[lineup] }}</button></form>{% else %}{{ summaries[lineup].jobs }} jobs{% endif %}</td>{% endfor %}</tr>
+  </tbody>
+</table>
+<p class="hint">Recommended and High use paid services (your keys, at half price, within your limits); Laptop is free
+  and slow. Each line-up runs through the council like your own presses.</p>
+<h2>Jobs</h2>
+<ul>{% for job in jobs %}<li><a href="/pilot/{{ pilot.id }}/jobs/{{ job.id }}">{{ job.title }}</a> <span class="muted">at {{ job.company }}</span>{% if planted[job.id | string] %} <span class="mark">made-up claim</span>{% endif %}</li>{% endfor %}</ul>
+{% endif %}
+{% endblock %}
