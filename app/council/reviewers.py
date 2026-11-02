@@ -45,8 +45,9 @@ object to it unless it breaks a rule."""
 FIRST = 'This is your own review: every "id" is "" and "votes" is [].'
 DISCUSSION = """This is a discussion turn. Between <discussion> and </discussion> are your objections and the other
 members' from the last turn. Vote on each of the others' objections: {"objection": "HM-1", "agree": true or false,
-"why": "..."}. Then list your objections again: keep one with its "id" (its text or severity may change), leave one out
-to drop it, or add a new one with "id": "". Your verdict follows your own "must" objections."""
+"why": "..."}. Agreeing is how you support another member's point: never copy it into your own list. Then list only
+your own objections again, from your own role: keep one with its "id" (its text or severity may change), leave one out
+to drop it, or add a new point of your own with "id": "". Your verdict follows your own "must" objections."""
 SHAPE = {
     "type": "object",
     "properties": {
