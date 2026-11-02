@@ -176,7 +176,7 @@ def test_a_skipped_closed_or_not_ready_job_asks_first_and_can_proceed_anyway(cli
     assert ">Prepare</button>" in text and ">Write cover letter<" in text
     text = client.get(f"/jobs/{jobs['Gone']}/preparation").text
     assert """hx-vals='{"anyway": "closed"}'""" in text and "No longer open." in text
-    assert "hx-confirm" not in client.get(f"/jobs/{jobs['Fresh']}/preparation").text  # nothing to ask
+    assert "Press OK to proceed anyway" not in client.get(f"/jobs/{jobs['Fresh']}/preparation").text  # nothing to ask
     for name, doubt in (("Skipped", "skipped"), ("Gone", "closed"), ("Low", "not-ready")):
         text = press(client, jobs[name], back="job", anyway="closed" if doubt != "closed" else "").text
         assert "To proceed anyway, press the button" in text and jobs[name] not in client.started  # not asked
@@ -277,7 +277,7 @@ def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(clien
             "(?, 'resume', 9, '[]', '{}', 'writing', 'now')", (ready_job,),
         )  # fmt: skip
     text = client.get(f"/jobs/{ready_job}/preparation").text
-    assert "The Writer is working on it" in text and 'hx-trigger="every 3s"' in text
+    assert "Writer writing (version 9)" in text and 'hx-trigger="every 3s"' in text
     with conn:
         conn.execute("DELETE FROM preparations")
         conn.execute(
@@ -286,7 +286,7 @@ def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(clien
             (ready_job, '[{"source": "profile", "set": 1}]'),
         )
     text = client.get(f"/jobs/{ready_job}/preparation").text
-    assert "Done: version 1, written 2026-10-30." in text and "every 3s" not in text
+    assert "Done: version 1, written 2026-10-30 · Writer only (no council)." in text and "every 3s" not in text
     state.notice = preparer.BUSY
     with conn:
         conn.execute("UPDATE preparations SET status = 'stopped', problem = 'Paused: today&#39;s limit.'")

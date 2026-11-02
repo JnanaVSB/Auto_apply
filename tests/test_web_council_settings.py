@@ -30,24 +30,29 @@ def client(client, settings_file, monkeypatch):
     return client
 
 
+def council_page(client):
+    """The page below its top bar (which shows the line-up and its costs too)."""
+    return client.get("/settings/council").text.split("<h1>", 1)[1]
+
+
 def post(client, path, /, **fields):
     return client.post(path, data=fields | {"csrf_token": csrf(client)})
 
 
 def test_a_preset_fills_in_all_six_and_a_change_makes_it_custom(client, settings_file):
-    assert "Line-up: None chosen" in client.get("/settings/council").text
+    assert "Line-up: None chosen" in council_page(client)
     post(client, "/settings/council/preset", preset="laptop")
     found = load_config(settings_file).ai
     assert (found.writer.model, found.truth.model, found.ats.model, found.tier) == (
         "gemma4:26b-a4b-it-q8_0", "qwen3.6:35b-a3b", "gemma4:26b-a4b-it-q8_0", "laptop",
     )  # fmt: skip
     assert found.truth.context == 32768 and found.council_chosen and client.resumed == [True]
-    text = client.get("/settings/council").text
+    text = council_page(client)
     assert "Line-up: Laptop" in text and text.count(">free<") == 6
     post(client, "/settings/writer", member="truth", kind="local", model="gemma4:26b-a4b-it-q8_0", thinking="off",
          context="32768")  # fmt: skip
     assert load_config(settings_file).ai.truth.model == "gemma4:26b-a4b-it-q8_0"
-    text = client.get("/settings/council").text
+    text = council_page(client)
     assert "Line-up: Custom (based on Laptop)" in text
     assert "The Truth checker uses the same laptop model (gemma4:26b-a4b-it-q8_0) as the Writer" in text
 
@@ -58,7 +63,7 @@ def test_paid_presets_estimate_each_member_and_name_missing_keys(client, setting
     assert (ai.writer.model, ai.writer.thinking, ai.hiring.model, ai.domain.model) == (
         "claude-opus-5-5", "high", "claude-sonnet-5-5", "claude-sonnet-5-5",
     )  # fmt: skip
-    text = client.get("/settings/council").text
+    text = council_page(client)
     assert "Line-up: Recommended" in text and text.count("up to $") == 6 and "A whole job at most: $" in text
     assert "No key is saved under &#39;anthropic&#39;" in text and "No key is saved under &#39;openai&#39;" in text
     assert "same company" not in text  # Opus writes, Sol checks the truth
@@ -66,7 +71,7 @@ def test_paid_presets_estimate_each_member_and_name_missing_keys(client, setting
     assert load_config(settings_file).ai.writer.thinking == "xhigh"
     assert client.get("/settings/writer?member=writer").text.count("<option selected>xhigh</option>") == 1
     fake_keychain.store[(SERVICE, "anthropic")] = "fake-key"
-    assert "under &#39;anthropic&#39;" not in client.get("/settings/council").text
+    assert "under &#39;anthropic&#39;" not in council_page(client)
 
 
 def test_the_council_form_saves_its_settings_with_the_usual_checks(client, settings_file):
@@ -110,7 +115,7 @@ def test_a_member_you_add_keeps_its_instructions_in_your_data_folder_only(client
     path = data_dir / "skills" / "x1.md"
     assert path.read_text(encoding="utf-8") == "Read it as a recruiter.\n" and path.stat().st_mode & 0o777 == 0o600
     assert (data_dir / "skills").stat().st_mode & 0o777 == 0o700
-    text = client.get("/settings/council").text
+    text = council_page(client)
     assert "Recruiter <span" in text and "Read it as a recruiter." in text and "/settings/writer?member=x1" in text
     post(
         client, "/settings/writer", member="x1", kind="local", model="qwen3.6:35b-a3b", thinking="off", context="32768"

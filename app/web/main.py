@@ -22,7 +22,17 @@ from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.boards import BOARDS
-from app.web import actions, answer_key, council_settings, drafts, prepare, queries, security, writer_settings
+from app.web import (
+    actions,
+    answer_key,
+    council_settings,
+    council_view,
+    drafts,
+    prepare,
+    queries,
+    security,
+    writer_settings,
+)
 from app.web.collector import Collector
 from app.web.preparer import Preparer
 from app.web.scorer import Scorer
@@ -320,6 +330,7 @@ def create_app(
     prepare.add_routes(app, _page, data_dir, lambda: _scoring())  # looked up at each call, as the routes above do
     writer_settings.add_routes(app, _page)
     council_settings.add_routes(app, _page)
+    council_view.add_routes(app, _page, lambda: _scoring())
     drafts.add_routes(app, _page, data_dir)
     return app
 
@@ -472,6 +483,7 @@ def _to_login(request: Request) -> Response:
 def _page(request: Request, name: str, status: int = 200, **values) -> HTMLResponse:
     session = getattr(request.state, "session", None)
     values["csrf"] = session.csrf if session else None
+    values["topbar"] = council_view.topbar(request.app.state.conn) if session else None
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 

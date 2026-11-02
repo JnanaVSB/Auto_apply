@@ -22,7 +22,8 @@ KIND, LETTER = "resume", "cover_letter"  # each kind has its own versions
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
 FAILED = ("stopped", "by_hand")  # a version that failed: Retry writes a new one
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
-NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, writer, created_on FROM preparations
+NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, writer, created_on, council, round,
+    agreed, wording, mode FROM preparations
     WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
 LATEST, LAST_DONE, NUMBERED = NEWEST.format(""), NEWEST.format("AND status = 'done'"), NEWEST.format("AND version = ?")
 # NULL + a cost stays NULL: a step whose price isn't known stays "not counted"

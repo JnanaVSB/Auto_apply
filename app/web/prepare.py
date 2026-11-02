@@ -181,8 +181,8 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        waived, alone = _waived(request), request.state.form.get("writer_only") == "1"  # "Resume only"
-        if not (problem := _cannot(conn, current, job, waived, alone)):
+        waived, alone = waived_of(request), request.state.form.get("writer_only") == "1"  # "Resume only"
+        if not (problem := cannot(conn, current, job, waived, alone)):
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
             latest = runs.latest(conn, job_id)
             if runs.writable(latest, runs.current(conn, job_id)):  # Retry a change: the same words
@@ -213,12 +213,12 @@ def add_routes(
         added to it for the Writer's next round (owner choice D). Answers with the job's box."""
         conn, preparer = request.app.state.conn, request.app.state.preparer
         words = " ".join(CONTROL.sub("", request.state.form.get("feedback", "")).split())
-        job, waived = queries.job(conn, queries.known(job_id)), _waived(request)
+        job, waived = queries.job(conn, queries.known(job_id)), waived_of(request)
         if job is None:
             raise HTTPException(404)
         base, latest = runs.last_done(conn, job_id), runs.latest(conn, job_id)
-        if cannot := _cannot(conn, scoring(), job, waived):
-            problem = PROBLEMS[cannot]
+        if refused := cannot(conn, scoring(), job, waived):
+            problem = PROBLEMS[refused]
         elif not words or len(words) > MAX_FEEDBACK:
             problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
         elif latest is not None and latest["status"] == "writing":
@@ -241,9 +241,9 @@ def add_routes(
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
-        waived = _waived(request)
-        if cannot := _cannot(conn, scoring(), job, waived):
-            problem = PROBLEMS[cannot]
+        waived = waived_of(request)
+        if refused := cannot(conn, scoring(), job, waived):
+            problem = PROBLEMS[refused]
         elif _busy(conn, job_id):
             problem = BUSY_JOB
         else:
@@ -273,7 +273,7 @@ def add_routes(
             one_page=_one_page(), change_problem=change_problem, typed=typed, letter_problem=letter_problem,
             letter=drafts.letter(conn, data_dir, job_id), prepare_problem=prepare_problem,
             can_letter=free and not missing and writer, missing=missing, doubts=doubts,
-            confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY,
+            confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY, **drafts.council(conn, job_id),
         )  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/sources")
@@ -295,7 +295,7 @@ PROBLEMS = {"tiles": TILES_FIRST, "writer": NO_WRITER, "council": NO_COUNCIL} | 
 }  # a doubt refused: the press came from a page that didn't ask (the Ready page, or one shown before it changed)
 
 
-def _cannot(
+def cannot(
     conn: sqlcipher3.Connection, current: queries.Scoring, job: dict, waived: Collection[str] = (), alone: bool = False
 ) -> str | None:
     """Why the Writer can't work on this job (a PROBLEMS key), or None: Prepare, Request changes and Write cover letter
@@ -326,7 +326,7 @@ def _doubts(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) ->
     return [doubt for doubt, holds in found.items() if holds]
 
 
-def _waived(request: Request) -> frozenset[str]:
+def waived_of(request: Request) -> frozenset[str]:
     """The doubts the pop-up asked you about before this press (none from a page that didn't ask)."""
     return frozenset(request.state.form.get("anyway", "").split())
 

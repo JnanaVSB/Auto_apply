@@ -3,6 +3,7 @@ building that PDF again, the "changes vs your master" page, the Usage page and t
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import sqlcipher3
@@ -12,12 +13,17 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import questionnaire
-from app.config import ConfigError, SpendingSettings, load_config
-from app.council import runs, spending, writer
+from app.config import REVIEWERS, AIRole, Config, ConfigError, SpendingSettings, load_config
+from app.council import estimate, flow, reviewers, runs, spending, writer
 from app.documents import pdf, privacy
 from app.resume import ResumeError
 from app.web import queries
 
+STEPS = "SELECT round, member, turn, status, answer, mode, retry_after FROM steps WHERE preparation_id = ?"
+
+SPENT = "SELECT coalesce(sum(coalesce(cost, 0) + reserved), 0) FROM steps WHERE preparation_id = ?"
+
+DOUBT = {flow.CLOSED: "closed", flow.SKIPPED: "skipped"}  # a version stopped for this can continue anyway
 SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each the Usage page lists; None: all
 
 
@@ -34,6 +40,7 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
         "place": 0 if runs.writing(conn, job_id) else None, "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
+        "council_status": status(conn, latest, _rounds()),
     }  # fmt: skip
 
 
@@ -91,7 +98,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         return page(
             request, "changes.html", job=queries.job(conn, job_id), version=version,
             rows=_rows(entries, draft, json.loads(version["flags"]), restore),
-            notes=draft["notes"], model=json.loads(version["writer"])["model"],
+            notes=draft["notes"], model=json.loads(version["writer"])["model"], wording=version["wording"],
             built=pdf.built(pdf.tailored(data_dir, job_id, version["version"])),
         )  # fmt: skip
 
@@ -124,6 +131,13 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         )  # fmt: skip
 
 
+def _rounds() -> int:
+    try:
+        return load_config().council.rounds
+    except ConfigError:  # shown on the Settings page; the default meanwhile
+        return 3
+
+
 def _pdf(path: Path) -> Response:
     if not path.is_file():
         raise HTTPException(404)
@@ -145,6 +159,7 @@ def _rows(entries: list[writer.Entry], draft: dict, flags: list[dict], restore: 
         ]
         rows.append({
             "tile": tile, "chosen": item is not None, "bullets": bullets, "as_written": writer.kept_as_written(tile),
+            "objected": list(key) in draft.get("objected", []),
             "skills": [restore(skill) for skill in item["skills"]] if item else [],
         })  # fmt: skip
     return rows
@@ -158,3 +173,87 @@ def _parts(text: str, numbers: set[str]) -> list[tuple[str, bool]]:
             parts += [(text[last : match.start()], False), (match[0], True)]
             last = match.end()
     return [part for part in [*parts, (text[last:], False)] if part[0]]
+
+
+def status(conn: sqlcipher3.Connection, version: dict | None, rounds: int) -> str | None:
+    """The line the Ready page and the box show for a version being written or done (None: as before)."""
+    if version is None or version["status"] not in ("writing", "done"):
+        return None
+    members = json.loads(version["council"] or '{"members": {}}')["members"]
+    if version["status"] == "done":
+        return {1: "council agreed", 0: "no agreement: see the job"}.get(version["agreed"], "Writer only (no council)")
+    if (version["problem"] or "").startswith(("Paused", "Waiting")):
+        return version["problem"].split(" (")[0]
+    held = [(row[5], row[6]) for row in conn.execute(STEPS, (version["id"],)) if row[3] in ("sent", "waiting")]
+    if any(mode == "batch" for mode, _ in held):
+        return "waiting for Anthropic"
+    if after := max((after for _, after in held if after), default=None):
+        return f"waiting: busy, again at {datetime.fromisoformat(after).astimezone():%H:%M}"
+    return f"council round {version['round']} of {rounds}" if members else "Writer writing"
+
+
+def notes(conn: sqlcipher3.Connection, version: dict | None) -> dict | None:
+    """A version's council notes from its last round: each member's verdict and objections with the votes on them
+    (the Truth checker first), the Writer's replies, what it left unanswered and what the app renumbered."""
+    council = json.loads((version or {}).get("council") or '{"members": {}, "names": {}}')
+    if not council["members"]:
+        return None
+    rows = conn.execute(STEPS, (version["id"],)).fetchall()
+    last = max((row[0] for row in rows), default=1)
+    names = {member: reviewers.name(member, council["names"]) for member in council["members"]}
+    members = []
+    for member in sorted(council["members"], key=lambda name: name != "truth"):
+        found = max((row for row in rows if row[0] == last and row[1] == member), key=lambda row: row[2], default=None)
+        answer = json.loads(found[4]) if found and found[3] == "done" else None
+        state = "waiting" if found is None or found[3] in ("sent", "waiting") else found[3]
+        members.append({"name": names[member], "truth": member == "truth", "answer": answer, "state": state})
+    votes: dict[str, list] = {}
+    for found in members:
+        for vote in (found["answer"] or {}).get("votes", []):
+            votes.setdefault(vote["objection"], []).append((found["name"], vote["agree"], vote["why"]))
+    writer = next((json.loads(row[4]) for row in rows if row[0] == last and row[1] == "writer" and row[3] == "done"
+                   and row[4]),
+                  {})  # fmt: skip
+    draft = writer.get("draft", {})
+    renumbered = [(found["name"], found["answer"]["renumbered"]) for found in members
+                  if (found["answer"] or {}).get("renumbered")]  # fmt: skip
+    return {"round": last, "members": members, "votes": votes, "replies": draft.get("responses", []),
+            "missed": draft.get("missed", []), "renumbered": renumbered}  # fmt: skip
+
+
+def council(conn: sqlcipher3.Connection, job_id: int) -> dict:
+    """The job box's council part: notes, the status line, the wording switch, and Now, normal price's estimate."""
+    try:
+        config = load_config()
+    except ConfigError:
+        return {}
+    latest, letter = runs.latest(conn, job_id), runs.latest(conn, job_id, runs.LETTER)
+    objected = []
+    if latest and latest["status"] == "done" and latest["agreed"] == 0:
+        entries = runs.originals(conn, latest["sources"])
+        labels = {(entry.source, entry.tile.tile_id): entry.tile.facts.get("name") or entry.label for entry in entries}
+        objected = [labels.get(tuple(key), "an entry") for key in json.loads(latest["draft"]).get("objected", [])]
+    return {
+        "council_notes": notes(conn, latest),
+        "letter_notes": notes(conn, letter), "objected": objected, "normal_cost": _normal(conn, config, latest),
+        "doubt": DOUBT.get(latest and latest["problem"]),
+    }  # fmt: skip
+
+
+def _normal(conn: sqlcipher3.Connection, config: Config, latest: dict | None) -> float | None:
+    """What the rest of the job would cost at the normal price: the version being written less what it has spent, or
+    a whole new version with today's members."""
+    try:
+        if latest and latest["status"] == "writing":
+            writer = AIRole(**json.loads(latest["writer"]))
+            council = json.loads(latest["council"] or '{"members": {}}')
+            members = {name: AIRole(**role) for name, role in council["members"].items()}
+            spent = conn.execute(SPENT, (latest["id"],)).fetchone()[0]
+        else:
+            writer, members, spent = config.ai.writer, {m: getattr(config.ai, m) for m in REVIEWERS}, 0
+        if writer is None or None in members.values():
+            return None
+        full = estimate.version(conn, writer, members, config.council.rounds, config.council.turns, half=False)
+    except (TypeError, ValueError):
+        return None
+    return None if full is None else max(full - spent, 0)

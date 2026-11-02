@@ -1,12 +1,29 @@
 {% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
 {% set ask %}{% if doubts %} hx-confirm="{{ confirm }}" hx-vals='{{ {"anyway": doubts | join(" ")} | tojson }}'{% endif %}{% endset %}{# the browser's pop-up: only its OK sends "proceed anyway" (a press without the page's script is refused) #}
+{% macro button(action, label, confirm="", fields={}) %}<form method="post" action="/jobs/{{ job_id }}/{{ action }}" hx-post="/jobs/{{ job_id }}/{{ action }}" hx-target="#preparation" hx-select="#preparation" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %} class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <button type="submit">{{ label }}</button></form>{% endmacro %}
+{% macro notes_of(found) %}{% if found %}
+  <details class="council"><summary>Council notes (round {{ found.round }})</summary>
+  {% for member in found.members %}
+  <div class="{{ 'mark' if member.truth }}"><strong>{{ member.name }}</strong>:
+    {% if member.answer %}{{ member.answer.verdict }}{% if member.answer.summary %} · {{ member.answer.summary }}{% endif %}
+    <ul>{% for item in member.answer.objections %}<li{% if member.truth and item.severity == "must" %} class="error"{% endif %}>{{ item.id }} ({{ item.severity }}{% if item.where %}, {{ item.where }}{% endif %}): {{ item.problem }} <em>Fix:</em> {{ item.fix }}{% if item.quote %} <em>Your original:</em> “{{ item.quote }}”{% endif %}
+      {% for voter, agree, why in found.votes.get(item.id, []) %}<br><span class="muted">{{ voter }} {{ "agrees" if agree else "disagrees" }}: {{ why }}</span>{% endfor %}</li>{% endfor %}</ul>
+    {% elif member.state == "waiting" %}<span class="muted">working…</span>{% else %}<span class="error">no valid answer</span>{% endif %}</div>
+  {% endfor %}
+  {% if found.replies %}<p><strong>The Writer's replies:</strong> {% for reply in found.replies %}{{ reply.objection }} {{ reply.action }} ({{ reply.why }}){{ "; " if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if found.missed %}<p class="error">No reply from the Writer: {% for item in found.missed %}{{ item.objection }} ({{ item.severity }}){{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
+  {% for name, slips in found.renumbered %}<p class="muted">{{ name }} wrote numbers not its own; the app renumbered: {% for slip in slips %}{{ slip.wrote }} → {{ slip.now }}{{ ", " if not loop.last }}{% endfor %}</p>{% endfor %}
+  </details>{% endif %}{% endmacro %}
 {% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
   {% if place == 0 or (place is none and working) %}
-  <p role="status">The Writer is working on it (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
+  <p role="status">{{ council_status or "The Writer is working on it" }} (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
+  {% if latest and latest.status == "writing" and latest.mode == "half" and normal_cost is not none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Send the rest of this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
   {% elif latest and latest.status == "done" and not outdated %}
-  <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}.
+  <p class="result">Done: version {{ latest.version }}, written {{ latest.created_on[:10] }}{% if council_status %} · {{ council_status }}{% endif %}.
     {% if built %}<a href="/documents/{{ job_id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ built.pages }} page{{ "s" if built.pages != 1 }}) ·{% endif %}
     <a href="/jobs/{{ job_id }}/changes?version={{ latest.version }}">Changes vs your master</a></p>
   {% if built and one_page and built.pages > 1 %}<p class="error">Over one page ({{ built.pages }} pages): Request changes can ask for a shorter version.</p>{% endif %}
@@ -17,6 +34,11 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <button type="submit">Build the PDF again</button>
   </form>
+  {% endif %}
+  {% if objected %}
+  <p class="{{ 'muted' if latest.wording == 'original' else 'error' }}">No agreement. The Truth checker still objects to: {{ objected | join(", ") }}.
+    The PDF uses {{ "your original wording" if latest.wording == "original" else "the Writer's wording" }} there.</p>
+  {{ button("wording", "Keep the Writer's wording" if latest.wording == "original" else "Use my original wording", fields={"wording": "writer" if latest.wording == "original" else "original"}) }}
   {% endif %}
   {% elif missing %}
   <p class="error">Prepare needs confirmed entries: <a href="/resume-profile">confirm these first: {{ missing | join(", ") }}</a>.</p>
@@ -36,11 +58,14 @@
     <button type="submit" name="writer_only" value="1" title="The Writer alone, without the council">Resume only</button>
   </form>
   {% endif %}
+  {% if doubt %}{{ button("continue", "Continue anyway", "Carry on with version %s from where it stopped?" | format(latest.version)) }}{% endif %}
+  {% if writable and normal_cost is not none and place is none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Prepare this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
+  {{ notes_of(council_notes) }}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}
-  {% if changeable and place is none and not (latest and latest.status == "writing") %}
+  {% if changeable or (latest and latest.status == "writing") %}
   <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <label>Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept)
+    <label>{% if latest and latest.status == "writing" %}Your words for the Writer's next round on version {{ latest.version }}{% else %}Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept){% endif %}
       <textarea name="feedback" rows="3" maxlength="2000" placeholder="For example: shorter, it is two pages; lead with the drone project">{{ typed }}</textarea></label>
     <button type="submit">Send to the Writer</button>
   </form>
@@ -74,6 +99,15 @@
   </form>
   {% endif %}
   {% elif found %}<p class="error" role="alert">Cover letter {{ found.version }}: {{ found.problem }}</p>
+  {% endif %}
+  {{ notes_of(letter_notes) }}
+  {% if found and (found.status == "writing" or found.status == "done") %}
+  <form method="post" action="/jobs/{{ job_id }}/letter-changes" hx-post="/jobs/{{ job_id }}/letter-changes" hx-target="#preparation" hx-select="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>{{ "Your words for the letter's next round" if found.status == "writing" else "Request changes to cover letter %s" | format(found.version) }}
+      <textarea name="feedback" rows="2" maxlength="2000" placeholder="For example: warmer, and mention the drone project"></textarea></label>
+    <button type="submit">Send to the Writer</button>
+  </form>
   {% endif %}
   {% if letter.versions and letter.versions[0].failed %}<p class="muted">Cover letter {{ letter.versions[0].version }}{{ tries(letter.versions[0]) }}</p>{% endif %}
   {% if letter_problem %}<p class="error" role="alert">{{ letter_problem }}</p>{% endif %}

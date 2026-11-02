@@ -19,7 +19,8 @@
       <br><span class="muted">{{ tile.section }}</span>
       {% if tile.kind == "skills" %}<p>{{ tile.facts.skills | join(", ") }}</p>
       {% elif tile.bullets %}<ol start="0">{% for bullet in tile.bullets %}<li>{{ bullet }}</li>{% endfor %}</ol>{% endif %}</td>
-    <td>{% if not row.chosen %}<span class="muted">left out</span>
+    <td>{% if row.objected %}<p class="{{ 'muted' if wording == 'original' else 'error' }}">{{ "In the PDF: your original wording (the Truth checker objected)" if wording == "original" else "In the PDF: the Writer's wording, though the Truth checker objected" }}</p>{% endif %}
+      {% if not row.chosen %}<span class="muted">left out</span>
       {% elif tile.kind == "skills" %}<p>{{ row.skills | join(", ") }}</p>
         {% set dropped = tile.facts.skills | reject("in", row.skills) | list %}
         {% if dropped %}<p class="muted">left out: {{ dropped | join(", ") }}</p>{% endif %}

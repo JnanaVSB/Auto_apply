@@ -120,7 +120,7 @@ def test_the_box_and_the_ready_page_check_a_version_without_loading_your_entries
     monkeypatch.setattr(queries, "job_scoring", lambda *found: scores.append(found) or score(*found))
     assert "Done: version 1" in client.get(f"/jobs/{job}/preparation").text
     assert len(scores) == 1  # the job's score, read once
-    assert "done: version 1" in client.get("/ready").text
+    assert "Writer only (no council): version 1" in client.get("/ready").text  # a version from before the council
     assert loads == []  # only each set's number was read
 
 
@@ -182,7 +182,10 @@ def test_the_box_shows_the_pdf_its_pages_and_every_version(client, conn, data_di
     version(conn, job, 2)
     fake_pdf(data_dir, job, 2, pages=2, missing=["☺"])
     text = client.get(f"/jobs/{job}/preparation").text
-    assert "Done: version 2, written 2026-10-30." in text and f'href="/documents/{job}/resume-v2.pdf"' in text
+    assert (
+        "Done: version 2, written 2026-10-30 · Writer only (no council)." in text
+        and f'href="/documents/{job}/resume-v2.pdf"' in text
+    )
     assert "(2 pages)" in text and "Over one page (2 pages)" in text and "Left out of the PDF" in text
     assert "<td>check by hand</td>" in text and "$0.50" in text and "$0.25" in text
     assert f'href="/jobs/{job}/changes?version=2">2</a>' in text and "Build the PDF again" not in text
@@ -196,7 +199,7 @@ def test_the_ready_page_shows_each_jobs_state_cost_and_buttons(client, conn, dat
     version(conn, job, 2, cost=0.25)
     fake_pdf(data_dir, job, 2, pages=2)
     text = client.get("/ready").text
-    assert "done: version 2" in text and f'href="/jobs/{job}/changes?version=2">Changes' in text
+    assert "Writer only (no council): version 2" in text and f'href="/jobs/{job}/changes?version=2">Changes' in text
     assert "2 pages</span>" in text and "$0.25" in text and ">Prepare</button>" not in text
     version(conn, job, 3, problem="PDF built, but a bullet still shows a link you have changed since: update it.")
     assert "PDF built, but a bullet still shows a link you have changed since: see the job" in client.get("/ready").text
@@ -383,3 +386,130 @@ def test_the_letters_pdf_can_be_built_again(client, conn, data_dir, job, monkeyp
     ((target, source),) = built
     assert target == pdf.tailored(data_dir, job, 1, "cover_letter") and "I trained arms to 95\\% success." in source
     assert "PDF could not be built" not in client.get(f"/jobs/{job}/preparation").text
+
+
+COUNCIL = json.dumps({"members": {m: {"model": "gemma4:26b-a4b-it-q8_0"} for m in ("hiring", "truth")},
+                      "names": {}})  # fmt: skip
+ANSWER = """INSERT INTO steps (preparation_id, round, member, turn, service, model, mode, status, answer, retry_after,
+    day, sent_on) VALUES (?, ?, ?, ?, 'ollama', 'm', ?, ?, ?, ?, 'd', 'now')"""
+
+
+def council_version(conn, job, status="done", agreed=None, round_=1, problem=None, draft=DRAFT):
+    with conn:
+        found = version(conn, job, status=status, problem=problem)
+        conn.execute("DELETE FROM steps WHERE preparation_id = ?", (found,))  # each test adds the steps it needs
+        conn.execute("UPDATE preparations SET council = ?, agreed = ?, round = ?, draft = ? WHERE id = ?",
+                     (COUNCIL, agreed, round_, json.dumps(draft) if status == "done" else None, found))  # fmt: skip
+    return found
+
+
+def review(objections=(), votes=(), renumbered=()):
+    return json.dumps({"verdict": "object" if objections else "approve", "objections": list(objections),
+                       "votes": list(votes), "summary": "", "renumbered": list(renumbered)})  # fmt: skip
+
+
+def test_each_version_says_where_its_council_is(conn, job):
+    rounds = 3
+    found = council_version(conn, job, status="writing", round_=2)
+    latest = drafts.runs.latest(conn, job)
+    assert drafts.status(conn, latest, rounds) == "council round 2 of 3"
+    with conn:
+        conn.execute(ANSWER, (found, 2, "truth", 0, "batch", "sent", None, None))
+    assert drafts.status(conn, latest, rounds) == "waiting for Anthropic"
+    with conn:
+        conn.execute("DELETE FROM steps WHERE member = 'truth'")
+        conn.execute(ANSWER, (found, 2, "hiring", 0, "flex", "waiting", None, "2026-11-02T03:20:00+00:00"))
+    assert drafts.status(conn, latest, rounds).startswith("waiting: busy, again at ")
+    latest["problem"] = "Paused: today's spending limit of $15.00 would be passed ($14.99 spent today)."
+    assert drafts.status(conn, latest, rounds) == "Paused: today's spending limit of $15.00 would be passed"
+    for agreed, line in ((1, "council agreed"), (0, "no agreement: see the job"), (None, "Writer only (no council)")):
+        assert drafts.status(conn, latest | {"status": "done", "agreed": agreed}, rounds) == line
+
+
+def test_the_box_shows_the_councils_notes_truth_checker_first(client, conn, job):
+    found = council_version(conn, job, agreed=0)
+    must = {"id": "TC-1", "where": "E2.1", "severity": "must", "problem": "Says 95%.", "fix": "Say 90%.",
+            "quote": "reaching 90% success"}  # fmt: skip
+    with conn:
+        conn.execute(ANSWER, (found, 1, "hiring", 0, "direct", "done", review(
+            votes=[{"objection": "TC-1", "agree": True, "why": "Right."}],
+            renumbered=[{"wrote": "TC-1", "now": "agree"}]), None))  # fmt: skip
+        conn.execute(ANSWER, (found, 1, "truth", 0, "direct", "done", review([must]), None))
+        conn.execute(ANSWER, (found, 1, "writer", 0, "direct", "done", json.dumps({"draft": {
+            "responses": [{"objection": "HM-1", "action": "fixed", "why": "Shorter."}],
+            "missed": [{"objection": "TC-1", "severity": "must"}]}, "flags": []}), None))  # fmt: skip
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert text.index("<strong>Truth checker</strong>") < text.index("<strong>Hiring manager</strong>")  # first
+    assert 'class="error">TC-1 (must, E2.1): Says 95%.' in text and "Your original:</em> “reaching 90% success”" in text
+    assert "Hiring manager agrees: Right." in text and "HM-1 fixed (Shorter.)" in text
+    assert "No reply from the Writer: TC-1 (must)" in text and "the app renumbered: TC-1 → agree" in text
+
+
+def test_no_agreement_shows_the_objected_entries_and_the_wording_switch(client, conn, job, monkeypatch):
+    found = council_version(conn, job, agreed=0, draft=DRAFT | {"objected": [["profile", "exp-1"]]})
+    with conn:
+        conn.execute("UPDATE preparations SET wording = 'original' WHERE id = ?", (found,))
+    built = []
+    monkeypatch.setattr(main.council_view.pdf, "build_kept", lambda data_dir, target, source: built.append(source))
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "The Truth checker still objects to: Demo Robotics Lab." in text and "your original wording there" in text
+    assert ">Keep the Writer&#39;s wording</button>" in text
+    assert "In the PDF: your original wording" in client.get(f"/jobs/{job}/changes?version=1").text
+    client.post(f"/jobs/{job}/wording", data={"csrf_token": csrf(client), "wording": "writer"})
+    assert one(conn, "SELECT wording FROM preparations")[0] == "writer" and len(built) == 1  # PDF built again
+    assert ">Use my original wording</button>" in client.get(f"/jobs/{job}/preparation").text
+    assert client.post(f"/jobs/{job}/wording", data={"csrf_token": csrf(client), "wording": "mine"}).status_code == 404
+
+
+def test_now_normal_price_switches_a_running_version_or_starts_one(client, conn, job):
+    found = council_version(conn, job, status="writing")
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "Now, normal price (about $0.00)" in text and "It counts in your limits." in text  # laptop: free
+    client.post(f"/jobs/{job}/normal-price", data={"csrf_token": csrf(client)})
+    assert one(conn, "SELECT mode FROM preparations WHERE id = ?", found)[0] == "normal" and client.started == []
+    with conn:
+        conn.execute("UPDATE preparations SET status = 'stopped' WHERE id = ?", (found,))
+    client.post(f"/jobs/{job}/normal-price", data={"csrf_token": csrf(client)})
+    assert client.started == [job]  # a new version, at the normal price
+
+
+def test_continue_anyway_carries_on_a_version_stopped_for_a_closed_job(client, conn, job):
+    from app.council import flow
+
+    found = council_version(conn, job, status="stopped", problem=flow.CLOSED)
+    assert ">Continue anyway</button>" in client.get(f"/jobs/{job}/preparation").text
+    letter_version(conn, job, status="writing")  # another version being written: not now
+    assert client.post(f"/jobs/{job}/continue", data={"csrf_token": csrf(client)}).status_code == 404
+    with conn:
+        conn.execute("DELETE FROM preparations WHERE kind = 'cover_letter'")
+    client.post(f"/jobs/{job}/continue", data={"csrf_token": csrf(client)})
+    assert one(conn, "SELECT status, waived, problem FROM preparations WHERE id = ?", found) == (
+        "writing", '["closed"]', None,
+    )  # fmt: skip
+    assert client.post(f"/jobs/{job}/continue", data={"csrf_token": csrf(client)}).status_code == 404  # writing now
+
+
+def test_request_changes_for_a_cover_letter(client, conn, job):
+    letter_version(conn, job)
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "Request changes to cover letter 1" in text
+    form = {"csrf_token": csrf(client), "feedback": "Warmer."}
+    client.post(f"/jobs/{job}/letter-changes", data=form)
+    assert client.started == [(job, "Warmer.")]
+    with conn:
+        conn.execute("UPDATE preparations SET status = 'writing', draft = NULL WHERE kind = 'cover_letter'")
+    client.post(f"/jobs/{job}/letter-changes", data=form | {"feedback": "Shorter."})
+    asked = json.loads(one(conn, "SELECT asked FROM preparations WHERE kind = 'cover_letter'")[0])
+    assert [item["words"] for item in asked] == ["Shorter."] and len(client.started) == 1
+    assert "Type what you&#39;d like changed" in client.post(f"/jobs/{job}/letter-changes",
+                                                             data=form | {"feedback": " "}).text  # fmt: skip
+
+
+def test_the_top_bar_shows_the_line_up_spend_and_a_pause(client, conn, job, data_dir):
+    text = client.get("/ready").text
+    assert "Line-up: Custom (up to $0.00 per job)" in text and "Today $0.00 of $15.00" in text
+    assert "Scoring: laptop, free" in text and "Paused" not in text and "<td>Truth checker</td>" in text
+    version(conn, job)
+    with conn:
+        conn.execute("UPDATE steps SET cost = 15, day = ?", (drafts.spending.today(),))
+    assert "Paused: today&#39;s limit reached" in client.get("/ready").text

@@ -26,9 +26,9 @@
       {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
       {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
     {% set found = states[job.id] %}{% set latest = found.latest %}
-    <td>{% if found.place == 0 %}writing…
+    <td>{% if found.place == 0 %}{{ found.council_status or "writing" }}…
       {% elif not latest %}not started
-      {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else "done" }}: version {{ latest.version }}
+      {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else found.council_status or "done" }}: version {{ latest.version }}
         <br>{% if found.built %}<a href="/documents/{{ job.id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a>{% if found.built.pages > 1 %} <span class="mark warn">{{ found.built.pages }} pages</span>{% endif %} · {% endif %}<a href="/jobs/{{ job.id }}/changes?version={{ latest.version }}">Changes</a>
         {% if latest.problem %}<br><span class="error">{{ latest.problem.split(":")[0] }}: see the job's page</span>{% endif %}
       {% else %}<span class="error">{{ labels[latest.status] }}</span> <span class="muted">(version {{ latest.version }}; see the job's page)</span>{% endif %}
