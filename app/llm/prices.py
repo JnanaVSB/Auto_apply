@@ -1,7 +1,7 @@
 """The price list shipped with the app (prices.json, never fetched online), and what one request cost.
 
 Ollama on this computer is free; your own address costs what you typed in Settings, else it is not counted (None).
-Half price is Phase 4c's Batch and Flex sending; Phase 4b sends at the normal price."""
+Half price is Anthropic's batches and OpenAI's Flex; "Now, normal price" and Phase 4b send at the normal price."""
 
 import json
 from functools import cache

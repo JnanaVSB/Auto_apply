@@ -24,8 +24,9 @@ def most_output(role: AIRole, limit: int | None) -> int:
 
 
 def answer(
-    client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool, limit: int | None
-) -> Reply:
+    client: httpx.Client, role: AIRole, key: None, system: str, user: str, schema: dict, retry: bool,
+    limit: int | None, half: bool,
+) -> Reply:  # fmt: skip
     body = {
         "model": role.model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],

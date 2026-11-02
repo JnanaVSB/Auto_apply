@@ -11,11 +11,13 @@ from app.config import OPENAI_HOST, AIRole
 from app.llm import LLMError, Reply, TooLong, Usage, answer_data, refused, tokens
 
 ANSWER_LIMIT = 4096  # word-pieces, unless the request asks for more
-THINKING_ROOM = 8000  # with thinking on, the model needs this much more room
+THINKING_ROOM, XHIGH_ROOM = 8000, 16000  # with thinking on, the model needs this much more room
+FLEX_SECONDS = 900  # OpenAI's half price (Flex) answers more slowly
 
 
 def most_output(role: AIRole, limit: int | None) -> int:
-    return (limit or ANSWER_LIMIT) + (0 if role.thinking == "off" else THINKING_ROOM)
+    room = {"off": 0, "xhigh": XHIGH_ROOM}.get(role.thinking, THINKING_ROOM)
+    return (limit or ANSWER_LIMIT) + room
 
 
 def check(client: httpx.Client, role: AIRole, key: str | None) -> tuple[bool, str]:
@@ -37,7 +39,7 @@ def check(client: httpx.Client, role: AIRole, key: str | None) -> tuple[bool, st
 
 def answer(
     client: httpx.Client, role: AIRole, key: str | None, system: str, user: str, schema: dict, retry: bool,
-    limit: int | None,
+    limit: int | None, half: bool,
 ) -> Reply:  # fmt: skip
     body = {
         "model": role.model,
@@ -47,6 +49,8 @@ def answer(
     } | ({} if role.thinking == "off" else {"reasoning_effort": role.thinking})
     if urlsplit(role.address).hostname == OPENAI_HOST:
         body["store"] = False  # OpenAI keeps nothing (owner decision D6); other hosts may refuse the setting
+        if half:
+            body["service_tier"] = "flex"  # half price: slower, and "busy" means wait and send again
     headers = {"Authorization": f"Bearer {key}"} if key else {}  # your own server may need no key
     reply = client.post(f"{role.address}/chat/completions", json=body, headers=headers)
     if reply.status_code == 400 and "context" in reply.text.lower():

@@ -48,17 +48,17 @@ def spent(conn: sqlcipher3.Connection, day: str) -> Spent:
     return Spent(*conn.execute(SPENT, (day, day[:7])).fetchone())
 
 
-def largest(role: AIRole, texts: str, answer_limit: int | None = None) -> float | None:
-    """The most a request sending `texts` can cost: generously counted, at the price for that length; None when the
-    price isn't known."""
+def largest(role: AIRole, texts: str, answer_limit: int | None = None, half: bool = False) -> float | None:
+    """The most a request sending `texts` can cost: generously counted, at the price for that length (`half`: sent at
+    half price, through a batch or Flex); None when the price isn't known."""
     reading = math.ceil(len(texts.encode()) / BYTES_PER_TOKEN)
-    price = prices.price(role, reading)
+    price = prices.price(role, reading, half)
     return None if price is None else prices.cost(price, Usage(reading, 0, most_output(role, answer_limit)))
 
 
-def charged(role: AIRole, usage: Usage) -> float | None:
+def charged(role: AIRole, usage: Usage, half: bool = False) -> float | None:
     """What a request really cost, from the tokens the service reported; None when the price isn't known."""
-    price = prices.price(role, usage.input + usage.cached)
+    price = prices.price(role, usage.input + usage.cached, half)
     return None if price is None else prices.cost(price, usage)
 
 

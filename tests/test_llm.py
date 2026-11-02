@@ -128,7 +128,9 @@ def test_anthropic_service(keys):
     [
         (GROQ, httpx.Response(401), llm.StopScoring, "refused the key"),
         (CLAUDE, httpx.Response(404), llm.StopScoring, "does not know the model 'claude-sonnet-5-5'"),
-        (CLAUDE, httpx.Response(529), llm.LLMError, "busy or failing"),
+        *((role, httpx.Response(status), llm.Busy, "busy or failing") for role, status in (
+            (CLAUDE, 529), (CLAUDE, 500), (GROQ, 429), (GROQ, 503),
+        )),  # not charged: the council waits and sends it again
         (GROQ, httpx.Response(400, text="maximum context length exceeded"), llm.TooLong, "longer than the model"),
         (CLAUDE, httpx.Response(400, text="prompt is too long"), llm.TooLong, "longer than the model"),
         (CLAUDE, httpx.Response(200, json={"content": [], "stop_reason": "refusal"}), llm.LLMError, "declined"),
@@ -334,6 +336,33 @@ def test_only_openai_is_told_to_keep_nothing(keys):
     for role in (OPENAI, GROQ, OWN):
         llm.call(role, "rules", "texts", SHAPE, transport=transport)
     assert [json.loads(request.content).get("store") for request in requests] == [False, None, None]
+    assert all("service_tier" not in json.loads(request.content) for request in requests)  # normal price
+
+
+def test_half_price_is_flex_for_openai_only_and_never_sent_to_anthropic_directly(keys):
+    transport, requests = fake(*[httpx.Response(200, json=OPENAI_ANSWER)] * 3)
+    for role in (OPENAI, GROQ, OWN):
+        llm.call(role, "rules", "texts", SHAPE, half=True, transport=transport)
+    assert [json.loads(request.content).get("service_tier") for request in requests] == ["flex", None, None]
+    assert json.loads(requests[0].content)["store"] is False  # Flex keeps nothing either
+    transport, requests = fake()
+    with pytest.raises(ValueError, match="only through its batches"):
+        llm.call(CLAUDE, "rules", "texts", SHAPE, half=True, transport=transport)
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("role", "reply", "field", "effort", "room"),
+    [
+        (CLAUDE, ANTHROPIC_ANSWER, ("output_config", "effort"), "xhigh", ("max_tokens", 8000 + 16000)),
+        (OPENAI, OPENAI_ANSWER, ("reasoning_effort",), "xhigh", ("max_completion_tokens", 4096 + 16000)),
+    ],
+)
+def test_xhigh_thinking_is_sent_as_it_is_with_more_room(keys, role, reply, field, effort, room):
+    transport, requests = fake(httpx.Response(200, json=reply))
+    llm.call(role.model_copy(update={"thinking": "xhigh"}), "rules", "texts", SHAPE, transport=transport)
+    body = json.loads(requests[0].content)
+    assert (_at(body, field), body[room[0]]) == (effort, room[1])
 
 
 def test_your_own_address_without_a_key_is_sent_no_key(fake_keychain):

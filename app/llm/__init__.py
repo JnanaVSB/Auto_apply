@@ -7,6 +7,8 @@ the tokens the service counted, so its cost can be worked out (app/llm/prices.py
 charged.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
@@ -40,6 +42,15 @@ class LLMError(Exception):
         super().__init__(message)
         self.usage = usage
         self.reply: str | None = None  # what the service sent back, if anything (any key in it shown as [KEY])
+
+
+class Busy(LLMError):  # noqa: N818
+    """The service is busy or failing for now (OpenAI's half-price "resource unavailable" too): not charged; the
+    council waits and sends it again, never at full price."""
+
+
+class Expired(LLMError):  # noqa: N818
+    """Anthropic didn't answer a batch request in time (24 hours), or no longer has its batch: send it again."""
 
 
 class StopScoring(LLMError):  # noqa: N818 (an instruction, not just an error)
@@ -77,14 +88,24 @@ def call(
     retry: bool = False,
     answer_limit: int | None = None,
     timeout: int = TIMEOUT_SECONDS,
+    half: bool = False,
     transport: httpx.BaseTransport | None = None,
 ) -> Reply:
     """One request; returns the model's answer and the tokens counted for it.
 
     `retry` asks a little less strictly: the first try is fully predictable, so asking the same way again would give
     the same answer. `answer_limit` is the answer's room in tokens (thinking gets its own room on top), else the
-    service's usual one; `timeout` is in seconds."""
-    service = _service(role)
+    service's usual one; `timeout` is in seconds. `half`: OpenAI's half price (Flex); Anthropic's is its batches."""
+    with connected(role, timeout, transport) as (client, key):
+        return _service(role).answer(client, role, key, system, user, schema, retry, answer_limit, half)
+
+
+@contextmanager
+def connected(
+    role: AIRole, timeout: int = TIMEOUT_SECONDS, transport: httpx.BaseTransport | None = None
+) -> Iterator[tuple[httpx.Client, str | None]]:
+    """A connection to the role's service and its key (None: Ollama, or your own address without one). Whatever
+    fails inside comes out as one of the errors above, naming the cause and the fix, never the key."""
     key = None if role.service == "ollama" or role.key_name is None else _key(role)
     came: list[httpx.Response] = []  # what the service sent back, read once the answer fails
     with httpx.Client(
@@ -92,7 +113,7 @@ def call(
         event_hooks={"response": [came.append]},
     ) as client:  # fmt: skip
         try:  # trust_env=False: no proxy settings or other surprises from the environment
-            return service.answer(client, role, key, system, user, schema, retry, answer_limit)
+            yield client, key
         except LLMError as error:
             if came:
                 error.reply = came[-1].text.replace(key, "[KEY]") if key else came[-1].text
@@ -172,5 +193,5 @@ def refused(service: str, status: int, model: str) -> LLMError:
     if status == 404:
         return StopScoring(f"{service} does not know the model '{model}': check the model name in the settings.")
     if status in (429, 529) or status >= 500:
-        return LLMError(f"{service} is busy or failing (status {status}); try again later.")
+        return Busy(f"{service} is busy or failing (status {status}); try again later.")
     return LLMError(f"{service} refused the request (status {status}).")

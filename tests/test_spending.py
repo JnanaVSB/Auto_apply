@@ -54,6 +54,7 @@ def test_the_largest_cost_is_counted_generously():
     texts = "x" * 2000  # 1,000 tokens at 2 bytes each; an answer of 8,192 tokens plus 8,000 for thinking
     assert spending.largest(OPUS, texts, 8192) == pytest.approx((1000 * 4 + 16192 * 20) / 1_000_000)
     assert spending.largest(OPUS, "é" * 1000, 8192) == spending.largest(OPUS, texts, 8192)  # é is 2 bytes
+    assert spending.largest(OPUS, texts, 8192, half=True) == pytest.approx((1000 * 2 + 16192 * 10) / 1_000_000)
     assert spending.largest(LOCAL, texts, 8192) == 0
     assert spending.largest(OWN, texts) is None
     priced = OWN.model_copy(update={"price_input": 1, "price_output": 2})
@@ -62,6 +63,9 @@ def test_the_largest_cost_is_counted_generously():
 
 def test_the_real_cost_comes_from_the_reported_tokens():
     assert spending.charged(OPUS, Usage(1000, 500, 2000)) == pytest.approx((1000 * 4 + 500 * 0.2 + 2000 * 20) / 1e6)
+    assert spending.charged(OPUS, Usage(1000, 500, 2000), half=True) == pytest.approx(
+        (1000 * 2 + 500 * 0.1 + 2000 * 10) / 1e6
+    )  # a batch or Flex
     assert spending.charged(LOCAL, Usage(1000, 0, 2000)) == 0
     assert spending.charged(OWN, Usage(1000, 0, 2000)) is None
 
