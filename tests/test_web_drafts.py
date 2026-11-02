@@ -461,6 +461,32 @@ def test_no_agreement_shows_the_objected_entries_and_the_wording_switch(client, 
     assert client.post(f"/jobs/{job}/wording", data={"csrf_token": csrf(client), "wording": "mine"}).status_code == 404
 
 
+def test_no_agreement_says_so_when_the_truth_checker_gave_no_valid_answer(client, conn, job):
+    council_version(conn, job, agreed=0, draft=DRAFT | {"objected": [["profile", "exp-1"]], "no_truth": True})
+    with conn:
+        conn.execute("UPDATE preparations SET wording = 'writer'")
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "The Truth checker gave no valid answer in the last round, so these entries the Writer rewrote are " \
+           "unchecked: Demo Robotics Lab." in text and "still objects" not in text  # fmt: skip
+
+
+def test_no_agreement_on_a_letter_shows_the_paragraphs_left_out_and_a_switch(client, conn, job, monkeypatch):
+    letter_version(conn, job)
+    with conn:
+        conn.execute("UPDATE preparations SET agreed = 0, wording = 'original', draft = ?",
+                     (json.dumps(LETTER | {"objected": [1]}),))  # fmt: skip
+    built = []
+    monkeypatch.setattr(main.council_view.pdf, "build_kept", lambda data_dir, target, source: built.append(source))
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert '<p class="muted"><em>Left out of the PDF:</em> I trained arms to' in text
+    assert "The Truth checker still objects to paragraph 2: left out of the PDF." in text
+    assert 'name="kind" value="cover_letter">\n    <button type="submit">Put them back in the PDF</button>' in text
+    client.post(f"/jobs/{job}/wording", data={"csrf_token": csrf(client), "wording": "writer", "kind": "cover_letter"})
+    assert one(conn, "SELECT wording FROM preparations")[0] == "writer" and "I trained arms" in built[0]
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert "<em>In the PDF, though objected to:</em>" in text and ">Leave them out of the PDF</button>" in text
+
+
 def test_now_normal_price_switches_a_running_version_or_starts_one(client, conn, job):
     found = council_version(conn, job, status="writing")
     text = client.get(f"/jobs/{job}/preparation").text

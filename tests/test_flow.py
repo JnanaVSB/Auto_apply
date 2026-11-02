@@ -186,8 +186,29 @@ def test_without_a_valid_answer_from_the_truth_checker_the_writers_wording_stays
         finish(conn, call, None if call.member == "truth" else APPROVE)
     flow.advance(conn, config, version)
     assert one(conn, STATE) == ("done", 1, 0, "writer", None)
-    objected = json.loads(one(conn, "SELECT draft FROM preparations")[0])["objected"]
-    assert objected == [["profile", "sum-1"], ["profile", "exp-1"]]  # every entry with rewritten bullets
+    draft = json.loads(one(conn, "SELECT draft FROM preparations")[0])
+    assert draft["objected"] == [["profile", "sum-1"], ["profile", "exp-1"]]  # every entry with rewritten bullets
+    assert draft["no_truth"] is True  # shown as unchecked, not as objected to
+
+
+def test_a_truth_checker_discussion_turn_without_a_valid_answer_keeps_its_own_review(conn, data_dir, job, built):
+    config = settings(data_dir, rounds=2, turns=1)
+    version = flow.start(conn, config, job)
+    finish(conn, flow.advance(conn, config, version)[0], GOOD)
+    answer_all(conn, flow.advance(conn, config, version), {"truth": must()})
+    for call in flow.advance(conn, config, version):  # the discussion turn: the Truth checker's answer fails twice
+        finish(conn, call, None if call.member == "truth" else APPROVE)
+    [revision] = flow.advance(conn, config, version)
+    assert "TC-1 | must | E2.1" in revision.user  # its objection still reaches the Writer
+    finish(conn, revision, answer(("E2", [GOOD_BULLET], []), responses=[REPLY]))
+    answer_all(conn, flow.advance(conn, config, version), {"truth": must()})
+    for call in flow.advance(conn, config, version):
+        finish(conn, call, None if call.member == "truth" else APPROVE)
+    assert flow.advance(conn, config, version) == []
+    assert one(conn, STATE) == ("done", 2, 0, "original", None)  # not agreed: no valid answer at the last turn
+    draft = json.loads(one(conn, "SELECT draft FROM preparations")[0])
+    assert draft["objected"] == [["profile", "exp-1"]] and draft["no_truth"] is False
+    assert QUOTE.replace("%", r"\%") in built[-1][1] and "Trained a robot arm with PPO." not in built[-1][1]
 
 
 def test_a_whole_resume_objection_keeps_your_wording_everywhere(conn, data_dir, job):

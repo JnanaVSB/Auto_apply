@@ -45,15 +45,17 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
 
 
 def letter(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
-    """The job's cover letters for its box: the newest, its text in parts (new numbers marked), its PDF, every
-    version."""
+    """The job's cover letters for its box: the newest, its text in parts (new numbers marked), the paragraphs the
+    Truth checker still objects to after no agreement, its PDF, every version."""
     latest = runs.latest(conn, job_id, runs.LETTER)
     done = latest is not None and latest["status"] == "done"
     marked = {flag["paragraph"]: set(flag["numbers"]) for flag in json.loads(latest["flags"])} if done else {}
     paragraphs = json.loads(latest["draft"])["paragraphs"] if done else []
+    left_out = json.loads(latest["draft"]).get("objected", []) if done else []  # only after no agreement
     return {
         "latest": latest, "versions": runs.versions(conn, job_id, runs.LETTER),
         "paragraphs": [_parts(text, marked.get(number, set())) for number, text in enumerate(paragraphs)],
+        "left_out": left_out,
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"], runs.LETTER)) if done else None,
     }  # fmt: skip
 
@@ -228,15 +230,16 @@ def council(conn: sqlcipher3.Connection, job_id: int) -> dict:
     except ConfigError:
         return {}
     latest, letter = runs.latest(conn, job_id), runs.latest(conn, job_id, runs.LETTER)
-    objected = []
+    objected, no_truth = [], False
     if latest and latest["status"] == "done" and latest["agreed"] == 0:
-        entries = runs.originals(conn, latest["sources"])
+        entries, draft = runs.originals(conn, latest["sources"]), json.loads(latest["draft"])
         labels = {(entry.source, entry.tile.tile_id): entry.tile.facts.get("name") or entry.label for entry in entries}
-        objected = [labels.get(tuple(key), "an entry") for key in json.loads(latest["draft"]).get("objected", [])]
+        objected = [labels.get(tuple(key), "an entry") for key in draft.get("objected", [])]
+        no_truth = draft.get("no_truth", False)  # the Truth checker gave no valid answer: these are unchecked
     return {
         "council_notes": notes(conn, latest),
         "letter_notes": notes(conn, letter), "objected": objected, "normal_cost": _normal(conn, config, latest),
-        "doubt": DOUBT.get(latest and latest["problem"]),
+        "no_truth": no_truth, "doubt": DOUBT.get(latest and latest["problem"]),
     }  # fmt: skip
 
 

@@ -36,7 +36,7 @@
   </form>
   {% endif %}
   {% if objected %}
-  <p class="{{ 'muted' if latest.wording == 'original' else 'error' }}">No agreement. The Truth checker still objects to: {{ objected | join(", ") }}.
+  <p class="{{ 'muted' if latest.wording == 'original' else 'error' }}">No agreement. {% if no_truth %}The Truth checker gave no valid answer in the last round, so these entries the Writer rewrote are unchecked: {% else %}The Truth checker still objects to: {% endif %}{{ objected | join(", ") }}.
     The PDF uses {{ "your original wording" if latest.wording == "original" else "the Writer's wording" }} there.</p>
   {{ button("wording", "Keep the Writer's wording" if latest.wording == "original" else "Use my original wording", fields={"wording": "writer" if latest.wording == "original" else "original"}) }}
   {% endif %}
@@ -89,7 +89,11 @@
   {% elif found and found.status == "done" %}
   <p class="result">Cover letter {{ found.version }}, written {{ found.created_on[:10] }}.
     {% if letter.built %}<a href="/documents/{{ job_id }}/cover-letter-v{{ found.version }}.pdf" target="_blank" rel="noopener">View PDF</a> ({{ letter.built.pages }} page{{ "s" if letter.built.pages != 1 }}){% endif %}</p>
-  <div class="letter">{% for parts in letter.paragraphs %}<p>{% for text, new in parts %}{% if new %}<mark>{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}</p>{% endfor %}</div>
+  <div class="letter">{% for parts in letter.paragraphs %}<p{% if loop.index0 in letter.left_out %} class="muted"{% endif %}>{% if loop.index0 in letter.left_out %}<em>{{ "Left out of the PDF:" if found.wording == "original" else "In the PDF, though objected to:" }}</em> {% endif %}{% for text, new in parts %}{% if new %}<mark>{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}</p>{% endfor %}</div>
+  {% if letter.left_out %}
+  <p class="{{ 'muted' if found.wording == 'original' else 'error' }}">No agreement. The Truth checker still objects to paragraph{{ "s" if letter.left_out | length > 1 }} {% for number in letter.left_out %}{{ number + 1 }}{{ ", " if not loop.last }}{% endfor %}: {{ "left out of the PDF" if found.wording == "original" else "kept in the PDF" }}.</p>
+  {{ button("wording", "Put them back in the PDF" if found.wording == "original" else "Leave them out of the PDF", fields={"wording": "writer" if found.wording == "original" else "original", "kind": "cover_letter"}) }}
+  {% endif %}
   {% if found.problem or not letter.built %}
   <p class="error" role="alert">{{ found.problem or "The PDF hasn't been built yet." }}</p>
   <form method="post" action="/jobs/{{ job_id }}/pdf" class="inline">

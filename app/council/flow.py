@@ -170,7 +170,7 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
         with conn:
             conn.execute(ROUND, (number + 1, preparation))
         return advance(conn, config, preparation)
-    _no_agreement(conn, config, version, found["draft"], answers, seen)
+    _no_agreement(conn, config, version, found["draft"], _final(steps, number, seen.members), seen)
     return []
 
 
@@ -267,20 +267,22 @@ def _discuss(answers: dict, before: dict | None, turn: int) -> bool:
 
 
 def _final(steps: dict, number: int, members: dict) -> dict[str, dict | None]:
-    """Each member's last answer in a round (None: no valid answer)."""
+    """Each member's last valid answer in a round: a discussion turn without one leaves its earlier answer standing
+    (None: no valid answer in any turn)."""
     found = {}
     for member in members:
-        turns = [(turn, row) for (round_, who, turn), row in steps.items() if round_ == number and who == member]
-        row = max(turns)[1] if turns else None
-        found[member] = json.loads(row[1]) if row and row[0] == "done" else None
+        turns = [(turn, row[1]) for (round_, who, turn), row in steps.items()
+                 if round_ == number and who == member and row[0] == "done"]  # fmt: skip
+        found[member] = json.loads(max(turns)[1]) if turns else None
     return found
 
 
 def _no_agreement(conn: sqlcipher3.Connection, config: Config, version: dict, draft: dict, answers: dict,
                   seen: _Seen) -> None:  # fmt: skip
-    """No agreement at the round limit. A resume: entries the Truth checker still objects to keep your original
-    wording (all rewritten ones for an objection to the whole resume); with no valid answer from it, the Writer's
-    wording stays, with a warning. A letter: objected paragraphs are left out, or it is checked by hand."""
+    """No agreement at the round limit, from each member's last valid answer in the round. A resume: entries the
+    Truth checker still objects to keep your original wording (all rewritten ones for an objection to the whole
+    resume); with no valid answer from it in the whole round, the Writer's wording stays, with a warning. A letter:
+    objected paragraphs are left out, or it is checked by hand."""
     truth = answers.get("truth")
     musts = [item["where"] for item in (truth or {}).get("objections", []) if item["severity"] == "must"]
     labels = {entry.label: (entry.source, entry.tile.tile_id) for entry in seen.entries}
@@ -295,7 +297,8 @@ def _no_agreement(conn: sqlcipher3.Connection, config: Config, version: dict, dr
     else:
         objected = [list(labels[label]) for label in dict.fromkeys(where.split(".")[0] for where in musts)]
         wording = "original" if objected else None
-    end(conn, version["id"], "done", None, agreed=False, wording=wording, draft=draft | {"objected": objected})
+    end(conn, version["id"], "done", None, agreed=False, wording=wording,
+        draft=draft | {"objected": objected, "no_truth": truth is None})  # fmt: skip
     _build(conn, config, version["id"])
 
 
