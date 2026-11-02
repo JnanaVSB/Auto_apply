@@ -13,6 +13,7 @@ from test_web_ready import scored
 from app import config as settings
 from app.config import AISettings, Config, CouncilSettings
 from app.council import flow, pilot, runner
+from app.documents import privacy
 from app.resume import from_latex
 from app.web.council_settings import MEMBERS, PRESETS
 
@@ -141,6 +142,24 @@ def test_the_pilot_page_starts_a_pilot_runs_a_line_up_and_marks(client, conn, da
     assert client.post("/pilot/1/run/cheapest", data={"csrf_token": csrf(client)}).status_code == 404
     assert "not run" in client.get(f"/pilot/1/jobs/{jobs[0]}").text
     assert client.post("/pilot", data={"csrf_token": csrf(client)}).status_code == 400  # no jobs ticked
+
+
+def test_use_this_one_builds_its_pdf_apart_and_names_a_privacy_problem(client, conn, data_dir, jobs, models, pdfs,
+                                                                      monkeypatch):  # fmt: skip
+    cfg = config(data_dir)
+    number = pilot.create(conn, cfg, jobs[:1], seed=1)
+    with conn:
+        conn.execute("UPDATE pilots SET planted = '{}'")
+    pilot.run(conn, cfg, number, "laptop", LAPTOP)
+    runner.run(conn, cfg, runner.State(), NOW)
+    stopped = privacy.PrivacyError("Your name is missing from the Questionnaire.")
+    monkeypatch.setattr(flow.pdf, "build_kept", lambda *args: (_ for _ in ()).throw(stopped))
+    reply = client.post(f"/pilot/use/{pilot.results(conn, number, 'laptop', jobs[0])['id']}",
+                        data={"csrf_token": csrf(client)}, follow_redirects=False)  # fmt: skip
+    assert (reply.status_code, reply.headers["location"]) == (303, f"/jobs/{jobs[0]}#preparation")
+    assert one(conn, "SELECT status, problem FROM preparations WHERE kind = 'resume'") == (
+        "done", "PDF could not be built: Your name is missing from the Questionnaire.",
+    )  # fmt: skip
 
 
 @pytest.mark.parametrize(

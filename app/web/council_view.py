@@ -8,6 +8,7 @@ from collections.abc import Callable
 import sqlcipher3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app.config import REVIEWERS, ConfigError, load_config
@@ -59,7 +60,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], scoring: Callabl
             raise HTTPException(404)
         with conn:
             conn.execute("UPDATE preparations SET wording = ? WHERE id = ?", (wording, latest["id"]))
-        _rebuild(conn, latest["id"])
+        await rebuild(conn, latest["id"])
         return RedirectResponse(f"/jobs/{job_id}#preparation", 303)
 
     @app.post("/jobs/{job_id:int}/normal-price")
@@ -123,13 +124,17 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], scoring: Callabl
         return RedirectResponse(f"/jobs/{job_id}#preparation", 303)
 
 
-def _rebuild(conn: sqlcipher3.Connection, preparation: int) -> None:
+async def rebuild(conn: sqlcipher3.Connection, preparation: int) -> None:
+    """The version's PDF built again, apart from the page (up to minutes the first time). The old one is removed
+    first, so a failed build never leaves a PDF in other wording to show."""
     config = load_config()
     try:
         target, source, note = runs.pdf_source(conn, config, preparation)
-        pdf.build_kept(config.data_dir, target, source)
+        target.unlink(missing_ok=True)
+        target.with_suffix(".json").unlink(missing_ok=True)
+        await run_in_threadpool(pdf.build_kept, config.data_dir, target, source)
         runs.note_pdf(conn, preparation, note)
-    except (pdf.PdfError, privacy.PrivacyError, ResumeError) as error:
+    except (pdf.PdfError, privacy.PrivacyError, ResumeError, OSError) as error:
         runs.note_pdf(conn, preparation, error)
 
 

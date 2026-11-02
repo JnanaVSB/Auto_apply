@@ -2,6 +2,7 @@
 statuses and the Usage page. A made-up person and job; versions written straight into the test database."""
 
 import json
+import threading
 
 import pytest
 from helpers import add_job, csrf, log_in, one
@@ -485,6 +486,23 @@ def test_no_agreement_on_a_letter_shows_the_paragraphs_left_out_and_a_switch(cli
     assert one(conn, "SELECT wording FROM preparations")[0] == "writer" and "I trained arms" in built[0]
     text = client.get(f"/jobs/{job}/preparation").text
     assert "<em>In the PDF, though objected to:</em>" in text and ">Leave them out of the PDF</button>" in text
+
+
+def test_a_failed_rebuild_after_the_wording_switch_leaves_no_pdf_to_show(client, conn, data_dir, job, monkeypatch):
+    council_version(conn, job, agreed=0, draft=DRAFT | {"objected": [["profile", "exp-1"]]})
+    fake_pdf(data_dir, job)  # in your original wording
+    threads = []
+
+    def build(data_dir, target, source):
+        threads.append(threading.current_thread().name)
+        raise pdf.PdfError("A PDF is being built; try again in a moment.")
+
+    monkeypatch.setattr(main.council_view.pdf, "build_kept", build)
+    client.post(f"/jobs/{job}/wording", data={"csrf_token": csrf(client), "wording": "writer"})
+    target = pdf.tailored(data_dir, job, 1)
+    assert not target.exists() and not target.with_suffix(".json").exists()  # nothing in the other wording to show
+    assert threads[0].startswith("AnyIO worker")  # built apart from the page
+    assert "PDF could not be built: A PDF is being built" in client.get(f"/jobs/{job}/preparation").text
 
 
 def test_now_normal_price_switches_a_running_version_or_starts_one(client, conn, job):

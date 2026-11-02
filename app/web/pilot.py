@@ -10,10 +10,9 @@ from starlette.exceptions import HTTPException
 
 from app.config import load_config
 from app.council import pilot, runs
-from app.documents import pdf
 from app.resume import ResumeError, read_resume
 from app.scoring import ready
-from app.web import queries
+from app.web import council_view, queries
 from app.web.council_settings import MEMBERS, NAMES, PRESETS
 
 PAGE = "/pilot"
@@ -80,16 +79,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.post(PAGE + "/use/{preparation:int}")
     async def use_result(request: Request, preparation: int) -> Response:
         """A result without a made-up claim becomes the job's newest version, with its PDF."""
-        conn, config = request.app.state.conn, load_config()
+        conn = request.app.state.conn
         copied = pilot.use(conn, preparation)
         if copied is None:
             raise HTTPException(404)
-        try:
-            target, source, note = runs.pdf_source(conn, config, copied)
-            pdf.build_kept(config.data_dir, target, source)
-            runs.note_pdf(conn, copied, note)
-        except (pdf.PdfError, ResumeError) as error:
-            runs.note_pdf(conn, copied, error)
+        await council_view.rebuild(conn, copied)
         job_id = conn.execute("SELECT job_id FROM preparations WHERE id = ?", (copied,)).fetchone()[0]
         return RedirectResponse(f"/jobs/{job_id}#preparation", 303)
 

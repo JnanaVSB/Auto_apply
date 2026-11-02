@@ -309,7 +309,8 @@ def _no_agreement(conn: sqlcipher3.Connection, config: Config, version: dict, dr
 
 
 def _keep(conn: sqlcipher3.Connection, config: Config, version: dict, found: dict) -> None:
-    """The newest Writer draft becomes the version's draft (and its resume PDF is built, for the page count), once."""
+    """The newest Writer draft becomes the version's draft (and its resume PDF is built, for the page count, under
+    a name of its own, never shown), once."""
     draft = json.dumps(found["draft"], ensure_ascii=False)
     if version["draft"] == draft:
         return
@@ -317,7 +318,7 @@ def _keep(conn: sqlcipher3.Connection, config: Config, version: dict, found: dic
         conn.execute(DRAFT, (draft, json.dumps(found["flags"]), version["id"]))
     version["draft"] = draft
     if version["kind"] != runs.LETTER:  # a letter has no page limit
-        _build(conn, config, version["id"])
+        _build(conn, config, version["id"], in_progress=True)
 
 
 def _plant(conn: sqlcipher3.Connection, version: dict, found: dict) -> dict:
@@ -342,12 +343,14 @@ def _plant(conn: sqlcipher3.Connection, version: dict, found: dict) -> dict:
     return found
 
 
-def _build(conn: sqlcipher3.Connection, config: Config, preparation: int) -> None:
+def _build(conn: sqlcipher3.Connection, config: Config, preparation: int, in_progress: bool = False) -> None:
+    """The version's PDF; `in_progress`, a Writer draft's, under its own name, so a failed final build can never
+    leave it where the finished PDF is shown."""
     if conn.execute("SELECT kind FROM preparations WHERE id = ?", (preparation,)).fetchone()[0] == "pilot":
         return  # never a PDF of a pilot's version: it may hold a made-up claim
     try:
         target, source, note = runs.pdf_source(conn, config, preparation)
-        pdf.build_kept(config.data_dir, target, source)
+        pdf.build_kept(config.data_dir, _draft(target) if in_progress else target, source)
         runs.note_pdf(conn, preparation, note)
     except (pdf.PdfError, privacy.PrivacyError, ResumeError) as error:
         runs.note_pdf(conn, preparation, error)
@@ -368,8 +371,14 @@ def _pages(seen: _Seen, version: dict, which: str = "version") -> str:
     on) is longer, with the one-page setting."""
     if seen.letter or not seen.one_page:
         return ""
-    built = pdf.built(pdf.tailored(seen.data_dir, version["job_id"], version[which]))
+    target = pdf.tailored(seen.data_dir, version["job_id"], version[which])
+    built = pdf.built(_draft(target) if which == "version" else target)
     return ONE_PAGE.format(built.pages) if built and built.pages > 1 else ""
+
+
+def _draft(target: Path) -> Path:
+    """Where a version's in-progress PDF goes: beside the finished one, never served (only whole numbers are)."""
+    return target.with_name(f"{target.stem}-draft.pdf")
 
 
 def _asked(version: dict) -> str:

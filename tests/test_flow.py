@@ -291,6 +291,26 @@ def test_your_words_before_the_first_writer_call_count_as_late(conn, data_dir, j
     assert one(conn, "SELECT status, round, agreed FROM preparations WHERE id = ?", change) == ("done", 1, 1)
 
 
+def test_a_failed_final_build_never_leaves_the_in_progress_pdf_to_show(conn, data_dir, job, monkeypatch):
+    def build(data_dir, target, source):
+        if not target.name.endswith("-draft.pdf"):  # the final build fails
+            raise flow.pdf.PdfError("A PDF is being built; try again in a moment.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.7 made-up")
+        target.with_suffix(".json").write_text('{"pages": 2, "missing": []}', encoding="utf-8")
+
+    monkeypatch.setattr(flow.pdf, "build_kept", build)
+    config = settings(data_dir, rounds=1, turns=0)
+    version = flow.start(conn, config, job)
+    finish(conn, flow.advance(conn, config, version)[0], GOOD)
+    calls = flow.advance(conn, config, version)
+    assert "- " + flow.ONE_PAGE.format(2) in calls[0].user  # the page count, from the in-progress PDF
+    answer_all(conn, calls, APPROVE)
+    flow.advance(conn, config, version)
+    assert one(conn, STATE)[::4] == ("done", "PDF could not be built: A PDF is being built; try again in a moment.")
+    assert flow.pdf.built(flow.pdf.tailored(data_dir, job, 1)) is None  # no PDF shown, so no Writer's wording
+
+
 def test_a_resume_over_one_page_is_flagged_to_the_reviewers(conn, data_dir, job, monkeypatch):
     config = settings(data_dir)
     monkeypatch.setattr(flow.pdf, "built", lambda target: flow.pdf.Built(2, ()))
