@@ -285,6 +285,8 @@ def test_request_changes_waits_for_the_writer_and_current_entries(client, conn, 
     monkeypatch.setattr(client.app.state.preparer, "place", lambda job_id: None)
     tile_sets.confirm(conn, PROFILE[:2], CHOSEN.resume)  # your entries changed
     assert "Your entries changed since version 1" in ask(client, job, "Shorter.") and client.started == []
+    letter_version(conn, job, status="writing")  # being written by another dashboard: busy too
+    assert "The Writer is still working on this job" in ask(client, job, "Shorter.") and client.started == []
 
 
 def test_request_changes_on_a_skipped_job_asks_first(client, conn, job):

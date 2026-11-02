@@ -185,7 +185,7 @@ def add_routes(
             ready.queue(conn, job_id, datetime.now(UTC).isoformat(timespec="seconds"))  # a second press: no change
             latest = runs.latest(conn, job_id)
             if runs.writable(latest, runs.current(conn, job_id)):  # Retry a change: the same words
-                failed = latest is not None and latest["status"] in ("stopped", "by_hand")
+                failed = latest is not None and latest["status"] in runs.FAILED
                 request.app.state.preparer.start(job_id, latest["feedback"] or "" if failed else "", waived=waived)
         if request.state.form.get("back") == "job":  # pressed in the job's box: the box comes back
             return box(request, job_id, prepare_problem=problem and PROBLEMS[problem])
@@ -215,7 +215,7 @@ def add_routes(
         base = runs.last_done(conn, job_id)
         if cannot := _cannot(conn, scoring(), job, waived):
             problem = PROBLEMS[cannot]
-        elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
+        elif _busy(conn, preparer, job_id):
             problem = BUSY_JOB
         elif base is None:
             problem = runs.NO_BASE
@@ -238,7 +238,7 @@ def add_routes(
         waived = _waived(request)
         if cannot := _cannot(conn, scoring(), job, waived):
             problem = PROBLEMS[cannot]
-        elif preparer.place(job_id) is not None or runs.writing(conn, job_id):
+        elif _busy(conn, preparer, job_id):
             problem = BUSY_JOB
         else:
             preparer.start(job_id, "", runs.LETTER, waived)
@@ -256,7 +256,7 @@ def add_routes(
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
         preparer = request.app.state.preparer
-        free, doubts = preparer.place(job_id) is None and not runs.writing(conn, job_id), _doubts(conn, current, job)
+        free, doubts = not _busy(conn, preparer, job_id), _doubts(conn, current, job)
         missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
         writer = _writer_chosen()
         return page(
@@ -307,6 +307,11 @@ def _cannot(
     ):
         return "tiles"
     return None if _writer_chosen() else "writer"
+
+
+def _busy(conn: sqlcipher3.Connection, preparer, job_id: int) -> bool:
+    """Whether the Writer is busy with this job: writing it or holding its place here, or writing it elsewhere."""
+    return preparer.place(job_id) is not None or runs.writing(conn, job_id)
 
 
 def _doubts(conn: sqlcipher3.Connection, current: queries.Scoring, job: dict) -> list[str]:

@@ -22,14 +22,15 @@ SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each t
 
 
 def state(conn: sqlcipher3.Connection, data_dir: Path, preparer, job_id: int) -> dict:
-    """What the Ready page and the job's box show: the newest version, the Writer's place, what the PDF build found,
-    the cost so far, and whether Prepare would write a new version."""
+    """What the Ready page and the job's box show: the newest version (and whether it failed), the Writer's place, what
+    the PDF build found, the cost so far, and whether Prepare would write a new version."""
     latest, current = runs.latest(conn, job_id), runs.current(conn, job_id)
     done = latest is not None and latest["status"] == "done"
     base = latest if done else runs.last_done(conn, job_id)
     return {
         "base": base, "changeable": base is not None and not runs.outdated(base, current),
-        "latest": latest, "place": preparer.place(job_id), "outdated": done and runs.outdated(latest, current),
+        "latest": latest, "failed": latest is not None and latest["status"] in runs.FAILED,
+        "place": preparer.place(job_id), "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
     }  # fmt: skip

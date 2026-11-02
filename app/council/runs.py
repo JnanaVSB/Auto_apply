@@ -24,6 +24,7 @@ from app.resume import ResumeError, read_latex
 
 KIND, LETTER = "resume", "cover_letter"  # each kind has its own versions
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
+FAILED = ("stopped", "by_hand")  # a version that failed: Retry writes a new one
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"
 NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback, writer, created_on FROM preparations
     WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
@@ -114,7 +115,7 @@ def writing(conn: sqlcipher3.Connection, job_id: int) -> bool:
 def writable(version: dict | None, current: list[dict]) -> bool:
     """Whether Prepare writes a new version: none yet, the last one stopped or needs checking by hand (Retry), or it
     was made from older entries. Never while one is being written, nor twice from the same entries."""
-    if version is None or version["status"] in ("stopped", "by_hand"):
+    if version is None or version["status"] in FAILED:
         return True
     return version["status"] == "done" and outdated(version, current)
 

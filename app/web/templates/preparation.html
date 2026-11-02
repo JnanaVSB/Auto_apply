@@ -29,13 +29,13 @@
   {% if "skipped" in doubts %}<p class="muted">Skipped ("Not interested"): kept out of the queue{% if queued %}. Your Prepare press of {{ queued[:10] }} counts again when you undo it{% endif %}.</p>{% endif %}
   {% if "closed" in doubts %}<p class="muted">No longer open.</p>{% endif %}
   {% if "not-ready" in doubts %}<p class="muted">Not ready: it needs a score at or above your threshold with your current resume, or "Prepare anyway".</p>{% endif %}
-  {% if latest and latest.status in ("stopped", "by_hand") %}<p class="error" role="alert">Version {{ latest.version }}: {{ latest.problem }}</p>{% endif %}
+  {% if failed %}<p class="error" role="alert">Version {{ latest.version }}: {{ latest.problem }}</p>{% endif %}
   {% if latest and latest.status == "done" %}<p class="muted">Version {{ latest.version }} was made from older entries: prepare it again from your current ones.</p>{% endif %}
   {% if notice %}<p class="error" role="alert">{{ notice }}</p>{% endif %}
   <form method="post" action="/ready/{{ job_id }}/prepare" hx-post="/ready/{{ job_id }}/prepare" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <input type="hidden" name="back" value="job">{{ anyway }}
-    <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
+    <button type="submit" class="primary">{{ "Retry" if failed else "Prepare" }}</button>
   </form>
   {% endif %}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}

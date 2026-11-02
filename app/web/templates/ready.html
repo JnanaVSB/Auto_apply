@@ -39,7 +39,7 @@
       {% if found.writable and found.place is none %}
       <form method="post" action="/ready/{{ job.id }}/prepare">
         <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit" class="primary">{{ "Retry" if latest and latest.status in ("stopped", "by_hand") else "Prepare" }}</button>
+        <button type="submit" class="primary">{{ "Retry" if found.failed else "Prepare" }}</button>
       </form>
       {% endif %}
       {% if found.changeable and found.place is none %}<a class="button" href="/jobs/{{ job.id }}#preparation">Request changes</a>{% endif %}
