@@ -50,7 +50,7 @@ INTERRUPT = """UPDATE steps SET status = 'interrupted', cost = cost + reserved, 
     WHERE id = ?"""
 LEFT_WRITING = "SELECT id FROM preparations WHERE status = 'writing'"
 JOB_WRITING = "SELECT 1 FROM preparations WHERE job_id = ? AND status = 'writing'"
-VERSION = "SELECT job_id, kind, version, sources, draft, created_on FROM preparations WHERE id = ?"
+VERSION = "SELECT job_id, kind, version, sources, draft, created_on, wording FROM preparations WHERE id = ?"
 NOTE = "UPDATE preparations SET problem = ? WHERE id = ?"
 VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,
     coalesce(sum(coalesce(s.cost, 0) + s.reserved), 0), coalesce(max(s.id IS NOT NULL AND s.cost IS NULL), 0),
@@ -166,19 +166,24 @@ def pdf_source(conn: sqlcipher3.Connection, config: Config, preparation: int) ->
     """Where a version's tailored PDF goes, its LaTeX, and a note for the built PDF (else None). The LaTeX: your
     original fixed facts, the Writer's bullets and skills with your details put back (on this computer only), and the
     Questionnaire's contact header as it is now. A cover letter: that header, the version's date, the job, and the
-    Writer's paragraphs."""
-    job_id, kind, number, sources, draft, created_on = conn.execute(VERSION, (preparation,)).fetchone()
+    Writer's paragraphs. With no agreement and your original wording chosen, the entries the Truth checker objected to
+    keep your original wording, and a letter's objected paragraphs are left out (app/council/flow.py)."""
+    job_id, kind, number, sources, draft, created_on, wording = conn.execute(VERSION, (preparation,)).fetchone()
+    draft = json.loads(draft)
+    objected = draft.get("objected", []) if wording == "original" else []
     contact, target = questionnaire.load(conn)[0]["contact"], pdf.tailored(config.data_dir, job_id, number, kind)
     if kind == LETTER:
         title, company, _, _ = conn.execute(JOB, (job_id,)).fetchone()
         day = datetime.fromisoformat(created_on).astimezone()
-        paragraphs = json.loads(draft)["paragraphs"]
+        paragraphs = [text for number, text in enumerate(draft["paragraphs"]) if number not in objected]
         text = latex.cover_letter(contact, title, company, f"{day:%B} {day.day}, {day.year}", paragraphs)
         return target, text, None
-    found, draft = originals(conn, sources), json.loads(draft)
+    found = originals(conn, sources)
     restore, note = put_back(conn, config, found, draft, contact)
     by_id = {(entry.source, entry.tile.tile_id): entry.tile for entry in found}
-    tiles = [_tailored(by_id[(chosen["source"], chosen["tile_id"])], chosen, restore) for chosen in draft["entries"]]
+    kept = {tuple(key) for key in objected}
+    tiles = [by_id[key] if key in kept else _tailored(by_id[key], chosen, restore)
+             for chosen in draft["entries"] if (key := (chosen["source"], chosen["tile_id"]))]  # fmt: skip
     return target, latex.resume(contact, tiles), note
 
 
