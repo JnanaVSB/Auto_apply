@@ -161,7 +161,8 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
         before, answers = answers, {m: json.loads(row[1]) if row[0] == "done" else None for m, row in rows.items()}
     if waiting:
         return []
-    late = [asked for asked in json.loads(version["asked"]) if asked["on"] > written[2]]  # after this round's Writer
+    given = number > 1 or version["based_on"]  # a first draft is given none of your words: all of them are late
+    late = [asked for asked in json.loads(version["asked"]) if not given or asked["on"] > written[2]]
     if all(answer and answer["verdict"] == "approve" for answer in answers.values()) and not late:
         end(conn, preparation, "done", None, agreed=True)
         _build(conn, config, preparation)
@@ -200,7 +201,7 @@ class _Seen(NamedTuple):
             )
             entries = letter.chosen(entries, keys)
         shield = runs.shield_for(conn, config, entries, questionnaire.load(conn)[0]["contact"])
-        council = json.loads(version["council"])
+        council = json.loads(version["council"] or '{"members": {}, "names": {}}')  # NULL: Writer only (Part 4b)
         names = {member: reviewers.name(member, council["names"]) for member in council["members"]}
         return cls(
             (title, company, ", ".join(json.loads(locations)), description or ""), entries, shield,
@@ -251,6 +252,11 @@ def _review(
                             _asked(version))  # fmt: skip
     where = reviewers.places(seen.entries, seen.shield, found["draft"], seen.letter)
     skill = reviewers.instructions(member, seen.data_dir)
+    if member in reviewers.ADDED:  # your own words: through the privacy gate like everything else you write
+        try:
+            skill = seen.shield.outgoing(writer.harmless(skill))
+        except privacy.PrivacyStop as stop:
+            raise privacy.PrivacyStop(f"{stop} in the instructions of {seen.names[member]}") from None
     system, user = reviewers.request(member, skill, seen.letter, shown, previous, seen.names, seen.shield)
     return Call(version["id"], number, member, turn, seen.members[member], system, user, reviewers.SHAPE,
                 reviewers.ANSWER_LIMIT, reviewers.TIMEOUT_SECONDS,

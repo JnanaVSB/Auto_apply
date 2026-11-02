@@ -8,6 +8,7 @@ possible cost fits your limits. Busy services, expired batch requests and Ollama
 price, never a used try); a refused key pauses that service until you save the key or the settings again."""
 
 import json
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -28,9 +29,11 @@ WAITS = (5, 10, 20, 40)  # minutes a busy call waits, then an hour each time
 OLLAMA_AGAIN = timedelta(minutes=10)
 ADOPT_AFTER, GIVE_UP = timedelta(minutes=5), timedelta(hours=25)  # a batch whose id a crash lost
 REFUSED = "the answer was refused: "
+UNEXPECTED = "The council stopped on an unexpected error ({}): check it by hand, or press Retry."
 ANTHROPIC = AIRole(service="anthropic", model="batches", key_name="anthropic")  # for the batch pages: address and key
 WRITING = "SELECT id FROM preparations WHERE status = 'writing' ORDER BY automatic, created_on, id"
-HELD = "SELECT DISTINCT preparation_id FROM steps WHERE status IN ('sent', 'waiting') ORDER BY preparation_id"
+HELD = """SELECT DISTINCT s.preparation_id FROM steps s JOIN preparations p ON p.id = s.preparation_id
+    WHERE s.status IN ('sent', 'waiting') AND p.status = 'writing' ORDER BY s.preparation_id"""
 STEP = "SELECT id, tries, waits, mode FROM steps WHERE preparation_id = ? AND round = ? AND member = ? AND turn = ?"
 INSERT = """INSERT INTO steps (preparation_id, round, member, turn, service, model, mode, status, cost, reserved, day,
     sent_on) VALUES (?, ?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?)"""
@@ -90,15 +93,30 @@ def laptop_work(conn: sqlcipher3.Connection) -> bool:
 
 
 def _due(conn: sqlcipher3.Connection, config: Config, now: datetime) -> list[flow.Call]:
-    """Every call that can go now: versions' next calls (yours first, newest last), and waiting ones whose wait is
-    over."""
+    """Every call that can go now: versions' next calls (yours first, newest last), and the waiting ones of versions
+    still being written whose wait is over (a stopped version sends nothing more)."""
     calls = [call for (preparation,) in conn.execute(WRITING).fetchall()
-             for call in flow.advance(conn, config, preparation)]  # fmt: skip
+             for call in _safely(conn, config, preparation, flow.advance)]  # fmt: skip
     at = now.isoformat(timespec="seconds")
     for (preparation,) in conn.execute(HELD).fetchall():
-        calls += [call for call in flow.pending(conn, config, preparation)
+        calls += [call for call in _safely(conn, config, preparation, flow.pending)
                   if conn.execute(DUE, (_step(conn, call)[0], at)).fetchone()]  # fmt: skip
     return calls
+
+
+def _safely(
+    conn: sqlcipher3.Connection, config: Config, preparation: int,
+    find: Callable[[sqlcipher3.Connection, Config, int], list[flow.Call]],
+) -> list[flow.Call]:  # fmt: skip
+    """One version's calls. An unexpected error ends only that version, to check by hand, never the whole pass; a
+    database error is about every version, so it stops the pass (the next one is a minute later)."""
+    try:
+        return find(conn, config, preparation)
+    except sqlcipher3.Error:
+        raise
+    except Exception as error:  # a damaged or unforeseen version
+        flow.end(conn, preparation, "by_hand", UNEXPECTED.format(type(error).__name__))
+        return []
 
 
 def _open(role: AIRole, state: State, now: datetime) -> bool:
@@ -281,7 +299,7 @@ def _collect(conn: sqlcipher3.Connection, config: Config, state: State, now: dat
                     continue
                 results = anthropic.batch_results(client, ANTHROPIC, key, batch)
                 for step, preparation, round_, member, turn in conn.execute(IN_BATCH, (batch,)).fetchall():
-                    call = next((c for c in flow.pending(conn, config, preparation)
+                    call = next((c for c in _safely(conn, config, preparation, flow.pending)
                                  if (c.round, c.member, c.turn) == (round_, member, turn)), None)  # fmt: skip
                     result = results.get(f"aa-{step}", llm.Expired("Anthropic's batch had no result for it"))
                     if call is None:  # its version can't be rebuilt now (e.g. a privacy stop): kept as a failed try

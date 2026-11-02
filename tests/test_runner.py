@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import one
+from helpers import add_job, one
 from test_flow import APPROVE, GOOD, made_up_job
 from test_runs import LOCAL
 
@@ -368,6 +368,59 @@ def test_cloud_answers_are_saved_before_the_next_laptop_call(conn, data_dir, job
     flow.start(conn, config, job)
     run(conn, config)
     assert seen[1:3] == [("sent",), ("done",)]  # the Truth checker's answer saved before the laptop's next call
+
+
+def test_a_part_4b_version_left_writing_finishes_as_writer_only(conn, data_dir, job, models):
+    config = settings(data_dir)
+    old = flow.start(conn, config, job, writer_only=True)
+    with conn:
+        conn.execute("UPDATE preparations SET council = NULL WHERE id = ?", (old,))  # as the v15 upgrade keeps it
+    run(conn, config)
+    assert one(conn, "SELECT status, agreed, problem FROM preparations WHERE id = ?", old) == ("done", None, None)
+
+
+def test_an_unexpected_error_ends_only_its_own_version(conn, data_dir, job, models, batches, monkeypatch):
+    config = settings(data_dir)
+    broken, other = flow.start(conn, config, job), flow.start(conn, config, add_job(conn, "Another Job"))
+    with conn:
+        conn.execute("UPDATE preparations SET asked = 'damaged' WHERE id = ?", (broken,))
+    run(conn, config)
+    assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", broken) == (
+        "by_hand", runner.UNEXPECTED.format("JSONDecodeError"),
+    )  # fmt: skip
+    assert one(conn, "SELECT status, agreed FROM preparations WHERE id = ?", other) == ("done", 1)
+    in_batch = flow.start(conn, settings(data_dir, writer_=OPUS), add_job(conn, "A Third Job"))
+    run(conn, config)
+    with conn:
+        conn.execute("UPDATE preparations SET asked = 'damaged' WHERE id = ?", (in_batch,))
+    batches["ended"].add("b1")
+    step = one(conn, "SELECT id FROM steps WHERE preparation_id = ?", in_batch)[0]
+    batches["results"]["b1"] = {f"aa-{step}": llm.Reply(GOOD, USED)}
+    run(conn, config)  # collected: its version can't be checked, so it ends; the batch is still saved and deleted
+    assert one(conn, "SELECT status FROM preparations WHERE id = ?", in_batch)[0] == "by_hand"
+    assert one(conn, "SELECT status FROM steps WHERE id = ?", step)[0] == "failed"
+    assert one(conn, "SELECT status FROM batches")[0] == "deleted"
+    monkeypatch.setattr(flow, "advance", lambda *args: (_ for _ in ()).throw(runner.sqlcipher3.OperationalError()))
+    flow.start(conn, config, add_job(conn, "A Fourth Job"))
+    with pytest.raises(runner.sqlcipher3.OperationalError):  # about the whole database: the pass stops
+        run(conn, config)
+
+
+def test_a_stopped_version_sends_nothing_more_until_you_continue(conn, data_dir, job, models, fake_keychain):
+    calls, scripted = models
+    fake_keychain.store[(SERVICE, "openai")] = "fake-key"
+    config = settings(data_dir, writer_=SOL)
+    version = flow.start(conn, config, job)
+    scripted["writer"] = [llm.Busy("OpenAI is busy (status 429)")]
+    run(conn, config)
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'closed'")
+    run(conn, config, now=NOW + timedelta(minutes=10))
+    assert len(calls) == 1 and one(conn, STATE)[0] == "stopped" and one(conn, STEPS)[2] == "waiting"
+    with conn:  # Continue anyway
+        conn.execute("UPDATE preparations SET status = 'writing', waived = '[\"closed\"]' WHERE id = ?", (version,))
+    run(conn, config, now=NOW + timedelta(minutes=10))
+    assert calls[1]["member"] == "writer" and one(conn, STATE)[0] == "done"
 
 
 def test_a_call_a_stopped_runner_left_out_is_counted_and_sent_again(conn, data_dir, job, models):

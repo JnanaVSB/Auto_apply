@@ -268,6 +268,29 @@ def test_your_words_after_the_last_writer_add_a_round(conn, data_dir, job):
     assert (extra.round, extra.member) == (2, "writer") and "<feedback>\nMore Rust.\n</feedback>" in extra.user
 
 
+def test_your_words_before_the_first_writer_call_count_as_late(conn, data_dir, job):
+    config = settings(data_dir, rounds=1, turns=0)
+    version = flow.start(conn, config, job)
+    flow.ask(conn, version, "More Rust.")  # typed while the first call waits: a first draft is given no words
+    [first] = flow.advance(conn, config, version)
+    assert "More Rust." not in first.user
+    finish(conn, first, GOOD, sent_on="2099-01-01T00:00:00+00:00")
+    answer_all(conn, flow.advance(conn, config, version), APPROVE)
+    [extra] = flow.advance(conn, config, version)  # agreed, but your words never reached a Writer: one more round
+    assert (extra.round, extra.member) == (2, "writer") and "<feedback>\nMore Rust.\n</feedback>" in extra.user
+    finish(conn, extra, answer(("E2", [GOOD_BULLET], [])), sent_on="2099-01-01T00:00:00+00:00")
+    answer_all(conn, flow.advance(conn, config, version), APPROVE)
+    assert flow.advance(conn, config, version) == [] and one(conn, STATE)[:3] == ("done", 2, 1)  # given: not late
+    change = flow.start(conn, config, job, feedback="Shorter.")  # a change: its first call is given your words
+    flow.ask(conn, change, "Less Rust.")
+    [first] = flow.advance(conn, config, change)
+    assert "Shorter. Less Rust." in first.user
+    finish(conn, first, answer(("E2", [GOOD_BULLET], [])), sent_on="2099-01-01T00:00:00+00:00")
+    answer_all(conn, flow.advance(conn, config, change), APPROVE)
+    assert flow.advance(conn, config, change) == []
+    assert one(conn, "SELECT status, round, agreed FROM preparations WHERE id = ?", change) == ("done", 1, 1)
+
+
 def test_a_resume_over_one_page_is_flagged_to_the_reviewers(conn, data_dir, job, monkeypatch):
     config = settings(data_dir)
     monkeypatch.setattr(flow.pdf, "built", lambda target: flow.pdf.Built(2, ()))
@@ -315,6 +338,22 @@ def test_missing_instructions_or_a_privacy_stop_stop_the_version_before_sending(
     assert flow.advance(conn, settings(data_dir), change) == []
     assert one(conn, "SELECT problem FROM preparations WHERE id = ?", change)[0] == (
         "Privacy check stopped this: a phone number in your feedback. Change that, then try again."
+    )
+
+
+def test_your_own_members_instructions_pass_the_privacy_gate(conn, data_dir, job):
+    config = settings(data_dir, extra=[CustomMember(id="x1", name="Scout", role=LOCAL)])
+    (data_dir / "skills").mkdir()
+    (data_dir / "skills" / "x1.md").write_text("Alex Example wants robotics first.", encoding="utf-8")
+    version = flow.start(conn, config, job)
+    finish(conn, flow.advance(conn, config, version)[0], GOOD)
+    scout = flow.advance(conn, config, version)[-1]
+    assert scout.member == "x1" and scout.system.startswith("[ME] wants robotics first.")  # your name hidden
+    (data_dir / "skills" / "x1.md").write_text("Write to scout@example.com.", encoding="utf-8")
+    assert flow.advance(conn, config, version) == []  # before anything more is sent
+    assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == (
+        "stopped",
+        "Privacy check stopped this: an email address in the instructions of Scout. Change that, then try again.",
     )
 
 
