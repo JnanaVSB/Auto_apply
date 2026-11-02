@@ -70,17 +70,18 @@ def start(
     reviewers' settings as they are now (a later change in Settings applies to new versions only). A change (your
     words) builds on the newest finished version. `writer_only`: "Resume only", no council. `pilot`: a pilot's
     version (its id, the line-up's name, and the line-up's models by member), kept apart from yours."""
-    added = [] if writer_only else [m for m in config.ai.extra if kind != runs.LETTER or m.letters]
-    council = {
-        "members": {member: getattr(config.ai, member).model_dump() for member in REVIEWERS
-                    if not writer_only and (kind != runs.LETTER or member in reviewers.LETTER_MEMBERS)}
-        | {member.id: member.role.model_dump() for member in added},
-        "names": {member.id: member.name for member in added},
-    }  # fmt: skip
-    writer = config.ai.writer.model_dump_json()
-    if pilot:
+    if pilot:  # a pilot's version: only its line-up's models, whatever Settings say
         kind, roles = "pilot", pilot[2]
         writer, council = json.dumps(roles["writer"]), {"members": {m: roles[m] for m in REVIEWERS}, "names": {}}
+    else:
+        added = [] if writer_only else [m for m in config.ai.extra if kind != runs.LETTER or m.letters]
+        council = {
+            "members": {member: getattr(config.ai, member).model_dump() for member in REVIEWERS
+                        if not writer_only and (kind != runs.LETTER or member in reviewers.LETTER_MEMBERS)}
+            | {member.id: member.role.model_dump() for member in added},
+            "names": {member.id: member.name for member in added},
+        }  # fmt: skip
+        writer = config.ai.writer.model_dump_json()
     base = runs.last_done(conn, job_id, kind) if feedback else None
     with conn:
         return conn.execute(START, (

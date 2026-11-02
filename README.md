@@ -220,6 +220,50 @@ On the dashboard:
 ad with phrases aimed at AI screening tools ("ignore previous instructions"). The AI is always told that job ads are
 data, never instructions.
 
+## The council
+A job's resume and cover letter are written by the Writer and then checked by a council of five reviewers: the Truth
+checker (nothing made up), the Hiring manager, the Writing editor, the ATS screener and the Domain expert. You can add
+up to three members of your own with private instructions; those instructions stay in `data/skills/`. In each round
+the reviewers read the draft and may object, talk it over in a few discussion turns, and then the Writer answers every
+objection. This repeats until everyone agrees or the round limit is reached (3 by default). When they don't agree, the
+PDF keeps your original wording wherever the Truth checker objected. The job's page lets you switch to the Writer's
+wording.
+
+**Choosing the council** (Settings → Council). Pick a line-up, or set each member's model yourself:
+- **Laptop:** free. Every member runs on your graphics card through Ollama. Download the second model once:
+  ```bash
+  conda run -n ollama ollama pull qwen3.6:35b-a3b
+  ```
+- **Low, Recommended, High:** paid members on Anthropic and OpenAI. Each member shows its estimated cost per job.
+  Save the keys "anthropic" and "openai" under Settings → Writer → Keys. They are kept only in your keychain.
+  Paid calls go at half price (Anthropic batches, OpenAI Flex). When a service is busy the app waits rather than
+  paying full price, and nothing passes your daily and monthly limits.
+
+**Preparing a job.** On a ready job's page, **Prepare** runs the Writer and the council. **Resume only** runs the
+Writer alone, without reviewers. **Now, normal price** sends the rest of that one job at once, at the full price.
+The job's page shows a status line while it works, then the council's notes, with the Truth checker first. A job
+that closes, or that you mark not interested, stops; **Continue anyway** carries on from the saved steps.
+
+**Running the council.** It runs while the dashboard is open, or from a terminal:
+```bash
+python -m app.prepare
+```
+Only one of them runs it at a time. Every step is saved as it finishes, so Ctrl+C loses nothing. With **automatic
+preparation** on (Settings → Council), new ready jobs start by themselves only within your council hours
+(22:00 to 08:00 by default), up to your daily job cap (20 by default), and only when their estimated cost fits the
+money left under your limits. Laptop calls take turns with scoring on the graphics card.
+
+**Pilot** (the Pilot page). It tries several line-ups on the same jobs (up to 20; it suggests the newest ready ones,
+one per company), so you can compare them before choosing. Five of the jobs get a made-up claim slipped into the first
+draft, to count how often each line-up's Truth checker catches it. Pilot versions never become PDFs and never show as
+your versions. Mark each objection useful or not, and **Use this one** copies a result without a made-up claim into
+its job.
+
+**Usage page.** Laptop calls and cloud calls for every day, week, month and year, with tokens and dollars.
+
+The first start after updating upgrades the database once. A copy of the old one is kept next to it first
+(`data/app.db.bak-v<old version>`, still encrypted).
+
 ## Adding companies and board types
 - **Another company** on Greenhouse, Lever or Ashby: add one line to `extra_boards` in `data/config.yaml`, using the
   name from the board's web address, e.g. `greenhouse:openai` for `job-boards.greenhouse.io/openai`. Boards linked
@@ -235,6 +279,9 @@ data, never instructions.
   "auto_apply personal job search". Job descriptions are stored as plain text.
 - Scoring sends nothing anywhere: the quick check and the AI (Ollama, on this computer only) both run here. Its
   only downloads are the three public quick-check files, once, checked by their fingerprints.
+- The Laptop council sends nothing anywhere. A paid council sends the job ad and your resume and Profile text to
+  Anthropic or OpenAI, with your name and contact details replaced by placeholders first; they are put back only
+  on this computer, when the PDF is built.
 
 ## Credits
 US and foreign place names (used to decide whether a job is in the US) come from

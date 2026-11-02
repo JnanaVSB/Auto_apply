@@ -19,7 +19,7 @@ SPENT = """SELECT coalesce(sum(coalesce(cost, 0) + reserved) FILTER (WHERE day =
     coalesce(sum(coalesce(cost, 0) + reserved), 0) FROM steps WHERE substr(day, 1, 7) = ?"""
 OF_JOB = """SELECT coalesce(sum(coalesce(cost, 0) + reserved), 0), coalesce(max(cost IS NULL), 0)
     FROM steps JOIN preparations ON preparations.id = steps.preparation_id WHERE preparations.job_id = ?"""
-DAYS = """SELECT day, count(*), sum(input_tokens), sum(cached_tokens), sum(output_tokens),
+DAYS = """SELECT day, count(*), sum(service = 'ollama'), sum(input_tokens), sum(cached_tokens), sum(output_tokens),
     sum(coalesce(cost, 0) + reserved), max(cost IS NULL) FROM steps GROUP BY day ORDER BY day DESC"""
 
 
@@ -31,6 +31,7 @@ class Spent(NamedTuple):
 class Period(NamedTuple):
     start: str  # its first day: the day itself, the Monday of a week, the 1st of a month, January 1st
     calls: int  # AI calls, local and paid
+    laptop: int  # of them, on the laptop (Ollama); the rest went to a paid service or your own address
     input: int  # tokens read, at the normal price
     cached: int  # tokens read from a service's cache
     output: int  # tokens written, thinking included
@@ -102,9 +103,9 @@ def history(conn: sqlcipher3.Connection, period: str) -> list[Period]:
     never deleted, so the history goes back to the first call."""
     found: dict[str, list] = {}
     for day, *numbers in conn.execute(DAYS):
-        totals = found.setdefault(_start(day, period), [0, 0, 0, 0, 0.0, False])
-        totals[:5] = [total + number for total, number in zip(totals[:5], numbers[:5], strict=True)]
-        totals[5] = totals[5] or bool(numbers[5])
+        totals = found.setdefault(_start(day, period), [0, 0, 0, 0, 0, 0.0, False])
+        totals[:6] = [total + number for total, number in zip(totals[:6], numbers[:6], strict=True)]
+        totals[6] = totals[6] or bool(numbers[6])
     return [Period(start, *totals) for start, totals in found.items()]
 
 

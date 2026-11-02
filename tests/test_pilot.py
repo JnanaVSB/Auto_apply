@@ -164,3 +164,12 @@ def test_a_made_up_claim_is_caught_only_by_a_truth_checker_must_in_round_1(conn,
                      (version, round_, json.dumps(answer | {"verdict": "object"})))  # fmt: skip
     found = pilot.summary(conn, number, "laptop")
     assert (found["caught"], found["kept"]) == (caught, 1)  # still in the final wording here
+
+
+def test_a_pilot_runs_whatever_the_settings_say(conn, data_dir, jobs):
+    empty = Config(data_dir=data_dir)  # no Writer and no council chosen
+    number = pilot.create(conn, empty, jobs[:1], seed=1)
+    assert pilot.run(conn, empty, number, "laptop", LAPTOP) == 1
+    writer, council = one(conn, "SELECT writer, council FROM preparations")
+    assert json.loads(writer)["model"] == "gemma4:26b-a4b-it-q8_0"
+    assert json.loads(council)["members"]["truth"]["model"] == "qwen3.6:35b-a3b"

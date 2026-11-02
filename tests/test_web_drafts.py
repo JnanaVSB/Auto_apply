@@ -211,7 +211,7 @@ def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, mo
     monkeypatch.setattr(drafts.spending, "today", lambda: "2026-10-30")
     text = client.get("/usage").text
     assert "Today: $1.50 of your $15.00 daily limit." in text and "This month: $1.50 of $150.00." in text
-    assert "<td>2026-10-30</td><td>1</td>" in text and 'aria-current="page" href="/usage?by=day"' in text
+    assert "<td>2026-10-30</td><td>0</td><td>1</td>" in text and 'aria-current="page" href="/usage?by=day"' in text
     assert "<td>2026-10-26</td>" in client.get("/usage?by=week").text  # the Monday of that week
     assert "<td>2026-01-01</td>" in client.get("/usage?by=year").text
     assert 'aria-current="page" href="/usage?by=day"' in client.get("/usage?by=century").text

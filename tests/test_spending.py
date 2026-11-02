@@ -113,21 +113,23 @@ def test_the_history_shows_every_day_week_month_and_year_newest_first(conn):
         ("done", 2.00, 0, "2026-10-25", 3000, 0, 700),  # Sunday of the week before
         ("done", 0.50, 0, "2025-12-31", 4000, 0, 900),
     )
+    with conn:
+        conn.execute("UPDATE steps SET service = 'ollama' WHERE day = '2026-10-30' AND cost IS NULL")  # on the laptop
     friday, monday, sunday = (
-        (1, 1010, 100, 505, 1.00, True),
-        (1, 2000, 0, 0, 0.40, False),
-        (1, 3000, 0, 700, 2.00, False),
+        (1, 0, 1010, 100, 505, 1.00, True),
+        (1, 0, 2000, 0, 0, 0.40, False),
+        (1, 0, 3000, 0, 700, 2.00, False),
     )
     days = spending.history(conn, "day")
     assert [day.start for day in days] == ["2026-10-30", "2026-10-26", "2026-10-25", "2025-12-31"]
-    assert tuple(days[0][1:]) == (2, *friday[1:]) and tuple(days[1][1:]) == monday
+    assert tuple(days[0][1:]) == (2, 1, *friday[2:]) and tuple(days[1][1:]) == monday
     weeks = spending.history(conn, "week")
     assert [week.start for week in weeks] == ["2026-10-26", "2026-10-19", "2025-12-29"]
-    assert tuple(weeks[0][1:]) == pytest.approx((3, 3010, 100, 505, 1.40, True))
+    assert tuple(weeks[0][1:]) == pytest.approx((3, 1, 3010, 100, 505, 1.40, True))
     assert tuple(weeks[1][1:]) == sunday
     months = spending.history(conn, "month")
-    assert [(month.start, month.calls, month.uncounted) for month in months] == [
-        ("2026-10-01", 4, True), ("2025-12-01", 1, False)
+    assert [(month.start, month.calls, month.laptop, month.uncounted) for month in months] == [
+        ("2026-10-01", 4, 1, True), ("2025-12-01", 1, 0, False)
     ]  # fmt: skip
     years = spending.history(conn, "year")
     assert [(year.start, year.calls, year.output) for year in years] == [
