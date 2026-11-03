@@ -75,6 +75,29 @@ def test_values_the_dashboard_does_not_know_are_ignored():
 
 
 @pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("", []),
+        ("f=1&status=open&page=3", []),  # the first view, on another page
+        ("f=1&status=open&scoring=low&scoring=quick&sort=score",
+         ["low score", "low score (quick check)", "Sort: highest score"]),
+        ("q=robot&source=simplify%3Asummer2027&level=intern&us=unclear&check=1&remote=remote&sponsorship=offers&f=1"
+         "&status=closed&scoring=ready&odd=1&score_from=50&score_to=90&posted_from=2026-10-01&added=1&hidden=show"
+         "&sort=title",
+         ['"robot"', "Simplify summer2027", "intern", "unclear", 'only "please check location"', "remote", "offers",
+          "closed", "ready for preparation", 'only "score looks odd"', "score from 50", "score to 90",
+          "posted from 2026-10-01", "added by you only", "Not interested: shown too", "Sort: title A-Z"]),
+        ("source=greenhouse", ["Greenhouse"]),
+        ("board=greenhouse:acme", ["greenhouse:acme"]),
+        ("source=simplify", ["Simplify lists"]),
+        ("source=manual", ["Added by link"]),
+    ],
+)  # fmt: skip
+def test_the_filters_in_use_in_the_forms_own_words(address, expected):
+    assert queries.Filters.from_address(address).active() == expected
+
+
+@pytest.mark.parametrize(
     ("words", "expected"),
     [("%", ["100% remote"]), ("o'brien", ["O'Brien's ML team"]), ("ingénieur", ["Ingénieur IA"]),
      ("_", []), ("' OR 1=1 --", []), ("<b>", ["<b>Bold</b> & co"])],

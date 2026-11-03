@@ -53,6 +53,10 @@ SORTS = {
 }
 HIDDEN = {"hide": "not_interested = 0", "only": "not_interested = 1", "show": ""}
 US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
+SORT_LABELS = {"posted": "newest posted", "found": "newest found", "company": "company A-Z", "title": "title A-Z",
+               "score": "highest score"}  # fmt: skip
+HIDDEN_LABELS = {"hide": "hidden", "show": "shown too", "only": "only those"}  # the "Not interested" choices
+SOURCE_LABELS = {"simplify": "Simplify lists", **{kind: kind.title() for kind in BOARDS}, "manual": "Added by link"}
 # Only columns of the jobs_list index, so listing never reads the long descriptions.
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
@@ -171,6 +175,37 @@ class Filters:
             sort=one("sort") or cls.sort,
             page=max(1, int(page)) if PAGE_NUMBER.fullmatch(page) else 1,
         )
+
+    def active(self) -> list[str]:
+        """The filters in use, in the filter form's own words and order: everything that differs from the first view
+        except the page number (a changed sort counts)."""
+        found = [f'"{self.q}"'] if self.q else []
+        if self.source:  # as the Source list names it; a board typed in, as typed
+            kind, _, name = self.source.partition(":")
+            found.append(f"Simplify {name}" if kind == "simplify" and name else self.source if name else
+                         SOURCE_LABELS[kind])  # fmt: skip
+        found += [*self.level, *(US_LABELS[value] for value in self.us)]
+        if self.check:
+            found.append('only "please check location"')
+        found += [*self.remote, *self.sponsorship]
+        if self.status != Filters.status:
+            found += self.status
+        if self.reason:
+            found.append(f"reason: {self.reason}")
+        found += [SCORING_LABELS[value] for value in self.scoring]
+        if self.odd:
+            found.append('only "score looks odd"')
+        ranges = (("score from", self.score_from), ("score to", self.score_to), ("posted from", self.posted_from),
+                 ("posted to", self.posted_to))  # fmt: skip
+        found += [f"{words} {value}" for words, value in ranges if value]
+        found += [value for value in (self.category, self.term) if value]
+        if self.added:
+            found.append("added by you only")
+        if self.hidden != Filters.hidden:
+            found.append(f"Not interested: {HIDDEN_LABELS[self.hidden]}")
+        if self.sort != Filters.sort:
+            found.append(f"Sort: {SORT_LABELS[self.sort]}")
+        return found
 
     def address(self, **changes) -> str:
         """This view's address, with some values changed (a page, a sort)."""

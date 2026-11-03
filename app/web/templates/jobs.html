@@ -23,6 +23,9 @@
   <a href="/?f=1&amp;status=open&amp;scoring=waiting">{{ number(counts.waiting) }} not scored yet</a>.
   <span class="muted">{{ number(counts.passed) }} passed the quick check.</span></p>
 {% endif %}
+{% set active = view.active() %}
+<details class="filters-fold">
+<summary>Filters{% if active %} <span class="active">· {{ active[:4] | join(", ") }}{% if active | length > 4 %}, +{{ active | length - 4 }} more{% endif %}</span>{% endif %}</summary>
 <form method="get" action="/" class="filters">
   <input type="hidden" name="f" value="1">
   <p>
@@ -30,7 +33,7 @@
     <label>Source
       <select name="source">
         <option value="">any</option>
-        {% for value, label in [("simplify", "Simplify lists")] + BOARD_KINDS + [("manual", "Added by link")] %}
+        {% for value, label in SOURCE_LABELS.items() %}
         <option value="{{ value }}"{% if value == view.source %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
         {% for name in choices.simplify %}
@@ -65,14 +68,14 @@
     <label><input type="checkbox" name="added" value="1"{% if view.added %} checked{% endif %}> added by you only</label>
     <label>Not interested
       <select name="hidden">
-        {% for value, label in [("hide", "hidden"), ("show", "shown too"), ("only", "only those")] %}
+        {% for value, label in HIDDEN_LABELS.items() %}
         <option value="{{ value }}"{% if value == view.hidden %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
     </label>
     <label>Sort
       <select name="sort">
-        {% for value, label in [("posted", "newest posted"), ("found", "newest found"), ("company", "company A-Z"), ("title", "title A-Z"), ("score", "highest score")] %}
+        {% for value, label in SORT_LABELS.items() %}
         <option value="{{ value }}"{% if value == view.sort %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
@@ -83,6 +86,7 @@
     <a href="/">Clear filters</a>
   </p>
 </form>
+</details>
 
 <p class="summary">
   {% if page.total %}Showing {{ "{:,}".format(page.first) }}–{{ "{:,}".format(page.first + page.jobs | length - 1) }} of {{ "{:,}".format(page.total) }} jobs.{% else %}No jobs match these filters.{% endif %}

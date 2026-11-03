@@ -259,6 +259,18 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
   margin-right: var(--space-3); }
 .filters label:has(> input[type="checkbox"]) { white-space: nowrap; }
 .filters .apply { margin-top: var(--space-3); }
+/* The filters fold behind one "Filters" button, closed when a page opens; the button names the filters in use. */
+.filters-fold { margin-bottom: var(--space-4); }
+.filters-fold > summary { position: relative; min-height: var(--control);
+  padding: var(--space-2) 2.75rem var(--space-2) var(--space-4); border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--surface); cursor: pointer; list-style: none; font-weight: 600; }
+.filters-fold > summary::-webkit-details-marker { display: none; }
+.filters-fold > summary::after { content: ""; position: absolute; top: 50%; right: var(--space-4); width: 0.5rem;
+  height: 0.5rem; margin-top: -0.35rem; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); }
+.filters-fold[open] > summary::after { margin-top: -0.1rem; transform: rotate(-135deg); }
+.filters-fold .active { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+.filters-fold .filters { margin: var(--space-2) 0 0; }
 p.company { font-size: 1.1em; margin-top: -0.5rem; }
 .details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); }
 .details dt { color: var(--muted); }
@@ -276,28 +288,21 @@ td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); mar
 .reasons { margin: var(--space-1) 0; padding-left: 1.2rem; }
 
 /* ---------- Lists: one table markup, shown as a table or as cards ---------- */
-/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, the one the
-   width shows. */
+/* The list pages use the window's width beside the rail; their running text keeps a reading length. */
+main:has(.view-switch) { max-width: none; }
+main:has(.view-switch) > p { max-width: 72ch; }
+/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, Cards. */
 .view-switch { display: inline-flex; gap: 2px; margin: 0 0 var(--space-4); padding: 3px; border-radius: 999px;
   background: var(--sunken); }
 .view-switch button { border-color: transparent; background: transparent; color: var(--muted); }
 .view-switch button:hover { color: var(--text); }
-.view-switch [aria-pressed="true"], .view-switch.auto .to-table { border-color: var(--accent);
+.view-switch [aria-pressed="true"], .view-switch.auto .to-cards { border-color: var(--accent);
   background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .view-switch .now { display: none; }
-.view-switch [aria-pressed="true"] .now, .view-switch.auto .to-table .now { display: block; }
-/* Which view: Table chosen → "rows"; Cards chosen → "cards"; no choice → rows from 40rem, cards below. */
-.list-table, .list-auto { container: rows / inline-size; }
-.list-cards { container: cards / inline-size; }
-@media (width < 40rem) {
-  .list-auto { container-name: cards; }
-  .view-switch.auto .to-table { border-color: transparent; background: transparent; color: var(--muted);
-    font-weight: 600; }
-  .view-switch.auto .to-table .now { display: none; }
-  .view-switch.auto .to-cards { border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
-    font-weight: 700; }
-  .view-switch.auto .to-cards .now { display: block; }
-}
+.view-switch [aria-pressed="true"] .now, .view-switch.auto .to-cards .now { display: block; }
+/* Which view: Table chosen → "rows"; Cards chosen, or no choice yet → "cards". */
+.list-table { container: rows / inline-size; }
+.list-cards, .list-auto { container: cards / inline-size; }
 /* Cards: one card per job from the same row: title and score, company, details, labels and actions. */
 @container cards (width >= 0) {
   .jobs { display: block; overflow: visible; }

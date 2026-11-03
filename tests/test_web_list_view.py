@@ -70,3 +70,17 @@ def test_the_switch_needs_the_safety_token_and_a_known_view(client):
     assert reply.status_code == 403 and "set-cookie" not in reply.headers
     reply = switch(client, "grid")
     assert reply.status_code == 400 and "set-cookie" not in reply.headers
+
+
+def test_the_filters_fold_is_closed_and_names_the_filters_in_use(client):
+    assert '<details class="filters-fold">\n<summary>Filters</summary>' in client.get("/").text
+    text = client.get(main.LOW_SCORE).text
+    assert '<details class="filters-fold">' in text and '<details class="filters-fold" open' not in text
+    assert (
+        '<summary>Filters <span class="active">· low score, low score (quick check), Sort: highest score</span>' in text
+    )
+
+
+def test_the_fold_names_four_filters_and_counts_the_rest(client):
+    text = client.get("/?f=1&status=open&level=intern&level=mid&us=yes&remote=remote&odd=1&sort=title").text
+    assert '<span class="active">· intern, mid, US, remote, +2 more</span>' in text
