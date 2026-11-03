@@ -37,6 +37,7 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
     return {
         "base": base, "changeable": base is not None and not runs.outdated(base, current),
         "latest": latest, "failed": latest is not None and latest["status"] in runs.FAILED,
+        "alone": latest is not None and runs.alone(latest),
         "place": 0 if runs.writing(conn, job_id) else None, "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
@@ -54,6 +55,7 @@ def letter(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
     left_out = json.loads(latest["draft"]).get("objected", []) if done else []  # only after no agreement
     return {
         "latest": latest, "versions": runs.versions(conn, job_id, runs.LETTER),
+        "alone": latest is not None and runs.alone(latest),
         "paragraphs": [_parts(text, marked.get(number, set())) for number, text in enumerate(paragraphs)],
         "left_out": left_out,
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"], runs.LETTER)) if done else None,

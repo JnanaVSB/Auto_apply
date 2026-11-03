@@ -295,9 +295,13 @@ def _collect(conn: sqlcipher3.Connection, config: Config, state: State, now: dat
         with llm.connected(ANTHROPIC) as (client, key):
             _adopt(conn, client, key, now)
             for (batch,) in conn.execute("SELECT batch_id FROM batches WHERE status = 'sent'").fetchall():
-                if not anthropic.batch_ended(client, ANTHROPIC, key, batch):
+                try:
+                    if not anthropic.batch_ended(client, ANTHROPIC, key, batch):
+                        continue
+                    results = anthropic.batch_results(client, ANTHROPIC, key, batch)
+                except llm.Expired as error:  # unknown there (another key, deleted there, over 29 days): only this
+                    _gone(conn, batch, error, now)  # batch's calls go again, the others are still collected
                     continue
-                results = anthropic.batch_results(client, ANTHROPIC, key, batch)
                 for step, preparation, round_, member, turn in conn.execute(IN_BATCH, (batch,)).fetchall():
                     call = next((c for c in _safely(conn, config, preparation, flow.pending)
                                  if (c.round, c.member, c.turn) == (round_, member, turn)), None)  # fmt: skip
@@ -322,6 +326,15 @@ def _collect(conn: sqlcipher3.Connection, config: Config, state: State, now: dat
     except llm.LLMError:
         pass  # busy, expired or garbled: the next pass looks again
     return saved
+
+
+def _gone(conn: sqlcipher3.Connection, batch: str, error: llm.Expired, now: datetime) -> None:
+    """A batch Anthropic no longer has: its calls are sent again with the next batch, as an expired request is (not
+    charged, not a try, the money set aside released); the batch is written down as no longer there."""
+    with conn:
+        conn.executemany(WAIT, [(0, 1, None, str(error), step) for step, *_ in conn.execute(IN_BATCH, (batch,))])
+        conn.execute("UPDATE batches SET status = 'deleted', deleted_on = ? WHERE batch_id = ?",
+                     (now.isoformat(timespec="seconds"), batch))  # fmt: skip
 
 
 def _adopt(conn: sqlcipher3.Connection, client, key: str, now: datetime) -> None:

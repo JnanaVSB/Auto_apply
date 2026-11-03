@@ -221,6 +221,8 @@ def add_routes(
             problem = PROBLEMS[refused]
         elif not words or len(words) > MAX_FEEDBACK:
             problem = f"Type what you'd like changed (at most {MAX_FEEDBACK:,} characters)."
+        elif latest is not None and latest["status"] == "writing" and runs.alone(latest):
+            problem = runs.ALONE
         elif latest is not None and latest["status"] == "writing":
             flow.ask(conn, latest["id"], words)
             problem = None

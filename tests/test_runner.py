@@ -5,6 +5,7 @@ from concurrent.futures import Future
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from helpers import add_job, one
 from test_flow import APPROVE, GOOD, made_up_job
@@ -14,6 +15,7 @@ from app import collect, llm, score
 from app.config import AIRole, AISettings, Config, CouncilSettings, SpendingSettings
 from app.council import flow, reviewers, runner, writer
 from app.keychain import SERVICE
+from app.llm.anthropic import send_batch
 
 QWEN = AIRole(model="qwen3.6:35b-a3b")
 OPUS = AIRole(service="anthropic", model="claude-opus-5-5", key_name="anthropic")
@@ -305,6 +307,54 @@ def test_a_batch_whose_answer_was_lost_is_found_again_never_sent_twice(conn, dat
     run(conn, config, now=later + timedelta(minutes=12))
     assert one(conn, "SELECT batch_id, adopted, status FROM batches") == ("b1", 1, "deleted")
     assert batches["sent"] == [["aa-1"]] and one(conn, STATE)[0] == "done"
+
+
+def test_a_gateway_error_after_the_batch_was_made_is_found_again_never_sent_twice(conn, data_dir, job, models, batches,
+                                                                                monkeypatch):  # fmt: skip
+    config = settings(data_dir, writer_=OPUS)
+
+    def send(client, role, key, requests):  # Anthropic makes the batch, then a gateway in between answers 504
+        batches["sent"].append([request.name for request in requests])
+        with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(504))) as gateway:
+            return send_batch(gateway, role, key, requests)
+
+    monkeypatch.setattr(runner.anthropic, "send_batch", send)
+    flow.start(conn, config, job)
+    run(conn, config)
+    assert one(conn, "SELECT status, batch_id, tries FROM steps") == ("sent", None, 1)  # it may exist: looked for
+    batches["listed"] = ["b1"]
+    batches["ended"].add("b1")
+    batches["results"]["b1"] = {"aa-1": llm.Reply(GOOD, USED)}
+    run(conn, config, now=NOW + timedelta(minutes=6))
+    assert batches["sent"] == [["aa-1"]] and one(conn, "SELECT batch_id, adopted FROM batches") == ("b1", 1)
+    assert one(conn, STATE)[0] == "done"
+
+
+def test_a_batch_anthropic_no_longer_has_ends_only_itself(conn, data_dir, job, models, batches, monkeypatch):
+    config = settings(data_dir, writer_=OPUS)
+    gone = set()
+
+    def ended(client, role, key, batch):
+        if batch in gone:
+            raise llm.Expired(runner.anthropic.GONE)
+        return batch in batches["ended"]
+
+    monkeypatch.setattr(runner.anthropic, "batch_ended", ended)
+    flow.start(conn, config, job)
+    run(conn, config)
+    flow.start(conn, config, add_job(conn, "Another Job"))
+    run(conn, config)
+    assert batches["sent"] == [["aa-1"], ["aa-2"]]
+    gone.add("b1")  # unknown at Anthropic now (e.g. the key changed to another account)
+    batches["ended"].add("b2")
+    batches["results"]["b2"] = {"aa-2": llm.Reply(GOOD, USED)}
+    run(conn, config, now=NOW + timedelta(minutes=2))
+    assert batches["deleted"] == ["b2"] and one(conn, "SELECT status FROM preparations WHERE id = 2")[0] == "done"
+    assert conn.execute("SELECT batch_id, status, saved_on IS NULL FROM batches ORDER BY id").fetchall() == [
+        ("b1", "deleted", 1), ("b2", "deleted", 0), ("b3", "sent", 1),
+    ]  # fmt: skip
+    assert batches["sent"][2] == ["aa-1"]  # b1's call sent again with the next batch: not charged, not a try
+    assert one(conn, "SELECT cost, tries, waits, batch_id FROM steps WHERE id = 1") == (0, 1, 1, "b3")
 
 
 def test_a_batch_whose_delete_failed_is_deleted_at_a_later_pass(conn, data_dir, job, models, batches, monkeypatch):

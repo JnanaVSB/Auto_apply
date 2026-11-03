@@ -148,7 +148,7 @@ def test_a_job_stopped_because_your_entries_changed_starts_again(conn, data_dir,
     assert [row[0] for row in conn.execute("SELECT job_id FROM preparations WHERE automatic = 1")] == ready_jobs
 
 
-def test_resume_only_is_the_writer_alone_and_words_while_writing_wait_for_its_next_round(conn, data_dir, monkeypatch):
+def test_resume_only_is_the_writer_alone_in_one_call(conn, data_dir, monkeypatch):
     job = made_up_job(conn, data_dir)
     config = settings(data_dir)
     calls = []
@@ -157,12 +157,9 @@ def test_resume_only_is_the_writer_alone_and_words_while_writing_wait_for_its_ne
     monkeypatch.setattr(runner, "_scoring", lambda config: False)
     alone = flow.start(conn, config, job, writer_only=True)
     assert json.loads(one(conn, "SELECT council FROM preparations")[0]) == {"members": {}, "names": {}}
-    flow.ask(conn, alone, "Lead with the drone.")
     runner.run(conn, config, runner.State(), datetime.now(UTC))
-    assert one(conn, "SELECT status, agreed FROM preparations") == ("done", None) and len(calls) == 1
-    assert [item["words"] for item in json.loads(one(conn, "SELECT asked FROM preparations")[0])] == [
-        "Lead with the drone."
-    ]
+    assert one(conn, "SELECT status, agreed FROM preparations WHERE id = ?", alone) == ("done", None)
+    assert len(calls) == 1  # your words wait for it to finish: the job's box refuses them meanwhile (test_web_drafts)
 
 
 def test_the_ready_order_is_newest_first(conn, data_dir, ready_jobs):

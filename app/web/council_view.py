@@ -110,6 +110,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], scoring: Callabl
             problem = prepare.PROBLEMS[refused]
         elif not words or len(words) > prepare.MAX_FEEDBACK:
             problem = f"Type what you'd like changed (at most {prepare.MAX_FEEDBACK:,} characters)."
+        elif latest is not None and latest["status"] == "writing" and runs.alone(latest):
+            problem = runs.ALONE
         elif latest is not None and latest["status"] == "writing":
             flow.ask(conn, latest["id"], words)
             problem = None

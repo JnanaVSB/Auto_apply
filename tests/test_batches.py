@@ -73,6 +73,8 @@ def test_a_batch_is_sent_with_each_request_named_and_its_id_comes_back():
     [
         (httpx.Response(401, text=f"bad key {FAKE_KEY}"), llm.StopScoring, "refused the key"),
         (httpx.Response(529), llm.Busy, "busy or failing"),
+        (httpx.Response(429), llm.Busy, "busy or failing"),
+        (httpx.Response(504), llm.TimedOut, "answer to the batch was lost"),  # it may have been made
         (httpx.Response(400), llm.LLMError, "refused the request"),  # nothing made
         (httpx.Response(200, json={"id": "../v1/files"}), llm.TimedOut, "could not be read"),  # it may exist
         (httpx.Response(200, json={"id": None}), llm.TimedOut, "could not be read"),

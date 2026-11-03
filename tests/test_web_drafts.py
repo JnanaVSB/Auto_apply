@@ -293,6 +293,8 @@ def test_request_changes_needs_your_words(client, conn, job, words, problem):
 def test_request_changes_while_writing_is_kept_for_the_next_round_and_needs_current_entries(client, conn, job):
     version(conn, job)
     writing = version(conn, job, number=2, status="writing")
+    with conn:  # a council version: its Writer's next round takes your words
+        conn.execute("UPDATE preparations SET council = ? WHERE id = ?", (COUNCIL, writing))
     ask(client, job, "Shorter.")
     asked = json.loads(one(conn, "SELECT asked FROM preparations WHERE id = ?", writing)[0])
     assert [item["words"] for item in asked] == ["Shorter."] and client.started == []  # added, not a new version
@@ -300,6 +302,25 @@ def test_request_changes_while_writing_is_kept_for_the_next_round_and_needs_curr
         conn.execute("UPDATE preparations SET status = 'stopped' WHERE id = ?", (writing,))
     tile_sets.confirm(conn, PROFILE[:2], CHOSEN.resume)  # your entries changed
     assert "Your entries changed since version 1" in ask(client, job, "Shorter.") and client.started == []
+
+
+def test_words_while_the_writer_works_alone_are_refused_plainly(client, conn, job):
+    version(conn, job)
+    alone = version(conn, job, number=2, status="writing")
+    with conn:
+        conn.execute('UPDATE preparations SET council = \'{"members": {}, "names": {}}\' WHERE id = ?', (alone,))
+    text = client.get(f"/jobs/{job}/preparation").text  # Resume only: no words box, it has no next round
+    assert "Version 2 is the Writer alone: request changes once it is done." in text and "Your words for" not in text
+    assert "with no next round for your words" in ask(client, job, "Shorter.")  # a page from before: refused
+    letter_version(conn, job, status="writing")  # left from Part 4b: no council either
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert (
+        "Cover letter 1 is the Writer alone: request changes once it is done." in text and "Your words for" not in text
+    )
+    refused = client.post(f"/jobs/{job}/letter-changes", data={"csrf_token": csrf(client), "feedback": "Warmer."})
+    assert refused.status_code == 400 and "with no next round for your words" in refused.text
+    assert [row[0] for row in conn.execute("SELECT asked FROM preparations WHERE status = 'writing'")] == ["[]", "[]"]
+    assert client.started == []
 
 
 def test_request_changes_on_a_skipped_job_asks_first(client, conn, job):
@@ -550,7 +571,8 @@ def test_request_changes_for_a_cover_letter(client, conn, job):
     client.post(f"/jobs/{job}/letter-changes", data=form)
     assert client.started == [(job, "Warmer.")]
     with conn:
-        conn.execute("UPDATE preparations SET status = 'writing', draft = NULL WHERE kind = 'cover_letter'")
+        conn.execute("UPDATE preparations SET status = 'writing', draft = NULL, council = ? "
+                     "WHERE kind = 'cover_letter'", (COUNCIL,))  # fmt: skip
     client.post(f"/jobs/{job}/letter-changes", data=form | {"feedback": "Shorter."})
     asked = json.loads(one(conn, "SELECT asked FROM preparations WHERE kind = 'cover_letter'")[0])
     assert [item["words"] for item in asked] == ["Shorter."] and len(client.started) == 1

@@ -46,6 +46,7 @@ VERSIONS = """SELECT p.id, p.version, p.status, p.created_on, p.feedback,
 ERROR = 300  # characters of a failed try's reason kept with its step
 REPLY = 100_000  # characters of a failed try's reply kept for the Failed tries page
 NO_BASE = "There is no finished version to change yet: press Prepare first."
+ALONE = "This version is the Writer alone, with no next round for your words: request changes once it is done."
 CHANGED = "Your entries changed since version {}: press Prepare for a fresh version first, then ask for changes."
 TOO_LONG = "Too long for the model ({}): raise the working size on the Writer settings page."
 DETAIL_CHANGED = ("PDF built, but a bullet still shows {} you have changed since: update that entry on the Resume "
@@ -90,6 +91,12 @@ def failed_tries(conn: sqlcipher3.Connection, limit: int, offset: int, version: 
 def writing(conn: sqlcipher3.Connection, job_id: int) -> bool:
     """Whether a version of the job (resume or cover letter) is being written."""
     return conn.execute(JOB_WRITING, (job_id,)).fetchone() is not None
+
+
+def alone(version: dict) -> bool:
+    """Whether a version is the Writer alone ("Resume only", or one left from Part 4b): it has no next round, so words
+    sent while it is written would never reach the Writer."""
+    return not json.loads(version["council"] or "{}").get("members")
 
 
 def writable(version: dict | None, current: list[dict]) -> bool:

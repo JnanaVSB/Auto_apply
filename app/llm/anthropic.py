@@ -73,6 +73,8 @@ def send_batch(client: httpx.Client, role: AIRole, key: str, requests: list[Batc
         ]
     }  # fmt: skip
     reply = client.post(f"{role.address}/v1/messages/batches", json=body, headers=_headers(key))
+    if reply.status_code >= 500 and reply.status_code != 529:  # e.g. a gateway timing out after the batch was made
+        raise TimedOut(f"Anthropic's answer to the batch was lost (status {reply.status_code})")
     if reply.status_code != 200:
         raise refused("Anthropic", reply.status_code, role.model)
     try:

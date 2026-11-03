@@ -16,7 +16,7 @@ from keyring.errors import PasswordDeleteError
 from app import config, db, fetch, keychain
 from app.fetch import Fetcher
 from app.web import __main__ as web_command
-from app.web import main, security
+from app.web import main, preparer, security
 
 
 class MemoryKeychain(KeyringBackend):
@@ -122,8 +122,11 @@ def web():
 
 
 @pytest.fixture
-def client(data_dir, clock, web):
-    """The dashboard, not logged in, with a clock and a fake web the test controls."""
+def client(data_dir, clock, web, monkeypatch):
+    """The dashboard, not logged in, with a clock and a fake web the test controls. Its council runner never runs in
+    the background (at start-up or on a press), so it can't touch a test's data or outlive it; a test that needs a
+    pass runs one itself."""
+    monkeypatch.setattr(preparer.Preparer, "wake", lambda self: None)
     app = main.create_app(data_dir, security.Logins(clock=clock), lambda: Fetcher(httpx.MockTransport(web)))
     with TestClient(app, base_url=ADDRESS) as client:
         yield client

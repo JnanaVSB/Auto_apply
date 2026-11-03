@@ -62,7 +62,9 @@
   {% if writable and normal_cost is not none and place is none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Prepare this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
   {{ notes_of(council_notes) }}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}
-  {% if changeable or (latest and latest.status == "writing") %}
+  {% if latest and latest.status == "writing" and alone %}
+  <p class="muted">Version {{ latest.version }} is the Writer alone: request changes once it is done.</p>
+  {% elif changeable or (latest and latest.status == "writing") %}
   <form method="post" action="/jobs/{{ job_id }}/request-changes" hx-post="/jobs/{{ job_id }}/request-changes" hx-target="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>{% if latest and latest.status == "writing" %}Your words for the Writer's next round on version {{ latest.version }}{% else %}Request changes to version {{ base.version }} (your words go to the Writer with that version; the earlier one is kept){% endif %}
@@ -105,7 +107,8 @@
   {% elif found %}<p class="error" role="alert">Cover letter {{ found.version }}: {{ found.problem }}</p>
   {% endif %}
   {{ notes_of(letter_notes) }}
-  {% if found and (found.status == "writing" or found.status == "done") %}
+  {% if found and found.status == "writing" and letter.alone %}<p class="muted">Cover letter {{ found.version }} is the Writer alone: request changes once it is done.</p>
+  {% elif found and (found.status == "writing" or found.status == "done") %}
   <form method="post" action="/jobs/{{ job_id }}/letter-changes" hx-post="/jobs/{{ job_id }}/letter-changes" hx-target="#preparation" hx-select="#preparation" hx-swap="outerHTML"{{ ask }} class="stacked">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <label>{{ "Your words for the letter's next round" if found.status == "writing" else "Request changes to cover letter %s" | format(found.version) }}
