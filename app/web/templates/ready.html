@@ -2,6 +2,7 @@
 {% block title %}Ready to Apply{% endblock %}
 {% block content %}
 <h1>Ready to Apply</h1>
+{% with back = "/ready?page=" ~ listing.number %}{% include "view_switch.html" %}{% endwith %}
 <p class="hint">Open jobs scored at or above your ready threshold by your current model with your current resume, and the ones you marked "Prepare anyway"; newest first. Nothing is ever submitted from here.
   <a href="{{ view.address(page=1) }}">Filter or sort these on the Jobs page</a>.</p>
 {% if problem %}<p class="error" role="alert">{{ problem }}{% if problem.startswith("Confirm the entries") %} <a href="/resume-profile">Open the Resume Profile</a>{% endif %}</p>{% endif %}
@@ -14,19 +15,20 @@
 {% endif %}
 <p class="summary">{{ "{:,}".format(listing.total) }} job{{ "" if listing.total == 1 else "s" }} ready.</p>
 {% if listing.jobs %}
+<div class="list-{{ list_view or 'auto' }}">
 <table class="jobs">
   <thead><tr><th>Job</th><th>Posted</th><th>Score and reasons</th><th>Preparation</th><th>Cost</th><th></th></tr></thead>
   <tbody>
   {% for job in listing.jobs %}
   <tr>
-    <td><a href="/jobs/{{ job.id }}">{{ job.title }}</a><br><span class="muted">{{ job.company }}</span></td>
-    <td>{{ job.date_posted or "" }}</td>
-    <td>{% if job.score is not none %}{{ job.score }}{% endif %}
+    <td class="role"><a href="/jobs/{{ job.id }}">{{ job.title }}</a><br><span class="muted">{{ job.company }}</span></td>
+    <td class="meta date" data-label="Posted">{{ job.date_posted or "" }}</td>
+    <td class="labels" data-label="Score">{% if job.score is not none %}{{ job.score }}{% endif %}
       {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
       {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
       {% if job.reasons %}<ul class="reasons">{% for reason in job.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}</td>
     {% set found = states[job.id] %}{% set latest = found.latest %}
-    <td>{% if found.writing %}{{ found.council_status or "writing" }}…
+    <td class="state" data-label="Preparation">{% if found.writing %}{{ found.council_status or "writing" }}…
       {% elif not latest %}not started
       {% elif latest.status == "done" %}{{ "made with older entries" if found.outdated else found.council_status or "done" }}: version {{ latest.version }}
         <br>{% if found.built %}<a href="/documents/{{ job.id }}/resume-v{{ latest.version }}.pdf" target="_blank" rel="noopener">View PDF</a>{% if found.built.pages > 1 %} <span class="mark warn">{{ found.built.pages }} pages</span>{% endif %} · {% endif %}<a href="/jobs/{{ job.id }}/changes?version={{ latest.version }}">Changes</a>
@@ -34,7 +36,7 @@
       {% else %}<span class="error">{{ labels[latest.status] }}</span> <span class="muted">(version {{ latest.version }}; see the job's page)</span>{% endif %}
       <br><span class="muted">uses: {{ uses[job.id] | join(" + ") }}</span>
       {% if missing[job.id] %}<br><a class="error" href="/resume-profile">confirm first: {{ missing[job.id] | join(", ") }}</a>{% endif %}</td>
-    <td>{{ "at least " if found.cost[1] }}${{ "%.2f" | format(found.cost[0]) }}</td>
+    <td class="meta" data-label="Cost">{{ "at least " if found.cost[1] }}${{ "%.2f" | format(found.cost[0]) }}</td>
     <td class="actions">
       {% if found.writable and not found.writing %}
       <form method="post" action="/ready/{{ job.id }}/prepare">
@@ -54,6 +56,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 <nav class="pager">
   {% if listing.number > 1 %}<a href="/ready?page={{ listing.number - 1 }}">Previous</a>{% endif %}
   <span>Page {{ listing.number }} of {{ "{:,}".format(listing.pages) }}</span>

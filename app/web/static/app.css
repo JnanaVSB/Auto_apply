@@ -215,7 +215,7 @@ main th, main td { padding: var(--space-2) var(--space-3); border-bottom: 1px so
 main th { font-size: 0.8125rem; line-height: 1.45; letter-spacing: 0.01em; font-weight: 650; color: var(--muted); }
 main tr:last-child td { border-bottom: 0; }
 table.jobs th { position: sticky; top: 0; background: var(--bg); }
-table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
+table.jobs td.date { white-space: nowrap; }
 table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
 @media (width < 64rem) {
   main table { display: block; overflow-x: auto; }
@@ -223,7 +223,8 @@ table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
 .hidden-job, .hidden-job a { color: var(--muted); }
 /* Status labels: a word in a pill; a problem also gets an "!" mark, so colour is never the only sign. */
 .mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: 999px; background: var(--sunken);
-  color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em; font-weight: 600; }
+  color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em; font-weight: 600;
+  white-space: nowrap; }
 .mark.ok { background: var(--ok-soft); color: var(--ok); }
 .mark.warn { background: var(--warn-soft); color: var(--warn); }
 .mark.danger { background: var(--danger-soft); color: var(--danger); }
@@ -258,7 +259,7 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
   margin-right: var(--space-3); }
 .filters label:has(> input[type="checkbox"]) { white-space: nowrap; }
 .filters .apply { margin-top: var(--space-3); }
-.company { font-size: 1.1em; margin-top: -0.5rem; }
+p.company { font-size: 1.1em; margin-top: -0.5rem; }
 .details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); }
 .details dt { color: var(--muted); }
 .details dd { margin: 0; overflow-wrap: anywhere; }
@@ -266,9 +267,61 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 50rem; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); align-items: center;
   margin: var(--space-2) 0 var(--space-4); }
+/* In a table row the buttons sit side by side, and the cell stays a cell, so its line runs with the row. */
+td.actions { display: table-cell; margin: 0; }
+td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 var(--space-2) var(--space-2) 0;
+  vertical-align: top; }
 .counts { margin-top: -0.5rem; }
 .score-these { margin: 0 0 var(--space-3); }
 .reasons { margin: var(--space-1) 0; padding-left: 1.2rem; }
+
+/* ---------- Lists: one table markup, shown as a table or as cards ---------- */
+/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, the one the
+   width shows. */
+.view-switch { display: inline-flex; gap: 2px; margin: 0 0 var(--space-4); padding: 3px; border-radius: 999px;
+  background: var(--sunken); }
+.view-switch button { border-color: transparent; background: transparent; color: var(--muted); }
+.view-switch button:hover { color: var(--text); }
+.view-switch [aria-pressed="true"], .view-switch.auto .to-table { border-color: var(--accent);
+  background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.view-switch .now { display: none; }
+.view-switch [aria-pressed="true"] .now, .view-switch.auto .to-table .now { display: block; }
+/* Which view: Table chosen → "rows"; Cards chosen → "cards"; no choice → rows from 40rem, cards below. */
+.list-table, .list-auto { container: rows / inline-size; }
+.list-cards { container: cards / inline-size; }
+@media (width < 40rem) {
+  .list-auto { container-name: cards; }
+  .view-switch.auto .to-table { border-color: transparent; background: transparent; color: var(--muted);
+    font-weight: 600; }
+  .view-switch.auto .to-table .now { display: none; }
+  .view-switch.auto .to-cards { border-color: var(--accent); background: var(--accent-soft); color: var(--accent);
+    font-weight: 700; }
+  .view-switch.auto .to-cards .now { display: block; }
+}
+/* Cards: one card per job from the same row: title and score, company, details, labels and actions. */
+@container cards (width >= 0) {
+  .jobs { display: block; overflow: visible; }
+  .jobs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .jobs tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: var(--space-4); }
+  .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3);
+    padding: var(--space-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); }
+  .jobs .hidden-job { background: var(--bg); box-shadow: none; }
+  .jobs td { display: block; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .jobs .role { order: 1; flex: 1 1 0; min-width: 0; }
+  .jobs .role > a { font-size: 1.0625rem; font-weight: 650; }
+  .jobs tr:not(:has(> .num)) .role { flex-basis: 100%; }  /* no score beside it: the title gets the whole line */
+  .jobs .num { order: 2; font-size: 1.25rem; font-weight: 700; text-align: right; }
+  .jobs .company { order: 3; flex-basis: 100%; font-family: var(--serif); color: var(--muted); }
+  .jobs :is(.where, .meta) { order: 4; font-size: 0.875rem; }
+  .jobs :is(.labels, .state, .actions) { order: 5; flex-basis: 100%; }
+  .jobs td.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .jobs td.actions > * { margin: 0; }
+  .jobs [data-label]:empty { display: none; }
+  .jobs [data-label]::before { content: attr(data-label) " "; color: var(--muted); font-size: 0.875rem;
+    font-weight: 400; }
+}
 
 /* ---------- Preferences ---------- */
 @media (prefers-contrast: more) {

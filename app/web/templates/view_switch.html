@@ -1,0 +1,9 @@
+{# Table | Cards for the job list below, kept in this browser; `back` is this list's own address #}
+<form method="post" action="/view" class="view-switch{% if not list_view %} auto{% endif %}" aria-label="Show the list as">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="back" value="{{ back }}">
+  {% for value, word, icon in (("table", "Table", "table"), ("cards", "Cards", "layout-grid")) %}
+  <button type="submit" name="view" value="{{ value }}" class="to-{{ value }}" aria-pressed="{{ 'true' if list_view == value else 'false' }}">
+    <svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ icon }}"/></svg>{{ word }}<span class="sr-only now">, shown now</span></button>
+  {% endfor %}
+</form>

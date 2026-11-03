@@ -13,6 +13,7 @@
 {% macro number(value) %}{{ "{:,}".format(value) }}{% endmacro %}
 {% block content %}
 <h1>{{ "Low score" if low else "Jobs" }}</h1>
+{% with back = view.address(page=page.number) %}{% include "view_switch.html" %}{% endwith %}
 {% if counts.open %}
 <p class="counts">{{ number(counts.open) }} open jobs:
   <a href="/?f=1&amp;status=open&amp;scoring=ready">{{ number(counts.ready) }} ready</a> ·
@@ -98,6 +99,7 @@
 {% endif %}
 
 {% if page.jobs %}
+<div class="list-{{ list_view or 'auto' }}">
 <table class="jobs">
   <thead>
     <tr><th>Title</th><th>Company</th><th>Location</th><th>Level</th><th>Remote</th><th>US</th><th>Posted</th><th>Status</th>
@@ -106,19 +108,19 @@
   <tbody>
     {% for job in page.jobs %}
     <tr{% if job.not_interested %} class="hidden-job"{% endif %}>
-      <td><a href="/jobs/{{ job.id }}?back={{ view.address(page=page.number) | urlencode }}">{{ job.title }}</a>
+      <td class="role"><a href="/jobs/{{ job.id }}?back={{ view.address(page=page.number) | urlencode }}">{{ job.title }}</a>
         {% if job.added_by_you %}<span class="mark">added by you</span>{% endif %}
         {% if job.not_interested %}<span class="mark">not interested</span>{% endif %}</td>
-      <td>{{ job.company }}</td>
-      <td>{{ job.locations[:2] | join("; ") }}{% if job.locations | length > 2 %} <span class="muted">+{{ job.locations | length - 2 }} more</span>{% endif %}</td>
-      <td>{{ job.level }}</td>
-      <td>{{ job.remote }}</td>
-      <td>{{ US_LABELS[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
-      <td>{{ job.date_posted or "" }}</td>
-      <td>{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</td>
-      <td>{{ job.score if job.score is not none else "–" }}
+      <td class="company">{{ job.company }}</td>
+      <td class="where">{{ job.locations[:2] | join("; ") }}{% if job.locations | length > 2 %} <span class="muted">+{{ job.locations | length - 2 }} more</span>{% endif %}</td>
+      <td class="meta" data-label="Level">{{ job.level }}</td>
+      <td class="meta" data-label="Remote">{{ job.remote }}</td>
+      <td class="meta" data-label="US location">{{ US_LABELS[job.us_location] }}{% if job.check_location %} <span class="mark warn">please check</span>{% endif %}</td>
+      <td class="meta date" data-label="Posted">{{ job.date_posted or "" }}</td>
+      <td class="meta" data-label="Status">{{ job.status }}{% if job.status_reason %}: {{ job.status_reason }}{% endif %}</td>
+      <td class="num" data-label="Score">{{ job.score if job.score is not none else "–" }}
         {% if job.other %}<span class="muted">(another model: {{ job.other }})</span>{% endif %}</td>
-      <td>{{ SCORING_LABELS[job.scoring] }}
+      <td class="labels">{{ SCORING_LABELS[job.scoring] }}
         {% if job.prepare_anyway %}<span class="mark">prepare anyway</span>{% endif %}
         {% if job.odd %}<span class="mark warn">score looks odd</span>{% endif %}
         {% if job.title_only %}<span class="mark">title only</span>{% endif %}
@@ -138,6 +140,7 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if page.pages > 1 %}

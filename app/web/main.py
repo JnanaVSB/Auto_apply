@@ -7,7 +7,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
 from functools import partial
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 
 import sqlcipher3
 from fastapi import FastAPI, Request
@@ -58,6 +58,9 @@ templates.env.globals["BOARD_KINDS"] = [(kind, kind.title()) for kind in BOARDS]
 ANSWERS = ("yes", "maybe", "no", "clear")
 LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
 SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queue every job
+VIEWS = ("table", "cards")  # the job lists' two views; with no choice the stylesheet picks one by width
+VIEW_COOKIE = "auto_apply_view"  # named for this app, like the session cookie: cookies on 127.0.0.1 are shared
+LISTS = ("/", "/ready")  # the pages with the Table | Cards switch
 templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE, "SCORE_THESE": SCORE_THESE}
 
 
@@ -138,6 +141,16 @@ def create_app(
         minutes = logins.locked_minutes()
         error = f"Too many wrong passwords. Try again in {minutes} minute(s)." if minutes else "Wrong password."
         return _page(request, "login.html", 429 if minutes else 401, error=error)
+
+    @app.post("/view")
+    async def choose_view(request: Request) -> Response:
+        """Table or Cards for the job lists, kept in this browser; back to the same list, shown that way."""
+        choice = request.state.form.get("view")
+        if choice not in VIEWS:
+            raise HTTPException(400, "Choose Table or Cards.")
+        response = RedirectResponse(_in_view(request.state.form.get("back", ""), choice), 303)
+        response.set_cookie(VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True)
+        return response
 
     @app.post("/logout")
     async def log_out(request: Request) -> Response:
@@ -479,6 +492,23 @@ def _back(address: str) -> str:
     return address if address.startswith("/?") and len(address) <= 4000 else "/"
 
 
+def _in_view(address: str, choice: str) -> str:
+    """A list page shown in `choice`: only the dashboard's own list pages, else the Jobs list. The view goes in the
+    address too, so the page shows it even when the browser keeps no cookies."""
+    parts = urlsplit(address)
+    if parts.scheme or parts.netloc or parts.path not in LISTS or len(address) > 4000:
+        parts = urlsplit("/")
+    pairs = [pair for pair in parse_qsl(parts.query, keep_blank_values=True) if pair[0] != "view"]
+    return f"{parts.path}?{urlencode([*pairs, ('view', choice)])}"
+
+
+def _view(request: Request) -> str | None:
+    """The job lists' view: as the page address asks, else as this browser keeps it. None, also for an unknown or
+    damaged value, leaves it to the stylesheet (Table on wider screens, Cards on phones)."""
+    asked = (request.query_params.get("view"), request.cookies.get(VIEW_COOKIE))
+    return next((found for found in asked if found in VIEWS), None)
+
+
 def _to_job(job_id: int, form: dict[str, str]) -> Response:
     """Back to the job's page after a change, keeping the way back to the list."""
     return RedirectResponse(f"/jobs/{job_id}?back={quote(_back(form.get('back', '')), safe='')}", 303)
@@ -495,6 +525,7 @@ def _page(request: Request, name: str, status: int = 200, **values) -> HTMLRespo
     values["csrf"] = session.csrf if session else None
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
+    values["list_view"] = _view(request)
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 
