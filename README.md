@@ -292,6 +292,12 @@ The dashboard uses [HTMX](https://htmx.org) (BSD Zero-Clause licence), stored in
 from the internet: version 2.0.11, file `dist/htmx.min.js` from the npm package `htmx.org@2.0.11`, SHA-256
 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717` (a test checks it).
 
+The dashboard's fonts are [Source Sans 3](https://github.com/adobe-fonts/source-sans) (version 3.052) and
+[Source Serif 4](https://github.com/adobe-fonts/source-serif) (version 4.005) by Adobe, under the SIL Open Font License
+1.1, stored in `app/web/static/fonts/` with their licences. Its icons are 22 icons from [Lucide](https://lucide.dev)
+version 1.57.0 (ISC licence; a few come from the Feather icons, MIT licence), stored in `app/web/static/icons.svg` with
+`icons-LICENSE.txt`.
+
 Job scoring includes information from the O*NET 31.0 Database by the U.S. Department of Labor, Employment and
 Training Administration (USDOL/ETA). Used under the [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 license. O*NET® is a trademark of USDOL/ETA. auto_apply has modified all or some of this information: it uses only

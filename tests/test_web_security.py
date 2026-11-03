@@ -1,6 +1,7 @@
 """Dashboard login and safety checks, with a throwaway database, a fake clock and the fake keychain."""
 
 import hashlib
+import re
 import threading
 from contextlib import closing
 
@@ -241,3 +242,32 @@ def test_the_local_htmx_file_is_the_recorded_release():
     """README: htmx.org@2.0.11, dist/htmx.min.js. Any change to the file, by accident or not, fails here."""
     content = (main.HERE / "static" / "htmx.min.js").read_bytes()
     assert hashlib.sha256(content).hexdigest() == "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"
+
+
+def test_fonts_and_icons_are_served_with_their_licences(client):
+    static = main.HERE / "static"
+    found = re.findall(r'url\("([^"]+)"\)', (static / "app.css").read_text())
+    assert found and all((static / path).is_file() for path in found)  # every file the stylesheet asks for exists
+    for path, kind in (
+        ("fonts/SourceSans3VF-Upright.ttf.woff2", "font/woff2"),
+        ("fonts/SourceSerif4-Regular.ttf.woff2", "font/woff2"),
+        ("fonts/SourceSerif4-Semibold.ttf.woff2", "font/woff2"),
+        ("icons.svg", "image/svg+xml"),
+    ):
+        response = client.get(f"/static/{path}")
+        assert response.status_code == 200 and response.headers["content-type"] == kind
+    assert all(
+        (static / name).is_file()
+        for name in ("fonts/OFL-SourceSans3.md", "fonts/OFL-SourceSerif4.md", "icons-LICENSE.txt")
+    )
+
+
+def test_the_stored_fonts_are_the_recorded_releases():
+    """README: Source Sans 3 3.052, Source Serif 4 4.005. Any change to a font file, by accident or not, fails here."""
+    fonts = main.HERE / "static" / "fonts"
+    recorded = {
+        "SourceSans3VF-Upright.ttf.woff2": "5f16566f7a40d39b339ad26be151fa5a1ab1f0c2574c7a2e619765584a1acbd8",
+        "SourceSerif4-Regular.ttf.woff2": "6b053e98f0838afe81f3e784727be4583a7c13bb42f198dc5202ecffee0aaee0",
+        "SourceSerif4-Semibold.ttf.woff2": "457a13ac92e977d82e376038a2daac7fdb5433610910bf5787bdf6c1c3781865",
+    }
+    assert {name: hashlib.sha256((fonts / name).read_bytes()).hexdigest() for name in recorded} == recorded

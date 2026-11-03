@@ -1,59 +1,123 @@
-/* Plain, readable styles; no fonts or images from the internet. */
-:root { --text: #1d1d1f; --muted: #5f6368; --line: #d9d9de; --accent: #1a5fb4; --error: #b3261e; --bg: #fff; }
-@media (prefers-color-scheme: dark) {
-  :root { --text: #e8e8ea; --muted: #a0a0a8; --line: #3a3a40; --accent: #8ab4f8; --error: #f28b82; --bg: #18181b; }
+/* auto_apply design kit. Fonts and icons are stored in the app; nothing is loaded from the internet.
+   Colours, spacing and roundness live only in the tokens, so a second skin is a token override. */
+
+/* ---------- Fonts ---------- */
+@font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3VF-Upright.ttf.woff2") format("woff2");
+  font-weight: 200 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Source Serif 4"; src: url("fonts/SourceSerif4-Regular.ttf.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Source Serif 4"; src: url("fonts/SourceSerif4-Semibold.ttf.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap; }
+
+/* ---------- Tokens ---------- */
+:root {
+  --serif: "Source Serif 4", Georgia, serif;
+  --sans: "Source Sans 3", system-ui, sans-serif;
+
+  --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2;
+  --text: #1b2128; --muted: #56606b;
+  --line: #e1e5ea; --line-strong: #7e8894;
+  --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
+  --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e; --danger-soft: #fce9e7;
+  --highlight: #ffe58f; --on-highlight: #1b2128;  /* <mark>: highlighted words */
+  --shadow: 0 1px 2px rgb(27 33 40 / 6%), 0 4px 16px rgb(27 33 40 / 6%);
+  --shadow-raised: 0 2px 4px rgb(27 33 40 / 6%), 0 12px 32px rgb(27 33 40 / 12%);
+
+  --radius-s: 10px; --radius: 14px; --radius-l: 20px;
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
+  --tap: 3rem;           /* 48 px touch targets below 64rem */
+  --control: 2.5rem;     /* 40 px controls with a mouse */
+  --lane-min: 11rem;     /* Tracker: lanes share the width down to this, then the board scrolls inside its box */
+  color-scheme: light;
 }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111417; --surface: #1a1e23; --sunken: #22272d;
+    --text: #e6e9ed; --muted: #a1aab4;
+    --line: #2b3138; --line-strong: #6e7884;
+    --accent: #6fc8dd; --on-accent: #082029; --accent-soft: #15303a;
+    --ok: #86c98e; --ok-soft: #182a1b; --warn: #e7b565; --warn-soft: #2c2416; --danger: #f0928a; --danger-soft: #311c1a;
+    --highlight: #665214; --on-highlight: #e6e9ed;
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 35%);
+    --shadow-raised: 0 2px 4px rgb(0 0 0 / 45%), 0 12px 32px rgb(0 0 0 / 55%);
+    color-scheme: dark;
+  }
+}
+@media (width < 64rem) { :root { --control: var(--tap); } }
+
+/* ---------- Base and type ---------- */
 * { box-sizing: border-box; }
-body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--text); background: var(--bg); }
-header { border-bottom: 1px solid var(--line); padding: 0.5rem 1rem; }
-nav { display: flex; gap: 1rem; align-items: center; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 1rem;
+  line-height: 1.6; }
+h1, h2 { font-family: var(--serif); font-weight: 600; }
+h1 { margin: 0 0 var(--space-4); font-size: 2rem; line-height: 1.2; letter-spacing: -0.02em; }
+h2 { margin: var(--space-5) 0 var(--space-3); font-size: 1.25rem; line-height: 1.3; letter-spacing: -0.01em; }
+h3 { margin: var(--space-4) 0 var(--space-2); font-size: 1.0625rem; line-height: 1.35; font-weight: 600; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+mark { background: var(--highlight); color: var(--on-highlight); }
+table { font-variant-numeric: tabular-nums; }
+@media (width < 40rem) { h1 { font-size: 1.625rem; line-height: 1.25; letter-spacing: -0.015em; } }
+
+/* ---------- Today's frame (step 3 replaces it) ---------- */
+header { padding: var(--space-2) var(--space-4); background: var(--surface); border-bottom: 1px solid var(--line); }
+nav { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); align-items: center; }
 nav form { margin-left: auto; }
-main { max-width: 72rem; margin: 0 auto; padding: 1rem; }
-a { color: var(--accent); }
-button, input, select { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px;
-  background: var(--bg); color: var(--text); }
+.topbar { font-size: 0.875rem; line-height: 1.5; color: var(--muted); }
+main { max-width: 72rem; margin: 0 auto; padding: var(--space-5) var(--space-4); }
+
+/* ---------- Today's pages, in the new tokens (step 4 restyles the building blocks) ---------- */
+button, input, select, textarea { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s); background: var(--surface); color: var(--text); }
 button { cursor: pointer; }
-a.button { display: inline-block; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px;
-  color: var(--text); text-decoration: none; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
-.login { display: grid; gap: 0.5rem; max-width: 22rem; }
-.error { color: var(--error); }
-.hint { color: var(--muted); }
-.filters fieldset { display: inline-block; border: 1px solid var(--line); border-radius: 4px; margin: 0 0.5rem 0.5rem 0;
-  padding: 0.25rem 0.6rem; }
-.filters .apply { margin-top: 0.75rem; }
+a.button { display: inline-block; padding: 0.35rem 0.6rem; border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s); background: var(--surface); color: var(--text); text-decoration: none; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.login { display: grid; gap: var(--space-2); max-width: 22rem; }
+.error { color: var(--danger); }
+.hint, .summary, .muted { color: var(--muted); }
+.filters fieldset { display: inline-block; border: 1px solid var(--line); border-radius: var(--radius-s);
+  margin: 0 var(--space-2) var(--space-2) 0; padding: var(--space-1) var(--space-3); }
+.filters .apply { margin-top: var(--space-3); }
 .filters label { margin-right: 0.6rem; white-space: nowrap; }
-.summary, .muted { color: var(--muted); }
 table.jobs { width: 100%; border-collapse: collapse; }
-table.jobs th, table.jobs td { text-align: left; vertical-align: top; padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--line); }
-table.jobs th { position: sticky; top: 0; background: var(--bg); }
-.hidden-job { opacity: 0.6; }
-.mark { display: inline-block; font-size: 0.8em; padding: 0 0.35rem; border: 1px solid var(--line); border-radius: 3px;
-  color: var(--muted); }
-.mark.warn { color: var(--error); border-color: var(--error); }
-.pager { display: flex; gap: 1rem; justify-content: center; margin: 1rem 0; }
+table.jobs th, table.jobs td { text-align: left; vertical-align: top; padding: var(--space-2);
+  border-bottom: 1px solid var(--line); }
+table.jobs th { position: sticky; top: 0; background: var(--bg); color: var(--muted); font-size: 0.875rem;
+  font-weight: 650; }
 table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
+table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
+.hidden-job { opacity: 0.6; }
+.mark { display: inline-block; font-size: 0.8125rem; padding: 0 var(--space-2); border-radius: 999px;
+  background: var(--sunken); color: var(--muted); }
+.mark.warn { background: var(--danger-soft); color: var(--danger); }
+.pager { display: flex; gap: var(--space-4); justify-content: center; margin: var(--space-4) 0; }
 .company { font-size: 1.1em; margin-top: -0.5rem; }
-.details { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.details { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); }
 .details dt { color: var(--muted); }
 .details dd { margin: 0; }
 .address { word-break: break-all; user-select: all; }
 .description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 50rem; }
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-items: center; margin: 0.5rem 0 1rem; }
-.stacked { display: grid; gap: 0.5rem; max-width: 40rem; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); align-items: center;
+  margin: var(--space-2) 0 var(--space-4); }
+.stacked { display: grid; gap: var(--space-2); max-width: 40rem; }
 .stacked label { display: grid; gap: 0.2rem; }
 .stacked label.tick { display: flex; gap: 0.4rem; align-items: center; }
-.result { border-left: 3px solid var(--accent); padding: 0.25rem 0.75rem; }
-.lines { white-space: pre-wrap; background: var(--line); padding: 0.5rem 0.75rem; border-radius: 4px; max-height: 30rem;
-  overflow-y: auto; }
-textarea { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
-  color: var(--text); }
-.list-row { display: grid; grid-template-columns: 1fr max-content; gap: 0.5rem; }
+.result { border-left: 3px solid var(--accent); padding: var(--space-1) var(--space-3); }
+.lines { white-space: pre-wrap; background: var(--sunken); padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-s); max-height: 30rem; overflow-y: auto; }
+.list-row { display: grid; grid-template-columns: 1fr max-content; gap: var(--space-2); }
 form.inline { display: inline; }
-.found { border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.75rem; margin: 0.5rem 0; }
+.found { border: 1px solid var(--line); border-radius: var(--radius-s); padding: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0; }
 .counts { margin-top: -0.5rem; }
-.score-these { margin: 0 0 0.75rem; }
-.reasons { margin: 0.25rem 0; padding-left: 1.2rem; }
-table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-mark { background: #ffe58f; color: #1d1d1f; }
+.score-these { margin: 0 0 var(--space-3); }
+.reasons { margin: var(--space-1) 0; padding-left: 1.2rem; }
+
+/* ---------- Preferences ---------- */
+@media (prefers-contrast: more) {
+  :root { --line: var(--line-strong); }
+}
