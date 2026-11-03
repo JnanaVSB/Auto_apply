@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from app.config import REVIEWERS, ConfigError, load_config
+from app.config import ConfigError, load_config
 from app.council import estimate, flow, reviewers, runs, spending
 from app.documents import pdf, privacy
 from app.resume import CONTROL, ResumeError
@@ -31,8 +31,8 @@ def topbar(conn: sqlcipher3.Connection) -> dict | None:
         return None
     turns, found = config.council.turns, spending.spent(conn, spending.today())
     members = [("Writer", "writer", config.ai.writer)] + [
-        (reviewers.MEMBERS[member][0], member, getattr(config.ai, member)) for member in REVIEWERS
-    ] + [(added.name, added.id, added.role) for added in config.ai.extra]  # fmt: skip
+        (reviewers.name(member, config.ai.names), member, role) for member, role in config.ai.members.items()
+    ]
     rows = [{"name": name, "role": role, "at3": estimate.member(conn, member, role, 3, turns, half=True),
              "at5": estimate.member(conn, member, role, 5, turns, half=True)}
             for name, member, role in members if role]  # fmt: skip

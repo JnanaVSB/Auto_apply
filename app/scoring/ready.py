@@ -1,4 +1,4 @@
-"""Which jobs are ready for preparation, in one place for every page and (from Phase 4c) the council's queue: a job
+"""Which jobs are ready for preparation, in one place for every page and automatic preparation (Phase 4c): a job
 you marked "Prepare anyway", or one scored at or above the ready threshold by the chosen model with your current
 resume on the ad as it is now. Money is only ever spent on jobs judged against your current resume."""
 
@@ -10,28 +10,18 @@ READY = "jobs.prepare_anyway OR (s.score >= chosen.threshold AND s.resume = chos
 STATUS = f"""CASE WHEN {READY} THEN 'ready' WHEN s.score >= chosen.threshold THEN 'waiting'
     WHEN s.score IS NOT NULL THEN 'low' WHEN s.failed IS NOT NULL THEN 'failed' WHEN a.passed = 0 THEN 'quick'
     ELSE 'waiting' END"""
-# A job that can be prepared and stays in the queue: still open and not skipped. Skip keeps the Prepare date, so Undo
-# puts the job back where it was; the council's queue (Phase 4c) reads the queue only through queued().
+# A job that can be prepared: still open and not skipped. Skip keeps the Prepare date, so Undo puts it back as it was.
 PREPARABLE = "status = 'open' AND not_interested = 0"
 QUEUE = (
     "UPDATE jobs SET prepare_requested_on = ? WHERE id = ? AND prepare_requested_on IS NULL"  # noqa: S608 (fixed text)
     f" AND {PREPARABLE}"
 )
-QUEUED = (
-    "SELECT id FROM jobs WHERE prepare_requested_on IS NOT NULL"  # noqa: S608 (fixed text)
-    f" AND {PREPARABLE} ORDER BY prepare_requested_on, id"
-)
 
 
 def queue(conn: sqlcipher3.Connection, job_id: int, now: str) -> bool:
-    """You pressed Prepare: the job goes first in the Writer's queue. Pressing it again changes nothing."""
+    """You pressed Prepare: the job's Prepare date is kept (its box shows it). Pressing it again changes nothing."""
     with conn:
         return conn.execute(QUEUE, (now, job_id)).rowcount == 1
-
-
-def queued(conn: sqlcipher3.Connection) -> list[int]:
-    """The jobs waiting for preparation, first pressed first; a closed or skipped job is never among them."""
-    return [job_id for (job_id,) in conn.execute(QUEUED)]
 
 
 NEWEST = f"""WITH chosen (model, threshold, resume) AS (SELECT ?, ?, ?)

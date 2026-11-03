@@ -74,13 +74,10 @@ def start(
         kind, roles = "pilot", pilot[2]
         writer, council = json.dumps(roles["writer"]), {"members": {m: roles[m] for m in REVIEWERS}, "names": {}}
     else:
-        added = [] if writer_only else [m for m in config.ai.extra if kind != runs.LETTER or m.letters]
-        council = {
-            "members": {member: getattr(config.ai, member).model_dump() for member in REVIEWERS
-                        if not writer_only and (kind != runs.LETTER or member in reviewers.LETTER_MEMBERS)}
-            | {member.id: member.role.model_dump() for member in added},
-            "names": {member.id: member.name for member in added},
-        }  # fmt: skip
+        letters = {*reviewers.LETTER_MEMBERS, *(added.id for added in config.ai.extra if added.letters)}
+        members = {} if writer_only else {member: role.model_dump() for member, role in config.ai.members.items()
+                                          if kind != runs.LETTER or member in letters}  # fmt: skip
+        council = {"members": members, "names": {m: name for m, name in config.ai.names.items() if m in members}}
         writer = config.ai.writer.model_dump_json()
     base = runs.last_done(conn, job_id, kind) if feedback else None
     with conn:
@@ -201,7 +198,7 @@ class _Seen(NamedTuple):
             )
             entries = letter.chosen(entries, keys)
         shield = runs.shield_for(conn, config, entries, questionnaire.load(conn)[0]["contact"])
-        council = json.loads(version["council"] or '{"members": {}, "names": {}}')  # NULL: Writer only (Part 4b)
+        council = runs.council(version["council"])
         names = {member: reviewers.name(member, council["names"]) for member in council["members"]}
         return cls(
             (title, company, ", ".join(json.loads(locations)), description or ""), entries, shield,

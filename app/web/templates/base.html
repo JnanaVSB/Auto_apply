@@ -30,15 +30,16 @@
         <button type="submit">Log out</button>
       </form>
     </nav>
-    {% if topbar %}
-    <details class="topbar"><summary>Line-up: {{ topbar.tier }}{% if topbar.per_job is not none %} (up to ${{ "%.2f" | format(topbar.per_job) }} per job){% endif %}
-      · Today ${{ "%.2f" | format(topbar.today) }} of ${{ "%.2f" | format(topbar.daily) }} · This month ${{ "%.2f" | format(topbar.month) }} of ${{ "%.2f" | format(topbar.monthly) }}
-      · Scoring: laptop, free{% if topbar.paused %} · <span class="error">{{ topbar.paused }}</span>{% endif %}</summary>
+    {% set bar = topbar() if topbar %}
+    {% if bar %}
+    <details class="topbar"><summary>Line-up: {{ bar.tier }}{% if bar.per_job is not none %} (up to ${{ "%.2f" | format(bar.per_job) }} per job){% endif %}
+      · Today ${{ "%.2f" | format(bar.today) }} of ${{ "%.2f" | format(bar.daily) }} · This month ${{ "%.2f" | format(bar.month) }} of ${{ "%.2f" | format(bar.monthly) }}
+      · Scoring: laptop, free{% if bar.paused %} · <span class="error">{{ bar.paused }}</span>{% endif %}</summary>
       <table><thead><tr><th>Member</th><th>Model</th><th>Per job, 3 rounds</th><th>5 rounds</th></tr></thead><tbody>
-      {% for row in topbar.rows %}<tr><td>{{ row.name }}</td><td>{{ row.role.model }} ({{ "laptop" if row.role.service == "ollama" else row.role.service }})</td>
+      {% for row in bar.rows %}<tr><td>{{ row.name }}</td><td>{{ row.role.model }} ({{ "laptop" if row.role.service == "ollama" else row.role.service }})</td>
         {% for cost in (row.at3, row.at5) %}<td>{% if cost is none %}no estimate{% elif cost == 0 %}free{% else %}${{ "%.2f" | format(cost) }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
       </tbody></table>
-      <p>{% if topbar.per_job is not none %}Per job: up to ${{ "%.2f" | format(topbar.per_job) }} (3 rounds), ${{ "%.2f" | format(topbar.per_job5) }} (5 rounds); a month at your daily job cap: up to ${{ "%.2f" | format(topbar.per_month) }}. {% endif %}Spent this month: ${{ "%.2f" | format(topbar.month) }}. <a href="/settings/council">Council settings</a></p>
+      <p>{% if bar.per_job is not none %}Per job: up to ${{ "%.2f" | format(bar.per_job) }} (3 rounds), ${{ "%.2f" | format(bar.per_job5) }} (5 rounds); a month at your daily job cap: up to ${{ "%.2f" | format(bar.per_month) }}. {% endif %}Spent this month: ${{ "%.2f" | format(bar.month) }}. <a href="/settings/council">Council settings</a></p>
     </details>
     {% endif %}
   </header>

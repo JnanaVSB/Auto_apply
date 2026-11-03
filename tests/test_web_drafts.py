@@ -14,7 +14,7 @@ from test_writer import PROFILE
 from app import config, questionnaire
 from app.documents import pdf, tile_sets
 from app.resume import RESUME_FILE
-from app.web import drafts, main, prepare, queries
+from app.web import council_view, drafts, main, prepare, queries
 
 DRAFT = {
     "entries": [
@@ -578,6 +578,15 @@ def test_request_changes_for_a_cover_letter(client, conn, job):
     assert [item["words"] for item in asked] == ["Shorter."] and len(client.started) == 1
     assert "Type what you&#39;d like changed" in client.post(f"/jobs/{job}/letter-changes",
                                                              data=form | {"feedback": " "}).text  # fmt: skip
+
+
+def test_the_top_bar_is_worked_out_only_for_pages_that_show_it(client, job, monkeypatch):
+    made = []
+    monkeypatch.setattr(council_view, "topbar", made.append)
+    client.get(f"/jobs/{job}/preparation")  # the box, redrawn every 3 seconds while a version is written
+    assert made == []
+    client.get("/ready")
+    assert len(made) == 1
 
 
 def test_the_top_bar_shows_the_line_up_spend_and_a_pause(client, conn, job, data_dir):

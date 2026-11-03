@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import questionnaire
-from app.config import REVIEWERS, AIRole, Config, ConfigError, SpendingSettings, load_config
+from app.config import Config, ConfigError, SpendingSettings, load_config
 from app.council import estimate, flow, reviewers, runs, spending, writer
 from app.documents import pdf, privacy
 from app.resume import ResumeError
@@ -21,16 +21,13 @@ from app.web import queries
 
 STEPS = "SELECT round, member, turn, status, answer, mode, retry_after FROM steps WHERE preparation_id = ?"
 
-SPENT = "SELECT coalesce(sum(coalesce(cost, 0) + reserved), 0) FROM steps WHERE preparation_id = ?"
-
 DOUBT = {flow.CLOSED: "closed", flow.SKIPPED: "skipped"}  # a version stopped for this can continue anyway
 SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each the Usage page lists; None: all
 
 
 def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
     """What the Ready page and the job's box show: the newest version (and whether it failed), whether one is being
-    written (place 0), what
-    the PDF build found, the cost so far, and whether Prepare would write a new version."""
+    written, what the PDF build found, the cost so far, and whether Prepare would write a new version."""
     latest, current = runs.latest(conn, job_id), runs.current(conn, job_id)
     done = latest is not None and latest["status"] == "done"
     base = latest if done else runs.last_done(conn, job_id)
@@ -38,7 +35,7 @@ def state(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict:
         "base": base, "changeable": base is not None and not runs.outdated(base, current),
         "latest": latest, "failed": latest is not None and latest["status"] in runs.FAILED,
         "alone": latest is not None and runs.alone(latest),
-        "place": 0 if runs.writing(conn, job_id) else None, "outdated": done and runs.outdated(latest, current),
+        "writing": runs.writing(conn, job_id), "outdated": done and runs.outdated(latest, current),
         "built": pdf.built(pdf.tailored(data_dir, job_id, latest["version"])) if done else None,
         "cost": spending.of_job(conn, job_id), "writable": runs.writable(latest, current),
         "council_status": status(conn, latest, _rounds()),
@@ -183,7 +180,7 @@ def status(conn: sqlcipher3.Connection, version: dict | None, rounds: int) -> st
     """The line the Ready page and the box show for a version being written or done (None: as before)."""
     if version is None or version["status"] not in ("writing", "done"):
         return None
-    members = json.loads(version["council"] or '{"members": {}}')["members"]
+    members = runs.council(version["council"])["members"]
     if version["status"] == "done":
         return {1: "council agreed", 0: "no agreement: see the job"}.get(version["agreed"], "Writer only (no council)")
     if (version["problem"] or "").startswith(("Paused", "Waiting")):
@@ -199,8 +196,7 @@ def status(conn: sqlcipher3.Connection, version: dict | None, rounds: int) -> st
 def notes(conn: sqlcipher3.Connection, version: dict | None) -> dict | None:
     """A version's council notes from its last round: each member's verdict and objections with the votes on them
     (the Truth checker first), the Writer's replies, what it left unanswered and what the app renumbered."""
-    council = json.loads((version or {}).get("council") or '{"members": {}, "names": {}}')
-    if not council["members"]:
+    if version is None or not (council := runs.council(version["council"]))["members"]:
         return None
     rows = conn.execute(STEPS, (version["id"],)).fetchall()
     last = max((row[0] for row in rows), default=1)
@@ -248,18 +244,13 @@ def council(conn: sqlcipher3.Connection, job_id: int) -> dict:
 def _normal(conn: sqlcipher3.Connection, config: Config, latest: dict | None) -> float | None:
     """What the rest of the job would cost at the normal price: the version being written less what it has spent, or
     a whole new version with today's members."""
+    rounds, turns = config.council.rounds, config.council.turns
     try:
         if latest and latest["status"] == "writing":
-            writer = AIRole(**json.loads(latest["writer"]))
-            council = json.loads(latest["council"] or '{"members": {}}')
-            members = {name: AIRole(**role) for name, role in council["members"].items()}
-            spent = conn.execute(SPENT, (latest["id"],)).fetchone()[0]
-        else:
-            members = {m: getattr(config.ai, m) for m in REVIEWERS} | {a.id: a.role for a in config.ai.extra}
-            writer, spent = config.ai.writer, 0
+            return estimate.left(conn, latest["id"], latest["writer"], latest["council"], rounds, turns, half=False)
+        writer, members = config.ai.writer, config.ai.members
         if writer is None or None in members.values():
             return None
-        full = estimate.version(conn, writer, members, config.council.rounds, config.council.turns, half=False)
+        return estimate.version(conn, writer, members, rounds, turns, half=False)
     except (TypeError, ValueError):
         return None
-    return None if full is None else max(full - spent, 0)

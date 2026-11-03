@@ -10,6 +10,8 @@ import time
 from contextlib import closing
 from datetime import datetime
 
+import sqlcipher3
+
 from app import collect, db
 from app.config import ConfigError, load_config
 from app.council import automatic, runner
@@ -50,7 +52,7 @@ def one_pass(config, state: runner.State) -> str:
         return f"{now} {error}"
     except ConfigError as error:
         return f"{now} The settings can't be read: {error}"
-    except (db.DatabaseError, OSError) as error:
+    except (db.DatabaseError, sqlcipher3.Error, OSError) as error:
         return f"{now} {db.error_line(error)}"
     parts = [f"{saved} answers saved", f"{working} versions working", f"{at_anthropic} calls at Anthropic",
              f"{waits} calls waiting"]  # fmt: skip

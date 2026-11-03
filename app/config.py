@@ -193,6 +193,16 @@ class AISettings(BaseModel):
         """Whether the Writer and all five reviewers are chosen."""
         return self.writer is not None and all(getattr(self, member) for member in REVIEWERS)
 
+    @property
+    def members(self) -> dict[str, AIRole | None]:
+        """The council's members by id, besides the Writer: the five reviewers, then the members you added."""
+        return {member: getattr(self, member) for member in REVIEWERS} | {added.id: added.role for added in self.extra}
+
+    @property
+    def names(self) -> dict[str, str]:
+        """The names of the members you added, by id."""
+        return {added.id: added.name for added in self.extra}
+
 
 class SpendingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)

@@ -77,7 +77,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         if council["automatic"]:
             try:
                 config = load_config()
-                roles = [config.ai.writer, *(getattr(config.ai, member) for member in REVIEWERS)]
+                roles = [config.ai.writer, *config.ai.members.values()]  # the members you added too
                 missing = None if None in roles else automatic.missing_key(roles)
             except ConfigError:
                 missing = None
@@ -174,9 +174,7 @@ def _view(request: Request, page, problem: str | None = None, typed: dict | None
     except ConfigError as error:
         return page(request, "council_settings.html", file_problem=str(error))
     keys, council = saved_keys(), config.council
-    names = {added.id: added.name for added in config.ai.extra}
-    roles = {member: getattr(config.ai, member) for member in MEMBERS} | {added.id: added.role
-                                                                          for added in config.ai.extra}  # fmt: skip
+    names, roles = config.ai.names, {"writer": config.ai.writer} | config.ai.members
     conn = request.app.state.conn
     rows = [{
         "member": member, "name": "Writer" if member == "writer" else reviewers.name(member, names), "role": role,

@@ -86,7 +86,7 @@ def recover(conn: sqlcipher3.Connection) -> None:
 def laptop_work(conn: sqlcipher3.Connection) -> bool:
     """Whether a version being written uses a model on this computer: automatic scoring then waits (owner)."""
     for found in conn.execute(LAPTOP):
-        roles = [json.loads(found[0]), *json.loads(found[1] or '{"members": {}}')["members"].values()]
+        roles = [json.loads(found[0]), *runs.council(found[1])["members"].values()]
         if any(role.get("service", "ollama") == "ollama" for role in roles):
             return True
     return False

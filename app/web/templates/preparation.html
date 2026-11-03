@@ -1,4 +1,4 @@
-{% set working = place is not none or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
+{% set working = writing or (latest and latest.status == "writing") or (letter.latest and letter.latest.status == "writing") %}
 {% set ask %}{% if doubts %} hx-confirm="{{ confirm }}" hx-vals='{{ {"anyway": doubts | join(" ")} | tojson }}'{% endif %}{% endset %}{# the browser's pop-up: only its OK sends "proceed anyway" (a press without the page's script is refused) #}
 {% macro button(action, label, confirm="", fields={}) %}<form method="post" action="/jobs/{{ job_id }}/{{ action }}" hx-post="/jobs/{{ job_id }}/{{ action }}" hx-target="#preparation" hx-select="#preparation" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %} class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
@@ -19,7 +19,7 @@
 {% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
-  {% if place == 0 or (place is none and working) %}
+  {% if working %}
   <p role="status">{{ council_status or "The Writer is working on it" }} (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
   {% if latest and latest.status == "writing" and latest.mode == "half" and normal_cost is not none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Send the rest of this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
   {% elif latest and latest.status == "done" and not outdated %}
@@ -59,7 +59,7 @@
   </form>
   {% endif %}
   {% if doubt %}{{ button("continue", "Continue anyway", "Carry on with version %s from where it stopped?" | format(latest.version)) }}{% endif %}
-  {% if writable and normal_cost is not none and place is none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Prepare this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
+  {% if writable and normal_cost is not none and not writing %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Prepare this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
   {{ notes_of(council_notes) }}
   {% if prepare_problem %}<p class="error" role="alert">{{ prepare_problem }}</p>{% endif %}
   {% if latest and latest.status == "writing" and alone %}

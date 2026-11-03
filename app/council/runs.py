@@ -93,10 +93,16 @@ def writing(conn: sqlcipher3.Connection, job_id: int) -> bool:
     return conn.execute(JOB_WRITING, (job_id,)).fetchone() is not None
 
 
+def council(recorded: str | None) -> dict:
+    """The members a version recorded when it started, as saved: {"members": {id: model settings}, "names": {id:
+    name}} (the names of the members you added). None, a version left from Part 4b, is the Writer alone."""
+    return json.loads(recorded or '{"members": {}, "names": {}}')
+
+
 def alone(version: dict) -> bool:
     """Whether a version is the Writer alone ("Resume only", or one left from Part 4b): it has no next round, so words
     sent while it is written would never reach the Writer."""
-    return not json.loads(version["council"] or "{}").get("members")
+    return not council(version["council"])["members"]
 
 
 def writable(version: dict | None, current: list[dict]) -> bool:

@@ -7,7 +7,7 @@ from test_web_settings import ORIGINAL
 from app import config
 from app.config import load_config
 from app.keychain import SERVICE
-from app.web import council_settings, writer_settings
+from app.web import actions, council_settings, writer_settings
 
 DOWNLOADED = ["gemma4:26b-a4b-it-q8_0", "qwen3.6:35b-a3b"]
 
@@ -110,6 +110,19 @@ def test_automatic_preparation_needs_the_paid_members_keys(client, settings_file
     assert "needs the key &#39;anthropic&#39; saved first" in post(client, "/settings/council", **form).text
     fake_keychain.store[(SERVICE, "anthropic")] = "fake-key"
     fake_keychain.store[(SERVICE, "openai")] = "fake-key"
+    post(client, "/settings/council", **form)
+    assert load_config(settings_file).council.automatic
+
+
+def test_automatic_preparation_needs_the_keys_of_the_members_you_added_too(client, settings_file, fake_keychain):
+    post(client, "/settings/council/preset", preset="laptop")
+    post(client, "/settings/council/members", name="Recruiter", instructions="Read it as a recruiter.")
+    claude = {"service": "anthropic", "model": "claude-opus-5-5", "key_name": "anthropic"}
+    actions.update_settings(lambda old: old | {"ai": old["ai"] | {"extra": [old["ai"]["extra"][0] | {"role": claude}]}})
+    form = {"rounds": "3", "turns": "1", "start": "22:00", "end": "08:00", "daily_jobs": "20", "automatic": "on"}
+    assert "needs the key &#39;anthropic&#39; saved first" in post(client, "/settings/council", **form).text
+    assert not load_config(settings_file).council.automatic
+    fake_keychain.store[(SERVICE, "anthropic")] = "fake-key"
     post(client, "/settings/council", **form)
     assert load_config(settings_file).council.automatic
 

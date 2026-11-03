@@ -3,13 +3,12 @@ newest first, never more than the daily job cap, and only while a job's estimate
 fits what is left of today's and this month's limits after what is spent, set aside and still to come for the jobs
 already running. Only jobs never prepared, or stopped because your entries changed; your own presses always go."""
 
-import json
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import sqlcipher3
 
-from app.config import OPENAI_HOST, REVIEWERS, AIRole, Config
+from app.config import OPENAI_HOST, AIRole, Config
 from app.council import estimate, flow, runs, spending
 from app.documents import writer_sources
 from app.keychain import KeychainError, get_secret
@@ -19,7 +18,6 @@ from app.scoring import ready
 CANDIDATES = 200  # ready jobs looked at per pass, newest first
 RECENT = "SELECT job_id, created_on FROM preparations WHERE kind != 'pilot' AND created_on >= ?"
 RUNNING = "SELECT id, writer, council, mode FROM preparations WHERE status = 'writing'"
-SPENT = "SELECT coalesce(sum(coalesce(cost, 0) + reserved), 0) FROM steps WHERE preparation_id = ?"
 
 
 def start_due(conn: sqlcipher3.Connection, config: Config, now: datetime | None = None) -> str | None:
@@ -30,7 +28,7 @@ def start_due(conn: sqlcipher3.Connection, config: Config, now: datetime | None 
         return None
     if not council.any_time and not _in_hours(now.strftime("%H:%M"), council.start, council.end):
         return f"Automatic preparation waits for the council hours ({council.start} to {council.end})."
-    members = {m: getattr(config.ai, m) for m in REVIEWERS} | {added.id: added.role for added in config.ai.extra}
+    members = config.ai.members
     if missing := missing_key([config.ai.writer, *members.values()]):
         return f"Automatic preparation waits: no key is saved under '{missing}' (Settings)."
     try:
@@ -87,10 +85,6 @@ def _started_today(conn: sqlcipher3.Connection, now: datetime) -> int:
 
 def _coming(conn: sqlcipher3.Connection, config: Config) -> float:
     """What the versions still running may yet cost: each one's estimate less what it has spent so far."""
-    total = 0.0
-    for preparation, writer, council, mode in conn.execute(RUNNING).fetchall():
-        members = {name: AIRole(**role) for name, role in json.loads(council or '{"members": {}}')["members"].items()}
-        full = estimate.version(conn, AIRole(**json.loads(writer)), members, config.council.rounds,
-                                config.council.turns, mode == "half")  # fmt: skip
-        total += max((full or 0) - conn.execute(SPENT, (preparation,)).fetchone()[0], 0)
-    return total
+    rounds, turns = config.council.rounds, config.council.turns
+    return sum(estimate.left(conn, preparation, writer, council, rounds, turns, mode == "half") or 0
+               for preparation, writer, council, mode in conn.execute(RUNNING).fetchall())  # fmt: skip

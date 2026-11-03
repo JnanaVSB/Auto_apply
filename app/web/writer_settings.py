@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import llm
-from app.config import OPENAI_HOST, REVIEWERS, AIRole, Config, ConfigError, load_config
+from app.config import OPENAI_HOST, AIRole, Config, ConfigError, load_config
 from app.council import reviewers
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
 from app.llm import ollama, prices
@@ -93,15 +93,13 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 def _member(request: Request, config: Config) -> str:
     """Which member the page chooses a model for: the Writer, a reviewer, or a member you added (else not found)."""
     member = request.query_params.get("member") or getattr(request.state, "form", {}).get("member") or "writer"
-    if member not in ("writer", *REVIEWERS, *(added.id for added in config.ai.extra)):
+    if member not in ("writer", *config.ai.members):
         raise HTTPException(404)
     return member
 
 
 def _role_of(config: Config, member: str) -> AIRole | None:
-    if member.startswith("x"):
-        return next(added.role for added in config.ai.extra if added.id == member)
-    return getattr(config.ai, member)
+    return config.ai.writer if member == "writer" else config.ai.members[member]
 
 
 def _with(ai: dict, member: str, role: dict) -> dict:
@@ -192,7 +190,7 @@ async def _view(
         return page(request, "writer_settings.html", file_problem=str(error))
     member = _member(request, config)
     writer, evaluator, keys = _role_of(config, member), config.ai.evaluator, saved_keys()
-    name = reviewers.name(member, {added.id: added.name for added in config.ai.extra}) if member != "writer" else ""
+    name = reviewers.name(member, config.ai.names) if member != "writer" else ""
     local_scorer = evaluator.service == "ollama"
     warnings = [
         SWAP if writer and writer.service == "ollama" and local_scorer

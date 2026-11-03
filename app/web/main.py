@@ -5,6 +5,7 @@ import logging
 import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
+from functools import partial
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -485,7 +486,8 @@ def _to_login(request: Request) -> Response:
 def _page(request: Request, name: str, status: int = 200, **values) -> HTMLResponse:
     session = getattr(request.state, "session", None)
     values["csrf"] = session.csrf if session else None
-    values["topbar"] = council_view.topbar(request.app.state.conn) if session else None
+    # worked out only by a page that shows it (base.html), never by the boxes it redraws
+    values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 

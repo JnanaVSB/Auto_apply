@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.config import PROJECT_DIR, ConfigError, load_config
+from app.config import PROJECT_DIR, AIRole, AISettings, ConfigError, CustomMember, load_config
 
 FAKE_VALUE = "fake-private-value-123"
 
@@ -261,6 +261,14 @@ def test_added_members_have_their_own_id_name_and_model(tmp_path):
     ):
         with pytest.raises(ConfigError, match=problem):
             load_config(write(tmp_path, f"data_dir: data\nai:\n  extra:\n{added}"))
+
+
+def test_the_council_members_are_the_five_reviewers_then_the_ones_you_added():
+    laptop = AIRole(model="gemma4:26b-a4b-it-q8_0")
+    ai = AISettings(truth=laptop, extra=[CustomMember(id="x2", name="Recruiter", role=laptop)])
+    assert list(ai.members) == ["truth", "hiring", "editor", "ats", "domain", "x2"]
+    assert ai.members["truth"] == ai.members["x2"] == laptop and ai.members["hiring"] is None
+    assert ai.names == {"x2": "Recruiter"} and AISettings().names == {}
 
 
 @pytest.mark.parametrize(

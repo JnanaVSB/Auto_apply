@@ -115,12 +115,11 @@ def test_skipping_a_queued_job_takes_it_out_of_the_queue_and_undo_puts_it_back(c
     confirm_tiles(conn)
     press(client, jobs["Fresh"])
     press(client, jobs["Anyway"])
-    assert ready.queued(conn) == [jobs["Fresh"], jobs["Anyway"]]
     press(client, jobs["Fresh"], "skip", value="1")
-    assert ready.queued(conn) == [jobs["Anyway"]]
     assert "kept out of the queue. Your Prepare press of" in client.get(f"/jobs/{jobs['Fresh']}/preparation").text
     press(client, jobs["Fresh"], "skip", value="0")
-    assert ready.queued(conn) == [jobs["Fresh"], jobs["Anyway"]]
+    assert one(conn, "SELECT prepare_requested_on IS NOT NULL, not_interested FROM jobs WHERE id = ?",
+               jobs["Fresh"]) == (1, 0)  # its Prepare date kept  # fmt: skip
 
 
 @pytest.mark.parametrize("number", ["9" * 5000, "²", "0", "-1"])
@@ -187,9 +186,6 @@ def test_a_skipped_closed_or_not_ready_job_asks_first_and_can_proceed_anyway(cli
 def test_a_closed_job_is_never_queued_even_without_the_page(conn, jobs):
     assert not ready.queue(conn, jobs["Gone"], "now")
     assert one(conn, "SELECT prepare_requested_on FROM jobs WHERE id = ?", jobs["Gone"]) == (None,)
-    with conn:  # queued before it closed: out of the queue
-        conn.execute("UPDATE jobs SET prepare_requested_on = 'earlier' WHERE id = ?", (jobs["Gone"],))
-    assert ready.queued(conn) == []
 
 
 def test_a_job_can_use_its_own_sources_and_prepare_needs_them_all_confirmed(client, conn, jobs):
@@ -278,6 +274,8 @@ def test_the_box_says_what_the_writer_is_doing_and_keeps_itself_up_to_date(clien
         )  # fmt: skip
     text = client.get(f"/jobs/{ready_job}/preparation").text
     assert "Writer writing (version 9)" in text and 'hx-trigger="every 3s"' in text
+    listed = client.get("/ready").text
+    assert "Writer writing…" in listed and ">Prepare</button>" not in listed  # being written: no second press
     with conn:
         conn.execute("DELETE FROM preparations")
         conn.execute(

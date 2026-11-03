@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+import sqlcipher3
 from helpers import add_job, one
 from test_flow import GOOD, made_up_job
 from test_runs import LOCAL
@@ -73,6 +74,36 @@ def test_after_twenty_finished_versions_your_own_averages_are_used(conn, data_di
                          "cost, day, sent_on) VALUES (?, 'anthropic', 'claude-opus-5-5', 'done', 1000, 100, 0, 'd', "
                          "'now')", (prep,))  # fmt: skip
     assert estimate.version(conn, OPUS, {}, 1, 0, half=True) == pytest.approx((1000 * 2 + 100 * 10) / 1e6)
+
+
+def test_a_member_s_own_averages_are_looked_up_once_per_estimate(conn):
+    asked = []
+    conn.set_trace_callback(asked.append)
+    estimate.member(conn, "truth", SOL, 5, 3, half=True)  # 20 calls
+    conn.set_trace_callback(None)
+    assert sum("avg(" in sql for sql in asked) == 1
+
+
+def test_what_a_running_version_may_still_cost_is_its_estimate_less_what_it_spent(conn, data_dir):
+    job, writer = made_up_job(conn, data_dir), OPUS.model_dump_json()
+    council = json.dumps({"members": {"truth": SOL.model_dump()}, "names": {}})
+    with conn:
+        found = conn.execute("INSERT INTO preparations (job_id, kind, version, sources, writer, council, status, "
+                             "created_on) VALUES (?, 'resume', 1, '[]', ?, ?, 'writing', 'now')",
+                             (job, writer, council)).lastrowid  # fmt: skip
+        conn.executemany("INSERT INTO steps (preparation_id, member, service, model, status, cost, reserved, day, "
+                         "sent_on) VALUES (?, ?, 'anthropic', 'm', ?, ?, ?, 'd', 'now')",
+                         [(found, "writer", "done", 0.05, 0), (found, "truth", "sent", None, 0.02)])  # fmt: skip
+    full = estimate.version(conn, OPUS, {"truth": SOL}, 3, 1, half=True)
+    assert estimate.left(conn, found, writer, council, 3, 1, half=True) == pytest.approx(full - 0.07)
+    assert estimate.left(conn, found + 1, writer, None, 3, 1, half=True) == pytest.approx(
+        estimate.version(conn, OPUS, {}, 3, 1, half=True)
+    )  # recorded before the council (Part 4b): the Writer alone, nothing spent yet
+    with conn:
+        conn.execute("UPDATE steps SET cost = 100 WHERE status = 'done'")
+    assert estimate.left(conn, found, writer, council, 3, 1, half=True) == 0  # never below 0
+    own = AIRole(service="openai-compatible", model="m", address="https://models.example.org/v1").model_dump_json()
+    assert estimate.left(conn, found, own, council, 3, 1, half=True) is None  # no price: can't be estimated
 
 
 def test_automatic_preparation_starts_ready_jobs_newest_first_within_the_daily_cap(conn, data_dir, ready_jobs):
@@ -183,3 +214,12 @@ def test_a_terminal_pass_says_what_it_did_in_one_line(conn, data_dir, monkeypatc
     monkeypatch.setattr(prepare, "load_config", lambda: config)
     line = prepare.one_pass(config, runner.State())
     assert line.endswith("0 answers saved; 0 versions working; 0 calls at Anthropic; 0 calls waiting")
+
+
+def test_a_database_error_in_a_terminal_pass_is_one_line(data_dir, monkeypatch):
+    config = settings(data_dir, automatic_=False)
+    monkeypatch.setattr(prepare, "load_config", lambda: config)
+    locked = sqlcipher3.OperationalError("database is locked")
+    monkeypatch.setattr(prepare.runner, "run", lambda conn, config, state: (_ for _ in ()).throw(locked))
+    line = prepare.one_pass(config, runner.State())
+    assert line.endswith(" Error: the database could not be read or written (database is locked).")
