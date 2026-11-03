@@ -89,7 +89,7 @@
   <dt>Skills</dt><dd>{{ scoring.shared_skills | length }} of the job's {{ scoring.job_skills }} are on your resume
     {%- if scoring.shared_skills %} ({{ scoring.shared_skills | join(", ") }}){% endif %}</dd>
   <dt>Meaning match</dt><dd>{{ "%.2f" | format(scoring.meaning) }} <span class="muted">(0 to 1)</span></dd>
-  {% if scoring.trick %}<dt>Aimed at AI tools</dt><dd><span class="mark warn">score looks odd</span> the ad says "{{ scoring.trick }}"</dd>{% endif %}
+  {% if scoring.trick %}<dt>Aimed at AI tools</dt><dd><span class="mark danger">score looks odd</span> the ad says "{{ scoring.trick }}"</dd>{% endif %}
   <dt>Checked</dt><dd>{{ scoring.checked_on[:10] }}</dd>
 </dl>
 {% else %}

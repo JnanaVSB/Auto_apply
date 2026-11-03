@@ -85,7 +85,7 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .rail { --floor: 2.25rem; position: sticky; top: 0; height: 100dvh; overflow-y: auto; display: flex;
   flex-direction: column; gap: 2px; padding: var(--space-2);
   padding-left: calc(var(--space-2) + env(safe-area-inset-left));
-  background: var(--surface); border-right: 1px solid var(--line); }
+  background: var(--surface); border-right: 1px solid var(--line); scrollbar-width: thin; }
 .brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; margin: 0 auto var(--space-2);
   border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: 0.875rem;
   font-weight: 700; }
@@ -111,7 +111,7 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .rail .nav-group li:first-child { margin-top: var(--space-1); }
 .rail .nav-group a, .rail .logout button { flex: 1; flex-direction: column; justify-content: center; gap: 0.125rem;
   min-height: 0; padding: 0 var(--space-1); text-align: center; font-size: 0.75rem; line-height: 1.15;
-  font-weight: 600; }
+  font-weight: 600; white-space: nowrap; }
 .rail .nav-group a[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--accent); }
 @media (pointer: coarse) {
   .rail { --floor: 2.75rem; }
@@ -168,51 +168,104 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
   main { padding: var(--space-5) var(--space-4) 3rem; }
 }
 
-/* ---------- Today's pages, in the new tokens (step 4 restyles the building blocks) ---------- */
-button, input, select, textarea { font: inherit; padding: 0.35rem 0.6rem; border: 1px solid var(--line-strong);
-  border-radius: var(--radius-s); background: var(--surface); color: var(--text); }
-button { cursor: pointer; }
-a.button { display: inline-block; padding: 0.35rem 0.6rem; border: 1px solid var(--line-strong);
-  border-radius: var(--radius-s); background: var(--surface); color: var(--text); text-decoration: none; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.login { display: grid; gap: var(--space-2); max-width: 22rem; }
-.error { color: var(--danger); }
-.hint, .summary, .muted { color: var(--muted); }
-.filters fieldset { display: inline-block; border: 1px solid var(--line); border-radius: var(--radius-s);
-  margin: 0 var(--space-2) var(--space-2) 0; padding: var(--space-1) var(--space-3); }
-.filters .apply { margin-top: var(--space-3); }
-.filters label { margin-right: 0.6rem; white-space: nowrap; }
-table.jobs { width: 100%; border-collapse: collapse; }
-table.jobs th, table.jobs td { text-align: left; vertical-align: top; padding: var(--space-2);
-  border-bottom: 1px solid var(--line); }
-table.jobs th { position: sticky; top: 0; background: var(--bg); color: var(--muted); font-size: 0.875rem;
-  font-weight: 650; }
+/* ---------- Controls ---------- */
+button, .button, input, select, textarea { font: inherit; color: var(--text); }
+button, .button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  min-height: var(--control); padding: 0 1.125rem; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); font-weight: 600; line-height: 1.25; text-decoration: none; cursor: pointer;
+  transition: background-color 120ms ease-out, transform 100ms ease-out; }
+button:hover, .button:hover { background: var(--sunken); }
+button:active, .button:active { transform: scale(0.97); }
+:is(button, .button).primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+:is(button, .button).primary:hover { background: var(--accent); filter: brightness(1.08); }
+:is(button, .button).quiet { border-color: transparent; background: transparent; color: var(--accent); }
+:is(button, .button).quiet:hover { background: var(--accent-soft); }
+:is(button, .button).danger { border-color: var(--danger); color: var(--danger); }
+/* The chosen one of a set (answer key, usage period): tinted, bold and outlined, not colour alone. */
+button[aria-pressed="true"], .button[aria-current] { border-color: var(--accent); background: var(--accent-soft);
+  color: var(--accent); font-weight: 700; }
+button:disabled { border-color: var(--line); background: var(--sunken); color: var(--muted); cursor: not-allowed;
+  transform: none; filter: none; }
+input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea { max-width: 100%;
+  min-height: var(--control); padding: 0 var(--space-3); border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s); background: var(--surface); }
+textarea { width: 100%; padding: var(--space-2) var(--space-3); line-height: 1.5; resize: vertical; }
+input[type="checkbox"], input[type="radio"] { width: 1.125rem; height: 1.125rem; margin: 0; vertical-align: -0.2em;
+  accent-color: var(--accent); }
+input[type="file"] { max-width: 100%; }
+:disabled { cursor: not-allowed; }
+::placeholder { color: var(--muted); opacity: 1; }
+.stacked { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); max-width: 40rem;
+  overflow-wrap: anywhere; }
+.stacked label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem; font-size: 0.875rem;
+  font-weight: 600; }
+.stacked label :is(input, select, textarea) { font-size: 1rem; font-weight: 400; }
+.stacked label.tick { display: flex; gap: var(--space-2); align-items: center; font-size: 1rem; font-weight: 400; }
+.login { display: grid; gap: var(--space-2); }
+.list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--space-2); }
+.list-row input { width: 100%; }
+form.inline { display: inline; }
+
+/* ---------- Containers ---------- */
+/* Tables: hairline rows; the job list's header row stays in view. Below 64rem a table too wide for its box scrolls
+   sideways inside its own box (the page never does); there the header row stays at the top of the table. */
+main table { width: 100%; border-collapse: collapse; }
+main th, main td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); text-align: left;
+  vertical-align: top; }
+main th { font-size: 0.8125rem; line-height: 1.45; letter-spacing: 0.01em; font-weight: 650; color: var(--muted); }
+main tr:last-child td { border-bottom: 0; }
+table.jobs th { position: sticky; top: 0; background: var(--bg); }
 table.jobs td:nth-child(7) { white-space: nowrap; }  /* the date posted */
 table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
-.hidden-job { opacity: 0.6; }
-.mark { display: inline-block; font-size: 0.8125rem; padding: 0 var(--space-2); border-radius: 999px;
-  background: var(--sunken); color: var(--muted); }
-.mark.warn { background: var(--danger-soft); color: var(--danger); }
-.pager { display: flex; gap: var(--space-4); justify-content: center; margin: var(--space-4) 0; }
+@media (width < 64rem) {
+  main table { display: block; overflow-x: auto; }
+}
+.hidden-job, .hidden-job a { color: var(--muted); }
+/* Status labels: a word in a pill; a problem also gets an "!" mark, so colour is never the only sign. */
+.mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: 999px; background: var(--sunken);
+  color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em; font-weight: 600; }
+.mark.ok { background: var(--ok-soft); color: var(--ok); }
+.mark.warn { background: var(--warn-soft); color: var(--warn); }
+.mark.danger { background: var(--danger-soft); color: var(--danger); }
+.mark:is(.warn, .danger)::before { content: "!" / ""; display: inline-grid; place-items: center; width: 1.1em;
+  height: 1.1em; margin-right: 0.3em; border-radius: 50%; color: var(--surface);
+  font-size: 0.85em; font-weight: 800; vertical-align: 0.05em; }
+.mark.warn::before { background: var(--warn); }
+.mark.danger::before { background: var(--danger); }
+div.mark { display: block; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); color: var(--text);
+  font-size: inherit; line-height: inherit; letter-spacing: normal; font-weight: inherit; }
+mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a second sign besides the colour */
+/* Notices */
+.error { color: var(--danger); }
+.hint, .summary, .muted { color: var(--muted); }
+.result { padding: var(--space-2) var(--space-3); border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-s) var(--radius-s) 0; background: var(--accent-soft); }
+.found { margin: var(--space-4) 0; padding: var(--space-4) var(--space-5); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.lines { max-height: 30rem; overflow-y: auto; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
+  background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; line-height: 1.5; }
+.pager { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); justify-content: center;
+  align-items: center; margin: var(--space-4) 0; }
+.pager a { display: inline-flex; align-items: center; min-height: var(--control); }
+.filters { margin-bottom: var(--space-5); padding: var(--space-4); background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius); }
+.filters p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3); }
+.filters fieldset { display: inline-block; min-width: 0; max-width: 100%; margin: 0 var(--space-2) var(--space-2) 0;
+  padding: var(--space-1) var(--space-3) var(--space-2); border: 1px solid var(--line);
+  border-radius: var(--radius-s); }
+.filters label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); max-width: 100%;
+  margin-right: var(--space-3); }
+.filters label:has(> input[type="checkbox"]) { white-space: nowrap; }
+.filters .apply { margin-top: var(--space-3); }
 .company { font-size: 1.1em; margin-top: -0.5rem; }
-.details { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); }
+.details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); }
 .details dt { color: var(--muted); }
-.details dd { margin: 0; }
+.details dd { margin: 0; overflow-wrap: anywhere; }
 .address { word-break: break-all; user-select: all; }
 .description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 50rem; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); align-items: center;
   margin: var(--space-2) 0 var(--space-4); }
-.stacked { display: grid; gap: var(--space-2); max-width: 40rem; }
-.stacked label { display: grid; gap: 0.2rem; }
-.stacked label.tick { display: flex; gap: 0.4rem; align-items: center; }
-.result { border-left: 3px solid var(--accent); padding: var(--space-1) var(--space-3); }
-.lines { white-space: pre-wrap; background: var(--sunken); padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-s); max-height: 30rem; overflow-y: auto; }
-.list-row { display: grid; grid-template-columns: 1fr max-content; gap: var(--space-2); }
-form.inline { display: inline; }
-.found { border: 1px solid var(--line); border-radius: var(--radius-s); padding: var(--space-1) var(--space-3);
-  margin: var(--space-2) 0; }
 .counts { margin-top: -0.5rem; }
 .score-these { margin: 0 0 var(--space-3); }
 .reasons { margin: var(--space-1) 0; padding-left: 1.2rem; }
@@ -223,6 +276,8 @@ form.inline { display: inline; }
 }
 @media (prefers-reduced-motion: reduce) {
   .sheet { animation: none; }
+  button, .button { transition: none; }
+  button:active, .button:active { transform: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .dock > summary { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
