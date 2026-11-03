@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   {# HTMX without anything the safety rules forbid; it keeps no copies of pages in the browser's storage #}
   <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "selfRequestsOnly": true, "historyCacheSize": 0}'>
   <title>{% block title %}Jobs{% endblock %} · auto_apply</title>
@@ -10,42 +10,90 @@
   <script src="/static/htmx.min.js" defer></script>
 </head>
 <body{% if csrf %} hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% endif %}>
-  {% if csrf %}
-  <header>
-    <nav>
-      <a href="/">Jobs</a>
-      <a href="{{ LOW_SCORE }}">Low score</a>
-      <a href="/add">Add</a>
-      <a href="/boards">Boards</a>
-      <a href="/collect">Collect</a>
-      <a href="/answer-key">Answer key</a>
-      <a href="/questionnaire">Questionnaire</a>
-      <a href="/resume-profile">Resume Profile</a>
-      <a href="/ready">Ready to Apply</a>
-      <a href="/usage">Usage</a>
-      <a href="/pilot">Pilot</a>
-      <a href="/settings">Settings</a>
-      <form method="post" action="/logout">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}">
-        <button type="submit">Log out</button>
-      </form>
+  {% set framed = csrf and not bare %}{# error.html sets bare: a problem page is a lone card #}
+  {% if framed %}
+  {# The menu, written once: rail on wider screens, panel on phones. `at`: the address's first word that marks a
+     link as the current page (default: its own); the Low score tab is the Jobs page saying `low`. #}
+  {% set groups = [
+    ("Find jobs", [
+      {"href": "/", "word": "Jobs", "icon": "briefcase", "at": ["", "jobs"]},
+      {"href": LOW_SCORE, "word": "Low score", "icon": "trending-down", "at": ["low score"]},
+      {"href": "/add", "word": "Add", "icon": "plus"},
+      {"href": "/collect", "word": "Collect", "icon": "download"},
+      {"href": "/boards", "word": "Boards", "icon": "globe"},
+    ]),
+    ("Prepare", [
+      {"href": "/ready", "word": "Ready", "rest": " to Apply", "name": "Ready to Apply", "icon": "send"},
+      {"href": "/resume-profile", "word": "Resume", "rest": " Profile", "name": "Resume Profile", "icon": "file-text"},
+      {"href": "/questionnaire", "word": "Questions", "rest": " (Questionnaire)", "name": "Questionnaire",
+       "icon": "clipboard-list"},
+    ]),
+    ("Track", [
+      {"href": "/usage", "word": "Usage", "icon": "chart-column", "at": ["usage", "failed-tries"]},
+    ]),
+    ("Setup", [
+      {"href": "/settings", "word": "Settings", "icon": "settings"},
+      {"href": "/answer-key", "word": "Answers", "rest": " (Answer key)", "name": "Answer key", "icon": "key-round"},
+      {"href": "/pilot", "word": "Pilot", "icon": "flask-conical"},
+    ]),
+  ] %}
+  {# The current page: the address's first word ("" for /, "settings" for /settings/council), or "low score" #}
+  {% set here = "low score" if low else request.url.path.split("/")[1] %}
+  {% set now = namespace(href=none, group="", page="") %}
+  {% for group, links in groups %}{% for link in links if here in (link.at or [link.href[1:]]) %}
+    {% set now.href = link.href %}{% set now.group = group %}{% set now.page = link.name or link.word %}
+  {% endfor %}{% endfor %}
+  {% macro icon(name) %}<svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ name }}"/></svg>{% endmacro %}
+  {% macro menu(rail) %}
+    {% for group, links in groups %}
+    <div class="nav-group">
+      <p class="nav-title{% if rail %} sr-only{% endif %}">{{ group }}</p>
+      <ul>
+        {% for link in links %}
+        <li><a href="{{ link.href }}"{% if link.href == now.href %} aria-current="page"{% endif %}{% if rail %} title="{{ link.name or link.word }}"{% endif %}>{{ icon(link.icon) }}
+          {%- if rail %}{{ link.word }}{% if link.rest %}<span class="sr-only">{{ link.rest }}</span>{% endif %}{% else %}{{ link.name or link.word }}{% endif %}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+    <form class="logout" method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <button type="submit" class="quiet">{{ icon("log-out") }}Log out</button>
+    </form>
+  {% endmacro %}
+  <a class="skip" href="#main">Skip to the page</a>
+  <div class="app">
+    <nav class="rail" aria-label="Pages">
+      <span class="brand-mark" aria-hidden="true">aa</span>
+      {{ menu(rail=true) }}
     </nav>
-    {% set bar = topbar() if topbar %}
-    {% if bar %}
-    <details class="topbar"><summary>Line-up: {{ bar.tier }}{% if bar.per_job is not none %} (up to ${{ "%.2f" | format(bar.per_job) }} per job){% endif %}
-      · Today ${{ "%.2f" | format(bar.today) }} of ${{ "%.2f" | format(bar.daily) }} · This month ${{ "%.2f" | format(bar.month) }} of ${{ "%.2f" | format(bar.monthly) }}
-      · Scoring: laptop, free{% if bar.paused %} · <span class="error">{{ bar.paused }}</span>{% endif %}</summary>
-      <table><thead><tr><th>Member</th><th>Model</th><th>Per job, 3 rounds</th><th>5 rounds</th></tr></thead><tbody>
-      {% for row in bar.rows %}<tr><td>{{ row.name }}</td><td>{{ row.role.model }} ({{ "laptop" if row.role.service == "ollama" else row.role.service }})</td>
-        {% for cost in (row.at3, row.at5) %}<td>{% if cost is none %}no estimate{% elif cost == 0 %}free{% else %}${{ "%.2f" | format(cost) }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
-      </tbody></table>
-      <p>{% if bar.per_job is not none %}Per job: up to ${{ "%.2f" | format(bar.per_job) }} (3 rounds), ${{ "%.2f" | format(bar.per_job5) }} (5 rounds); a month at your daily job cap: up to ${{ "%.2f" | format(bar.per_month) }}. {% endif %}Spent this month: ${{ "%.2f" | format(bar.month) }}. <a href="/settings/council">Council settings</a></p>
-    </details>
-    {% endif %}
-  </header>
+    <div class="content">
+      <details class="dock">
+        <summary>
+          <span class="dock-where"><span class="caption">{{ now.group }}</span><strong>{{ now.page }}</strong></span>
+          <span class="dock-button">{{ icon("menu") }}<span class="when-closed">Menu</span><span class="when-open">Close</span></span>
+        </summary>
+        <nav class="sheet" aria-label="Pages">{{ menu(rail=false) }}</nav>
+      </details>
+      {% set bar = topbar() if topbar %}
+      {% if bar %}
+      <details class="topbar"><summary>Line-up: {{ bar.tier }}{% if bar.per_job is not none %} (up to ${{ "%.2f" | format(bar.per_job) }} per job){% endif %}
+        · Today ${{ "%.2f" | format(bar.today) }} of ${{ "%.2f" | format(bar.daily) }} · This month ${{ "%.2f" | format(bar.month) }} of ${{ "%.2f" | format(bar.monthly) }}
+        · Scoring: laptop, free{% if bar.paused %} · <span class="error">{{ bar.paused }}</span>{% endif %}</summary>
+        <table><thead><tr><th>Member</th><th>Model</th><th>Per job, 3 rounds</th><th>5 rounds</th></tr></thead><tbody>
+        {% for row in bar.rows %}<tr><td>{{ row.name }}</td><td>{{ row.role.model }} ({{ "laptop" if row.role.service == "ollama" else row.role.service }})</td>
+          {% for cost in (row.at3, row.at5) %}<td>{% if cost is none %}no estimate{% elif cost == 0 %}free{% else %}${{ "%.2f" | format(cost) }}{% endif %}</td>{% endfor %}</tr>{% endfor %}
+        </tbody></table>
+        <p>{% if bar.per_job is not none %}Per job: up to ${{ "%.2f" | format(bar.per_job) }} (3 rounds), ${{ "%.2f" | format(bar.per_job5) }} (5 rounds); a month at your daily job cap: up to ${{ "%.2f" | format(bar.per_month) }}. {% endif %}Spent this month: ${{ "%.2f" | format(bar.month) }}. <a href="/settings/council">Council settings</a></p>
+      </details>
+      {% endif %}
   {% endif %}
-  <main>
+  <main id="main">
     {% block content %}{% endblock %}
   </main>
+  {% if framed %}
+    </div>
+  </div>
+  {% endif %}
 </body>
 </html>
