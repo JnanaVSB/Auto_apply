@@ -109,6 +109,13 @@ def create_app(
                     "Try again; if it keeps happening, restart the dashboard.",
                 )
         response.headers.update(security.SAFETY_HEADERS)
+        # public font files: kept a day, not re-sent per page
+        if (
+            request.url.path.startswith("/static/")
+            and request.url.path.endswith(".woff2")
+            and response.status_code in (200, 304)
+        ):
+            response.headers["Cache-Control"] = "private, max-age=86400"
         return response
 
     @app.get("/login")

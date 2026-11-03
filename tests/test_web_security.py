@@ -271,3 +271,10 @@ def test_the_stored_fonts_are_the_recorded_releases():
         "SourceSerif4-Semibold.ttf.woff2": "457a13ac92e977d82e376038a2daac7fdb5433610910bf5787bdf6c1c3781865",
     }
     assert {name: hashlib.sha256((fonts / name).read_bytes()).hexdigest() for name in recorded} == recorded
+
+
+def test_only_the_font_files_may_be_kept_by_the_browser(client):
+    font = client.get("/static/fonts/SourceSerif4-Regular.ttf.woff2")
+    assert font.headers["Cache-Control"] == "private, max-age=86400"
+    for path in ("/static/app.css", "/login", "/static/fonts/missing.woff2"):
+        assert client.get(path).headers["Cache-Control"] == "no-store"
