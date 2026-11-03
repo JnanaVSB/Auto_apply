@@ -109,6 +109,7 @@ def test_every_page_has_the_safety_headers(client):
     for response in (client.get("/login"), client.get("/", follow_redirects=False), client.get("/nowhere")):
         policy = response.headers["Content-Security-Policy"]
         assert "default-src 'none'" in policy and "script-src 'self'" in policy and "frame-ancestors 'none'" in policy
+        assert "font-src 'self';" in policy
         assert response.headers["Referrer-Policy"] == "same-origin"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
 
