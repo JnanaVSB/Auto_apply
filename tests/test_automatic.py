@@ -29,6 +29,12 @@ def built(monkeypatch):
     monkeypatch.setattr(flow.pdf, "build_kept", lambda data_dir, target, source: None)  # never Tectonic here
 
 
+@pytest.fixture(autouse=True)
+def tonight(monkeypatch):
+    """New versions are stamped NIGHT, the time the tests give automatic preparation, instead of the real time."""
+    monkeypatch.setattr(flow, "_now", lambda: NIGHT.astimezone(UTC).isoformat(timespec="seconds"))
+
+
 def settings(data_dir, writer=LOCAL, reviewer=LOCAL, automatic_=True, daily_jobs=20, daily=15, **council):
     return Config(
         data_dir=data_dir, ai=AISettings(writer=writer, **dict.fromkeys(MEMBERS, reviewer)),
