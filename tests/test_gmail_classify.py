@@ -60,7 +60,8 @@ def test_the_preview_is_read_as_gmail_sends_it_html_escaped():
 @pytest.mark.parametrize(
     "domain, found",
     [("greenhouse.io", True), ("us.greenhouse.io", True), ("evilgreenhouse.io", False),
-     ("greenhouse.io.example.com", False), ("us.greenhouse-mail.io", False), ("", False)],
+     ("greenhouse.io.example.com", False), ("us.greenhouse-mail.io", True), ("greenhouse-mail.io.example", False),
+     ("", False)],
 )  # fmt: skip
 def test_a_job_system_is_its_own_domain_or_under_it_never_a_lookalike(domain, found):
     assert job_system(domain) is found
@@ -144,14 +145,14 @@ REVIEW_EMAILS = [
     ("o3", ACME, "We regret to inform you that we have to rescind the offer letter", "", "unclear"),
     ("o4", ACME, "After meeting many other candidates, we are pleased to offer you the role", "", "offer"),
     ("r1", GH, "Your application", "we have decided not to move forward with your application", "rejection"),
-    ("r2", ACME, "We have decided to go in a different direction", "", "other"),
+    ("r2", ACME, "We have decided to go in a different direction", "", "unclear"),
     ("r3", ACME, "Your candidacy", "We will not be moving forward with your candidacy", "rejection"),
     ("r4", GH, "Thank you for your interest in Acme", "we have chosen candidates whose experience more closely matches",
      "unclear"),
     ("r5", GH, "Thank you for applying", "We're sorry to let you know you were not selected", "unclear"),
     ("r6", GH, "We will not be inviting you to the next round", "", "unclear"),
     ("r7", GH, "We have decided not to advance you to the next round", "", "unclear"),
-    ("r8", ACME, "Thanks for the phone screen", "decided to go with someone whose skills fit better", "interview"),
+    ("r8", ACME, "Thanks for the phone screen", "decided to go with someone whose skills fit better", "unclear"),
     ("r9", GH, "Update", "decided to move forward with other applicants", "rejection"),
     ("r10", GH, "We are unable to offer you a position at this time", "", "unclear"),
     ("r11", ACME, "Following up", "Thank you for interviewing with us. We regret to inform you we will not extend an "
@@ -179,6 +180,61 @@ REVIEW_EMAILS = [
     ("s7", ACME, "Update", "The position has been filled internally, but we'd love to consider you for a similar role",
      "unclear"),
     ("s8", ACME, "Thank you for applying", "Your application was not selected for further consideration", "unclear"),
+    # The final check's 30 e-mails (f01-f30); a bank's "loan application" (f29) is accepted as a confirmation
+    ("f01", "myworkday.com", "Brightwave - Application Submitted", "Hi Jordan, Your application for Data Analyst "
+     "Intern (R-10423) has been submitted successfully.", "confirmation"),
+    ("f02", "pinecrestanalytics.example", "Acknowledgement of your application", "We acknowledge the receipt of your "
+     "application for the post of Junior ML Engineer. Kindly note that only shortlisted candidates will be intimated.",
+     "other"),
+    ("f03", "hire.lever.co", "Thanks for your application, Jordan", "Hi Jordan, thanks for applying to Kestrel Labs!",
+     "confirmation"),
+    ("f04", "us.greenhouse-mail.io", "Your application to Orbital Health", "After careful review, we have decided to "
+     "move forward with candidates whose qualifications better align with our needs.", "unclear"),
+    ("f05", "zentrix.example", "Data Scientist Intern - Application Outcome", "Having carefully considered all "
+     "candidates, I am sorry to say that on this occasion you have not been successful.", "unclear"),
+    ("f06", "ashbyhq.com", "Northwind application update", "We've decided not to move forward with your application "
+     "at this time.", "rejection"),
+    ("f07", "pinecrestanalytics.example", "Status of your candidature", "We regret that your profile has not been "
+     "shortlisted for the further rounds.", "unclear"),
+    ("f08", "myworkday.com", "Regarding your application for Clinical Data Intern", "Thank you for your interest in "
+     "Orbital Health. We have decided to proceed with other applicants for this position.", "unclear"),
+    ("f09", "zentrix.example", "Your offer from Zentrix", "We're delighted to offer you the position of Data Scientist "
+     "Intern. Your offer letter is attached.", "offer"),
+    ("f10", "pinecrestanalytics.example", "Offer Letter - Junior ML Engineer", "We are pleased to share your offer "
+     "letter.", "offer"),
+    ("f11", "zentrix.example", "Interview rescheduled: Data Scientist Intern", "we've moved your second-round "
+     "interview to Thursday 3pm.", "other"),
+    ("f12", "kestrellabs.example", "Interview cancelled", "the role has been put on hold due to a budget freeze.",
+     "other"),
+    ("f13", "northwind.example", "Next steps - Northwind", "Thanks for your application. We'd love to arrange a "
+     "30-minute video call with you.", "other"),
+    ("f14", "greenhouse.io", "Northwind: Please select a time for your phone screen", "pick a slot with our recruiter.",
+     "interview"),
+    ("f15", "codesignal.com", "Brightwave has invited you to take a CodeSignal assessment", "", "assessment"),
+    ("f16", "orbitalhealth.example", "Take-home exercise for the Data Science Intern role", "please complete the "
+     "attached take-home exercise.", "assessment"),
+    ("f17", "hackerrankforwork.com", "Reminder: Kestrel Labs test expires in 24 hours", "", "unclear"),
+    ("f18", "codility.com", "Northwind: your coding assessment results", "Thank you for completing the coding "
+     "assessment for Northwind. We will not be progressing your application further.", "unclear"),
+    ("f19", "zentrix.example", "Update on your offer", "Due to a hiring freeze we have to withdraw the offer of "
+     "employment we made last week.", "unclear"),
+    ("f20", "northwind.example", "Another role at Northwind you might like", "our platform team is hiring a Data "
+     "Engineering Intern. If you're interested we can schedule an interview.", "unclear"),
+    ("f21", "talentbridge.example", "Exciting Data Engineer role at a Series B fintech", "Open to a quick phone screen "
+     "this week?", "interview"),
+    ("f22", "linkedin.example", "30+ new Machine Learning Intern jobs in Austin, TX", "Be an early applicant.",
+     "other"),
+    ("f23", "linkedin.example", "Your application was viewed by Northwind", "viewed by the hiring team.", "other"),
+    ("f24", "indeed.example", "Interview tips: 5 questions recruiters always ask", "", "other"),
+    ("f25", "glassdoor.example", "See what candidates say about interviewing at Zentrix", "", "other"),
+    ("f26", "family.example", "Sunday call", "how did the interview go? Dad says the offer letter from your cousin's "
+     "company finally came through!", "offer"),
+    ("f27", "gmail.example", "Referral?", "can you refer me for the analyst position at your company?", "other"),
+    ("f28", "shop.example", "Your order has shipped", "Unfortunately one item in your order is delayed by two days.",
+     "unclear"),
+    ("f29", "bank.example", "Your loan application has been received", "", "confirmation"),
+    ("f30", "icims.com", "Kestrel Labs - Software Engineering Intern", "we have selected other candidates whose "
+     "experience is a closer fit.", "unclear"),
 ]  # fmt: skip
 
 
@@ -199,3 +255,8 @@ def test_a_company_s_job_mail_without_the_old_job_words_still_counts(subject, sn
 @pytest.mark.parametrize("domain", ["hackerrank.com", "hackerrankforwork.com", "codesignal.com", "codility.com"])
 def test_assessment_sites_count_as_job_systems(domain):
     assert job_system(domain)
+
+
+@pytest.mark.parametrize("phrase", ["another role", "different role", "other opening", "other roles"])
+def test_another_opening_at_the_company_never_moves_the_card_you_have(phrase):
+    assert classify(ACME, "Hi", f"We'd like to schedule an interview for a {phrase}.") == "unclear"

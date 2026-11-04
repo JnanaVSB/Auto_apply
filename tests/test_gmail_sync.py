@@ -391,3 +391,12 @@ def test_job_mail_from_a_company_with_two_cards_waits_for_you_with_both(conn, ac
         version(conn, other)
     sync.run(conn, FakeGmail(email("m1", "Acme Team <team@acme.example>", "About your interview next week")), 60, NOW)
     assert row(conn, "m1") == ("unclear", None, 0, 1, "About your interview next week", f"[{acme}, {other}]")
+
+
+def test_a_stranger_s_mail_about_no_card_needs_a_job_word_in_its_subject(conn, acme):
+    gmail = FakeGmail(
+        email("mum", "Mum <mum@family.example>", "Sunday call", "Dad says the offer letter finally came through!"),
+        email("agency", "Priya <priya@talentbridge.example>", "Exciting Data Engineer role", "Open to a phone screen?"),
+    )
+    sync.run(conn, gmail, 60, NOW)
+    assert row(conn, "mum") is None and row(conn, "agency")[:4] == ("interview", None, 0, 1)

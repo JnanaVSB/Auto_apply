@@ -7,9 +7,9 @@ from email.utils import parseaddr
 
 LABELS = ("confirmation", "assessment", "interview", "offer", "rejection", "other")  # "unclear" waits for a decision
 JOB_SYSTEMS = (  # where application e-mails come from; a sender counts if its domain is one of these or under one
-    "greenhouse.io", "lever.co", "ashbyhq.com", "myworkday.com", "myworkdayjobs.com", "smartrecruiters.com",
-    "icims.com", "jobvite.com", "workable.com", "bamboohr.com", "hackerrank.com", "hackerrankforwork.com",
-    "codesignal.com", "codility.com",
+    "greenhouse.io", "greenhouse-mail.io", "lever.co", "ashbyhq.com", "myworkday.com", "myworkdayjobs.com",
+    "smartrecruiters.com", "icims.com", "jobvite.com", "workable.com", "bamboohr.com", "hackerrank.com",
+    "hackerrankforwork.com", "codesignal.com", "codility.com",
 )  # fmt: skip
 # Whole phrases only: a card moves only on a clear signal. A rejection phrase wins over a thank-you, but with an
 # offer, interview or assessment phrase as well the e-mail is mixed and waits as "unclear". Otherwise the first label
@@ -28,11 +28,12 @@ RULES = (
                     "complete the assessment", "hackerrank", "codesignal", "codility", "take-home")),
     ("confirmation", ("thank you for applying", "thanks for applying", "application received",
                       "received your application", "application has been received",
-                      "thank you for your application", "thank you for your interest in")),
+                      "thank you for your application", "thank you for your interest in", "has been submitted")),
 )  # fmt: skip
 # Words that make a company's own e-mail worth a closer look (whole words); without one it is just their mail
 JOB_WORDS = re.compile(
-    r"\b(applications?|applied|applying|candidacy|candidates?|positions?|roles?|recruiters?|interviews?|interviewing|"
+    r"\b(applications?|applied|applying|candidacy|candidature|candidates?|shortlisted|positions?|roles?|recruiters?|"
+    r"interviews?|interviewing|"
     r"interviewed|hiring|assessments?|job offers?|offer letters?)\b"
 )
 GOOD_NEWS = {"offer", "interview", "assessment"}
@@ -40,8 +41,13 @@ GOOD_NEWS = {"offer", "interview", "assessment"}
 # clear rejection phrase the e-mail waits as "unclear", never a move, whatever good news it also mentions
 SOFT_NO = (
     "unfortunately", "regret to inform", "position has been filled", "not selected", "not been selected", "not chosen",
-    "did not pass", "not to advance", "not be inviting", "did not meet", "more closely match",
+    "did not pass", "not to advance", "not be inviting", "did not meet", "more closely match", "not be progressing",
+    "withdraw the offer", "rescind", "candidates whose", "not been shortlisted", "not been successful",
+    "other applicants", "selected other candidates", "no longer under consideration",
+    "decided to", "after careful consideration",  # catch-alls: a decision without a clear no is never a move
 )  # fmt: skip
+# Another opening at the same company: never a move of the card you already have, whatever the e-mail says next
+OTHER_ROLE = ("another role", "different role", "other opening", "other roles")
 SPACES = re.compile(r"\s+")
 QUOTES = str.maketrans("\N{LEFT SINGLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK}", "''")  # as phones type them
 
@@ -64,7 +70,7 @@ def classify(domain: str, subject: str, snippet: str) -> str:
     found = [label for label, phrases in RULES if any(phrase in text for phrase in phrases)]
     if "rejection" in found:
         return "unclear" if GOOD_NEWS.intersection(found) else "rejection"
-    if any(soft in text for soft in SOFT_NO):  # it can open a no as well as a reschedule: never a move on its own
+    if any(soft in text for soft in SOFT_NO + OTHER_ROLE):  # a no or not: never a move on its own
         return "unclear"
     if found:
         return found[0]

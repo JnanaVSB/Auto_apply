@@ -103,10 +103,13 @@ def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple
     its phrases; so does job mail that stays "other" and matches no card."""
     name, domain = classify.sender(message["from"])
     thread = conn.execute(THREAD, (message["thread_id"],)).fetchone()
-    if not (classify.job_system(domain) or thread or classify.job_like(message["subject"], message["snippet"])):
+    known = classify.job_system(domain) or thread is not None
+    if not (known or classify.job_like(message["subject"], message["snippet"])):
         return False, False  # e.g. a pay slip's "take-home pay" or a shop's "unfortunately your parcel is late"
     label = classify.classify(domain, message["subject"], message["snippet"])
     found = match.match(cards, name, domain, message["subject"], thread[0] if thread else None)
+    if not (known or found or classify.job_like(message["subject"], "")):
+        return False, False  # a stranger's mail about no card of yours is listed only when its subject is about a job
     job, moved = (found[0] if len(found) == 1 else None), False
     if label == "other" and found:
         label = "unclear"  # a company you applied to wrote about the job and no phrase fits: the model or you decide

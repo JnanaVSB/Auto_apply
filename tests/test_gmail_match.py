@@ -10,7 +10,7 @@ from app.gmail.match import cards, match
 ACME_ML = {"id": 1, "company": "Acme", "title": "ML Intern"}
 ACME_ROBOTS = {"id": 2, "company": "Acme", "title": "Robotics Intern"}
 GLOBEX = {"id": 3, "company": "Globex Inc.", "title": "Data Scientist"}
-LOOKALIKE = "us.greenhouse-mail.io"  # not a job system
+LOOKALIKE = "greenhouse-mail.io.example"  # not a job system
 GREENHOUSE = "boards.greenhouse.io"
 
 
