@@ -11,7 +11,7 @@ SHOP = "news.example.com"  # anyone else
 @pytest.mark.parametrize(
     "subject, snippet, label",
     [
-        ("Your application to Acme", "Unfortunately we will not be moving forward.", "rejection"),
+        ("Your application to Acme", "Unfortunately we will not be moving forward with your application.", "rejection"),
         ("Offer from Acme", "We are pleased to offer you the role of ML Intern.", "offer"),
         ("Next steps", "We would like to schedule an interview with you next week.", "interview"),
         ("Acme coding challenge", "Please complete the HackerRank test within 5 days.", "assessment"),
@@ -47,11 +47,14 @@ def test_another_language_is_left_to_the_local_model_only_from_a_job_system(doma
 
 def test_case_spacing_and_curly_apostrophes_do_not_matter():
     assert classify(BOARD, "UPDATE", "We’re  sorry:\nwe are NOT   MOVING\tFORWARD.") == "rejection"
-    assert classify(BOARD, "Update", "We won’t be moving forward.") == "rejection"
+    assert classify(BOARD, "Update", "We won’t be moving forward with your application.") == "rejection"
 
 
 def test_the_preview_is_read_as_gmail_sends_it_html_escaped():
-    assert classify(BOARD, "Update", "we won&#39;t be moving forward &amp; wish you well") == "rejection"
+    assert (
+        classify(BOARD, "Update", "we won&#39;t be moving forward with your application &amp; wish you well")
+        == "rejection"
+    )
 
 
 @pytest.mark.parametrize(
@@ -115,3 +118,84 @@ def test_unfortunately_without_a_clear_no_is_unclear_whatever_else_it_says(snipp
 )  # fmt: skip
 def test_job_words_include_plurals_but_not_a_shop_s_offer(subject, job_like_):
     assert job_like(subject, "") is job_like_
+
+
+GH, WD, LEVER, ACME = "greenhouse.io", "acme.myworkdayjobs.com", "jobs.lever.co", "acme.example"
+# The quality review's made-up e-mails (Phase 6, Part A) and the label each must get: a wrong Rejected is the worst
+# outcome, so anything soft, mixed or unsure is "unclear" and waits for the local model or you.
+REVIEW_EMAILS = [
+    ("c1", GH, "Thank you for applying to Acme", "We have received your application", "confirmation"),
+    ("c2", WD, "Application Received", "Thank you for your application to the ML Intern position", "confirmation"),
+    ("c3", ACME, "We received your application", "we've received your application", "confirmation"),
+    ("c4", LEVER, "Your application to Acme", "Thanks for your interest in Acme!", "unclear"),
+    ("a1", "hackerrank.com", "Acme | Online assessment invitation", "", "assessment"),
+    ("a2", GH, "Please complete the CodeSignal assessment", "", "assessment"),
+    ("a3", GH, "Your coding challenge results did not meet our bar", "", "unclear"),
+    ("i1", ACME, "We'd like to invite you to interview", "", "interview"),
+    ("i2", "calendar.google.example", "Invitation: Acme interview @ Tue", "", "other"),
+    ("i3", ACME, "Unfortunately our interviewer is out sick; could we move your interview to Thursday?", "", "unclear"),
+    ("i4", ACME, "Rescheduling your interview", "Could you share your availability for next week?", "interview"),
+    ("i5", ACME, "We regret to inform you that we need to reschedule your interview to Friday", "", "unclear"),
+    ("i6", ACME, "We regret to inform you that the hiring decision has been delayed by two weeks", "", "unclear"),
+    ("i7", ACME, "We won't be moving forward until the hiring manager is back next week", "", "other"),
+    ("i8", ACME, "We will not be moving forward until the hiring manager is back next week", "", "other"),
+    ("o1", ACME, "Offer letter", "please find attached your offer letter", "offer"),
+    ("o2", ACME, "We are excited to extend an offer", "", "offer"),
+    ("o3", ACME, "We regret to inform you that we have to rescind the offer letter", "", "unclear"),
+    ("o4", ACME, "After meeting many other candidates, we are pleased to offer you the role", "", "offer"),
+    ("r1", GH, "Your application", "we have decided not to move forward with your application", "rejection"),
+    ("r2", ACME, "We have decided to go in a different direction", "", "other"),
+    ("r3", ACME, "Your candidacy", "We will not be moving forward with your candidacy", "rejection"),
+    ("r4", GH, "Thank you for your interest in Acme", "we have chosen candidates whose experience more closely matches",
+     "unclear"),
+    ("r5", GH, "Thank you for applying", "We're sorry to let you know you were not selected", "unclear"),
+    ("r6", GH, "We will not be inviting you to the next round", "", "unclear"),
+    ("r7", GH, "We have decided not to advance you to the next round", "", "unclear"),
+    ("r8", ACME, "Thanks for the phone screen", "decided to go with someone whose skills fit better", "interview"),
+    ("r9", GH, "Update", "decided to move forward with other applicants", "rejection"),
+    ("r10", GH, "We are unable to offer you a position at this time", "", "unclear"),
+    ("r11", ACME, "Following up", "Thank you for interviewing with us. We regret to inform you we will not extend an "
+     "offer", "unclear"),
+    ("r12", ACME, "The position has been filled. We will keep your resume on file", "", "unclear"),
+    ("x1", "talentco.example", "Acme role", "would like to interview you this week", "interview"),
+    ("n1", "careertips.example", "How to ace your next round of interviews", "", "other"),
+    ("n2", "careertips.example", "Top 10 interview tips", "", "other"),
+    ("p1", "amazon.example", "Your order of Cracking the Coding Interview", "", "other"),
+    ("p3", "bank.example", "Good news about your application", "We are pleased to offer you a credit line", "other"),
+    ("p5", "family.example", "Re: dinner", "Good luck with the interview tomorrow!", "other"),
+    ("p6", "friends.example", "Did you hear back on your application?", "Hope you make the next round!", "other"),
+    ("p7", "citybank.example", "Unfortunately your payment did not go through", "", "unclear"),
+    ("p8", "state-u.example", "Your application status",
+     "We regret to inform you that you have not been selected for admission", "unclear"),
+    ("t1", "gmail.example", "Re: next week", "Thanks Jordan, talk soon!", "other"),
+    ("t2", "gmail.example", "Re: summer", "the position has been filled for the summer cohort, but fall is open",
+     "unclear"),
+    ("s1", ACME, "Update", "We regret to inform you that our office is closed Monday, so your interview moves to "
+     "Tuesday", "unclear"),
+    ("s2", ACME, "Update", "We regret to inform you that our review is taking longer than expected", "unclear"),
+    ("s3", ACME, "Update", "Thanks for completing the online assessment. You did not pass to the next round",
+     "unclear"),
+    ("s5", ACME, "Update", "You were not chosen for the next round", "unclear"),
+    ("s7", ACME, "Update", "The position has been filled internally, but we'd love to consider you for a similar role",
+     "unclear"),
+    ("s8", ACME, "Thank you for applying", "Your application was not selected for further consideration", "unclear"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name, domain, subject, snippet, label", REVIEW_EMAILS, ids=[e[0] for e in REVIEW_EMAILS])
+def test_the_review_s_made_up_e_mails_get_their_labels(name, domain, subject, snippet, label):
+    assert classify(domain, subject, snippet) == label
+
+
+@pytest.mark.parametrize(
+    "subject, snippet",
+    [("Your candidacy", ""), ("Following up", "Thank you for interviewing with us."),
+     ("Update", "The hiring manager will call you."), ("Update", "You interviewed with Sam last week.")],
+)  # fmt: skip
+def test_a_company_s_job_mail_without_the_old_job_words_still_counts(subject, snippet):
+    assert job_like(subject, snippet)
+
+
+@pytest.mark.parametrize("domain", ["hackerrank.com", "hackerrankforwork.com", "codesignal.com", "codility.com"])
+def test_assessment_sites_count_as_job_systems(domain):
+    assert job_system(domain)

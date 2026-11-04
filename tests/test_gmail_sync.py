@@ -84,7 +84,10 @@ def test_the_first_sync_reads_back_sorts_matches_and_keeps_only_what_needs_you(c
     gmail = FakeGmail(
         email("m1", "Acme <no-reply@greenhouse.io>", "Thank you for applying to Acme"),
         email(
-            "m2", "Initrode <jobs@initrode.example>", "Your application", "Unfortunately we will not be moving forward."
+            "m2",
+            "Initrode <jobs@initrode.example>",
+            "Your application",
+            "Unfortunately we will not be moving forward with your application.",
         ),
         email("m3", "Shop <news@shop.example>", "Our autumn sale"),
     )

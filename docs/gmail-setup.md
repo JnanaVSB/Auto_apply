@@ -15,10 +15,12 @@ guide connects your own Gmail in about ten minutes. You only need a Google accou
 - What it leaves alone: an e-mail counts as about an application only when it comes from a job system, continues a
   conversation already matched to one of your jobs, or uses a job word such as "application", "candidate" or
   "interview". Anything else (personal mail, newsletters, a shop's order or sale mail, even from a company you applied
-  to) leaves nothing behind in the dashboard.
+  to) usually leaves nothing behind in the dashboard. Mail that uses a job word in another sense (a rental or
+  credit-card "application", say) may still appear on **E-mails to check**: **Dismiss** removes it and forgets its
+  subject.
 - When it moves a card: only on a clear e-mail, and only forward. Mixed news (for example an offer that also says
-  "regret to inform"), or "unfortunately" without a clear no, waits on **E-mails to check** for the local model or
-  you.
+  "we will not be moving forward"), or a soft no without a clear one ("unfortunately", "regret to inform", "not
+  selected", "the position has been filled", …), waits on **E-mails to check** for the local model or you.
 - What it keeps, only for an e-mail it matched to one of your applications or that waits for you on **E-mails to
   check**: the date, the sender's domain (for example `greenhouse.io`), what it was (confirmation, interview, …) and
   the job. The subject is kept only while the e-mail waits on E-mails to check, and is forgotten once you decide. The
