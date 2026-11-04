@@ -77,6 +77,29 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         return board(request, notice=notice)
 
 
+def job_box(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
+    """The job page's Tracker box: where the card is and every move, newest first, at this computer's local time;
+    None for a job never on the board."""
+    moves = tracker.history(conn, job_id)
+    if not moves:
+        return None
+    card = conn.execute("SELECT stage, round FROM tracker WHERE job_id = ?", (job_id,)).fetchone() or ("ready", None)
+    return {
+        "stage": tracker.STAGES[card[0]],
+        "round": tracker.ROUNDS.get(card[1]),
+        "moves": [
+            {
+                "when": datetime.fromisoformat(move["moved_on"]).astimezone().strftime("%Y-%m-%d %H:%M"),
+                "from": tracker.STAGES[move["from_stage"]],
+                "to": tracker.STAGES[move["to_stage"]],
+                "round": tracker.ROUNDS.get(move["round"]),
+                "by": "Gmail" if move["moved_by"] == "gmail" else "you",
+            }
+            for move in moves
+        ],
+    }
+
+
 def _check_job(conn: sqlcipher3.Connection, job_id: int) -> None:
     """A job number that isn't saved is "Page not found"."""
     if conn.execute("SELECT 1 FROM jobs WHERE id = ?", (queries.known(job_id),)).fetchone() is None:

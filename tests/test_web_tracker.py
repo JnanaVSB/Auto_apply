@@ -1,5 +1,6 @@
 """The Tracker page: the six lanes, I applied, Move to, the round, Add an application, and the notices."""
 
+import time
 from datetime import date
 
 import pytest
@@ -7,6 +8,7 @@ from helpers import add_job, csrf, log_in, one
 from test_tracker import version
 
 from app import tracker
+from app.web import tracker as tracker_web
 
 LINK = "https://careers.initech.example/jobs/7"
 
@@ -120,3 +122,37 @@ def test_show_all_lists_a_long_lane_whole_and_ignores_an_unknown_lane(client, co
 
 def test_the_job_page_goes_back_to_the_tracker(client, ready):
     assert '<a href="/tracker">Back to the list</a>' in client.get(f"/jobs/{ready}?back=/tracker").text
+
+
+@pytest.fixture
+def phoenix():
+    """This computer's time zone set to Phoenix (always 7 hours behind UTC), then put back."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("TZ", "America/Phoenix")
+        time.tzset()
+        yield
+    time.tzset()
+
+
+def test_a_job_never_on_the_board_has_no_tracker_box(client, ready):
+    assert "<h2>Tracker</h2>" not in client.get(f"/jobs/{ready}").text
+
+
+def test_the_job_page_shows_where_it_is_and_every_move_newest_first(client, conn, ready):
+    post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
+    post(client, f"/tracker/{ready}/move", **{"from": "applied", "to": "interview"})
+    text = client.get(f"/jobs/{ready}").text
+    assert "Now in Interview, Round 1." in text and f'href="/tracker#job-{ready}"' in text
+    assert text.index("Applied → Interview · Round 1 · by you") < text.index("Ready → Applied · by you")
+
+
+def test_a_move_shows_this_computer_s_local_time(conn, ready, phoenix):
+    with conn:
+        conn.execute(
+            "INSERT INTO tracker_moves (job_id, from_stage, to_stage, moved_by, moved_on) "
+            "VALUES (?, 'ready', 'applied', 'gmail', '2026-11-04T16:30:00+00:00')",
+            (ready,),
+        )
+    assert tracker_web.job_box(conn, ready)["moves"] == [
+        {"when": "2026-11-04 09:30", "from": "Ready", "to": "Applied", "round": None, "by": "Gmail"}
+    ]

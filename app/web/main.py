@@ -175,7 +175,8 @@ def create_app(
         if job is None:
             raise HTTPException(404)
         job["scoring"] = queries.job_scoring(conn, job_id, _scoring())
-        return _page(request, "job.html", job=job, back=_back(request.query_params.get("back", "")))
+        return _page(request, "job.html", job=job, back=_back(request.query_params.get("back", "")),
+                     tracker_box=tracker.job_box(conn, job_id))  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/prepare")
     async def prepare_anyway(request: Request, job_id: int) -> Response:

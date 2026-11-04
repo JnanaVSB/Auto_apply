@@ -120,6 +120,15 @@
   {% endif %}
 </dl>
 
+{% if tracker_box %}
+<h2>Tracker</h2>
+<p>Now in {{ tracker_box.stage }}{% if tracker_box.round %}, {{ tracker_box.round }}{% endif %}.
+  <a href="/tracker#job-{{ job.id }}">Open on the Tracker</a></p>
+<ul>{% for move in tracker_box.moves %}
+  <li>{{ move.when }} · {{ move.from }} → {{ move.to }}{% if move.round %} · {{ move.round }}{% endif %} · by {{ move.by }}</li>
+{% endfor %}</ul>
+{% endif %}
+
 <h2>Where this job is listed</h2>
 <ul class="sources">
   {% for source in job.sources %}
