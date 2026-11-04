@@ -30,8 +30,7 @@
   <details class="lane" id="lane-{{ lane.stage }}"{% if not outcome %} open{% endif %}>
     <summary><h2>{{ lane.name }}</h2><span class="count"><span aria-hidden="true">{{ lane.count }}</span><span class="sr-only">{{ lane.count }} job{{ "" if lane.count == 1 else "s" }}</span></span>
       {%- if outcome %}<span class="kind">Outcome</span>{% endif %}</summary>
-    {% if lane.cards %}
-    <ol class="cards">
+    <ol class="cards" data-stage="{{ lane.stage }}">{# always there, so an empty lane can take a dropped card #}
       {% for card in lane.cards %}
       <li class="tcard{% if card.stale %} stale{% endif %}" id="job-{{ card.id }}" data-stage="{{ lane.stage }}">
         <h3><a href="/jobs/{{ card.id }}?back=/tracker">{{ card.title }}</a></h3>
@@ -59,13 +58,14 @@
           <button type="submit">Move</button>
         </form>
       </li>
+      {% else %}
+      <li class="empty">{{ empty.get(lane.stage, "No cards yet.") }}</li>
       {% endfor %}
     </ol>
-    {% else %}
-    <p class="empty">{{ empty.get(lane.stage, "No cards yet.") }}</p>
-    {% endif %}
     {% if lane.more %}<p><a href="/tracker?all={{ lane.stage }}#lane-{{ lane.stage }}">Show all {{ lane.count }}</a></p>{% endif %}
   </details>
   {% endfor %}
 </div>
+<script src="/static/sortable.min.js" defer></script>
+<script src="/static/tracker.js" defer></script>
 {% endblock %}

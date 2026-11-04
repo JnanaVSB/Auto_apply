@@ -296,7 +296,10 @@ The dashboard's fonts are [Source Sans 3](https://github.com/adobe-fonts/source-
 [Source Serif 4](https://github.com/adobe-fonts/source-serif) (version 4.005) by Adobe, under the SIL Open Font License
 1.1, stored in `app/web/static/fonts/` with their licences. Its icons are 22 icons from [Lucide](https://lucide.dev)
 version 1.57.0 (ISC licence; a few come from the Feather icons, MIT licence), stored in `app/web/static/icons.svg` with
-`icons-LICENSE.txt`.
+`icons-LICENSE.txt`. Dragging a card on the Tracker uses [SortableJS](https://github.com/SortableJS/Sortable) version
+1.15.7 (MIT licence), the file `Sortable.min.js` from the npm package `sortablejs@1.15.7`, stored as
+`app/web/static/sortable.min.js` with `sortable-LICENSE.txt`, SHA-256
+`bf4241bc73fef7f11c59a283a69fe8051cdd31c6d8ff5a2b9ba219e7831fcf76` (a test checks it).
 
 Job scoring includes information from the O*NET 31.0 Database by the U.S. Department of Labor, Employment and
 Training Administration (USDOL/ETA). Used under the [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)

@@ -1,5 +1,7 @@
 """The Tracker page: the six lanes, I applied, Move to, the round, Add an application, and the notices."""
 
+import hashlib
+import re
 import time
 from datetime import date
 
@@ -8,9 +10,11 @@ from helpers import add_job, csrf, log_in, one
 from test_tracker import version
 
 from app import tracker
+from app.web import main
 from app.web import tracker as tracker_web
 
 LINK = "https://careers.initech.example/jobs/7"
+APPLIED_CARD = re.compile(r'id="job-[0-9]+" data-stage="applied"')
 
 
 @pytest.fixture
@@ -114,10 +118,10 @@ def test_show_all_lists_a_long_lane_whole_and_ignores_an_unknown_lane(client, co
                 "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, 'applied', '2026-11-01', ?)",
                 (job, tracker.now()),
             )
-    assert client.get("/tracker").text.count('data-stage="applied"') == 30
+    assert len(APPLIED_CARD.findall(client.get("/tracker").text)) == 30
     assert "Show all 31" in client.get("/tracker?all=offer").text
     whole = client.get("/tracker?all=applied").text
-    assert whole.count('data-stage="applied"') == 31 and "Show all" not in whole
+    assert len(APPLIED_CARD.findall(whole)) == 31 and "Show all" not in whole
 
 
 def test_the_job_page_goes_back_to_the_tracker(client, ready):
@@ -156,3 +160,31 @@ def test_a_move_shows_this_computer_s_local_time(conn, ready, phoenix):
     assert tracker_web.job_box(conn, ready)["moves"] == [
         {"when": "2026-11-04 09:30", "from": "Ready", "to": "Applied", "round": None, "by": "Gmail"}
     ]
+
+
+def test_the_drag_scripts_are_served_and_only_the_tracker_loads_them(client):
+    for name in ("sortable.min.js", "tracker.js"):
+        reply = client.get(f"/static/{name}")
+        assert reply.status_code == 200 and "javascript" in reply.headers["content-type"]
+    scripts = ('src="/static/sortable.min.js"', 'src="/static/tracker.js"')
+    assert all(script in client.get("/tracker").text for script in scripts)
+    for page in ("/", "/ready"):
+        assert not any(script in client.get(page).text for script in scripts)
+
+
+def test_the_local_sortable_file_is_the_recorded_release():
+    """README: sortablejs@1.15.7, Sortable.min.js. Any change to the file, by accident or not, fails here."""
+    content = (main.HERE / "static" / "sortable.min.js").read_bytes()
+    assert hashlib.sha256(content).hexdigest() == "bf4241bc73fef7f11c59a283a69fe8051cdd31c6d8ff5a2b9ba219e7831fcf76"
+
+
+def test_an_empty_lane_can_take_a_dropped_card(client):
+    text = client.get("/tracker").text
+    assert '<ol class="cards" data-stage="offer">' in text
+    lane = text[text.index('<ol class="cards" data-stage="offer">') :]
+    assert lane.index('<li class="empty">No cards yet.</li>') < lane.index("</ol>")
+
+
+def test_the_tracker_keeps_the_same_safety_rules_as_every_page(client):
+    rules = client.get("/").headers["content-security-policy"]
+    assert rules and client.get("/tracker").headers["content-security-policy"] == rules
