@@ -880,6 +880,57 @@ def test_version_17_adds_the_gmail_tables_and_keeps_the_tracker(tmp_path, monkey
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
 
 
+def test_version_18_adds_the_form_tables_and_keeps_every_preparation(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    every_row = ("SELECT * FROM preparations ORDER BY id", "SELECT * FROM steps", "SELECT * FROM failed_tries")
+    with monkeypatch.context() as version_17:
+        version_17.setattr(db, "UPGRADES", db.UPGRADES[:17])
+        version_17.setattr(db, "SCHEMA_VERSION", 17)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute(PREPARATION.format(1, "resume", 1, "done", "'{}'"))
+            conn.execute(STEP.format("writer", "done", 0))
+            conn.execute("INSERT INTO failed_tries (step_id, try_number, reason, saved_on) VALUES (1, 1, 'x', 'now')")
+            conn.execute(PREPARATION.format(2, "cover_letter", 1, "stopped", "NULL"))
+            conn.execute(
+                "INSERT INTO pilots (id, jobs, planted, rounds, turns, created_on) VALUES (1, '[1]', '{}', 3, 1, 'now')"
+            )
+            conn.execute(PILOT.format(3, 1, "laptop"))
+            before = [conn.execute(query).fetchall() for query in every_row]
+    form = "INSERT INTO forms (job_id, read_on, read_from, fields, fingerprint) VALUES ({}, 'now', {}, '[]', 'fp')"
+    answer = (
+        "INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on) "
+        "VALUES (1, {}, 'Yes', {}, {}, 'now')"
+    )
+    sent = (
+        "INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+        "VALUES ({}, '2026-11-05', 'now', {}, 'https://jobs.example/1/apply', '[]', '[]')"
+    )
+    with closing(db.connect(path)) as conn:
+        assert [conn.execute(query).fetchall() for query in every_row] == before
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        with conn:
+            conn.execute(PREPARATION.format(4, "answers", 1, "writing", "NULL"))
+            conn.execute(form.format(1, "'api'"))
+            conn.execute(answer.format("'question_1'", "'you'", "NULL"))
+            conn.execute(answer.format("'question_2'", "'writer'", 4))
+            conn.execute(sent.format(1, "'by hand'"))
+        for bad in [
+            PREPARATION.format(5, "form", 1, "writing", "NULL"),
+            PREPARATION.format(5, "answers", 2, "writing", "NULL"),  # a second version written at the same time
+            form.format(2, "'cloud'"),
+            answer.format("'question_3'", "'writer'", "NULL"),  # the Writer's answer without its version
+            answer.format("'question_3'", "'you'", 4),  # your answer tied to a Writer's version
+            sent.format(1, "'browser'"),  # a second record for the same job
+            sent.format(2, "'robot'"),
+        ]:
+            with pytest.raises(sqlcipher3.IntegrityError):
+                conn.execute(bad)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v17") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+
+
 PILOT = (
     "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, pilot_id, lineup, created_on) "
     "VALUES ({}, 1, 'pilot', {}, '[]', '{{}}', 'writing', 1, '{}', 'now')"

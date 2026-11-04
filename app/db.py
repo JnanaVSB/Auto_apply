@@ -585,6 +585,82 @@ UPGRADES = (
         last_sync_on TEXT, last_result TEXT  -- plain words, never e-mail text or a token
     );
     """,
+    # 18: Phase 7 Part A, application forms. The newest read of each job's form, your answers for one job only, and the
+    # frozen record of what was sent. preparations is rebuilt (SQLite can't change a check) for the Writer's form
+    # answers, every row kept.
+    """
+    CREATE TABLE forms (  -- the newest read of a job's application form
+        job_id INTEGER PRIMARY KEY REFERENCES jobs (id),
+        read_on TEXT NOT NULL,
+        read_from TEXT NOT NULL CHECK (read_from IN ('api', 'page', 'browser')),
+        fields TEXT NOT NULL,  -- JSON: the form as the site shows it; public text only, nothing of yours
+        fingerprint TEXT NOT NULL,
+        limit_note TEXT,  -- the company's application-limit words, if any
+        problem TEXT  -- why it could not be read, in plain words
+    );
+    CREATE TABLE form_answers (  -- your answers for one job only, and the Writer's drafts you kept or edited
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        field TEXT NOT NULL,  -- the site's field key
+        answer TEXT NOT NULL,
+        given_by TEXT NOT NULL CHECK (given_by IN ('you', 'writer')),
+        preparation_id INTEGER REFERENCES preparations (id),  -- the Writer's version it came from
+        saved_on TEXT NOT NULL,
+        PRIMARY KEY (job_id, field),
+        CHECK ((given_by = 'writer') = (preparation_id IS NOT NULL))
+    );
+    CREATE TABLE submissions (  -- the frozen record of what was sent: never changed once saved
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL UNIQUE REFERENCES jobs (id),  -- one per job: a second "I submitted it" changes nothing
+        submitted_on TEXT NOT NULL,  -- the date you chose
+        saved_on TEXT NOT NULL,
+        how TEXT NOT NULL CHECK (how IN ('browser', 'by hand')),
+        address TEXT NOT NULL,  -- the form's address
+        fields TEXT NOT NULL,  -- JSON: each field's question, value and where it came from
+        files TEXT NOT NULL  -- JSON: each upload slot's kind, version and SHA-256
+    );
+    CREATE TABLE preparations_v18 (  -- one row per version of a job's resume, cover letter, form answers, or a pilot's
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        kind TEXT NOT NULL CHECK (kind IN ('resume', 'cover_letter', 'pilot', 'answers')),
+        version INTEGER NOT NULL CHECK (version >= 1),  -- 1, 2, ... per job and kind
+        based_on INTEGER REFERENCES preparations (id),  -- the version Request changes started from
+        feedback TEXT,  -- your words from Request changes
+        asked TEXT NOT NULL DEFAULT '[]',  -- JSON: your words sent while the council worked, each with its round
+        sources TEXT NOT NULL,  -- JSON: each source used with its confirmed tile set
+        writer TEXT NOT NULL,  -- JSON: the Writer's settings at the start (never a key)
+        council TEXT,  -- JSON: the reviewers' settings at the start (never a key); NULL: a Writer-only version (4b)
+        status TEXT NOT NULL CHECK (status IN ('writing', 'done', 'by_hand', 'stopped')),
+        round INTEGER NOT NULL DEFAULT 1 CHECK (round BETWEEN 1 AND 6),  -- at most 5, plus one for your words
+        agreed INTEGER CHECK (agreed IN (0, 1)),  -- the council's result; NULL: not finished, or no council
+        wording TEXT CHECK (wording IN ('original', 'writer')),  -- no agreement: the wording of objected entries
+        mode TEXT NOT NULL DEFAULT 'half' CHECK (mode IN ('half', 'normal')),  -- normal: "Now, normal price"
+        waived TEXT NOT NULL DEFAULT '[]',  -- JSON: the doubts you proceeded anyway with (skipped, closed, not-ready)
+        automatic INTEGER NOT NULL DEFAULT 0 CHECK (automatic IN (0, 1)),  -- started by automatic preparation
+        pilot_id INTEGER REFERENCES pilots (id),
+        lineup TEXT,  -- the pilot line-up it was made with
+        planted TEXT,  -- JSON: the pilot's made-up claim in its first draft; never in a PDF
+        problem TEXT,  -- why it stopped, paused or needs checking by hand; never your text
+        draft TEXT,  -- JSON: the checked answer with placeholders, and "details": their real text, kept only here
+        flags TEXT NOT NULL DEFAULT '[]',  -- JSON: e.g. numbers not in the original bullets
+        created_on TEXT NOT NULL,
+        finished_on TEXT,
+        UNIQUE (job_id, kind, version),
+        CHECK (status != 'done' OR draft IS NOT NULL),
+        CHECK ((kind = 'pilot') = (pilot_id IS NOT NULL) AND (kind = 'pilot') = (lineup IS NOT NULL))
+    );
+    INSERT INTO preparations_v18 (id, job_id, kind, version, based_on, feedback, asked, sources, writer, council,
+        status, round, agreed, wording, mode, waived, automatic, pilot_id, lineup, planted, problem, draft, flags,
+        created_on, finished_on)
+        SELECT id, job_id, kind, version, based_on, feedback, asked, sources, writer, council, status, round, agreed,
+        wording, mode, waived, automatic, pilot_id, lineup, planted, problem, draft, flags, created_on, finished_on
+        FROM preparations;
+    DROP TABLE preparations;
+    ALTER TABLE preparations_v18 RENAME TO preparations;
+    -- At most one version of a job's resume (or cover letter, form answers, or one pilot line-up's resume) is being
+    -- written at a time
+    CREATE UNIQUE INDEX preparations_writing ON preparations (job_id, kind, coalesce(lineup, ''))
+        WHERE status = 'writing';
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
