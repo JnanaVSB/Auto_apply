@@ -2,7 +2,7 @@
 
 import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
@@ -80,6 +80,34 @@ def test_a_pass_reads_the_fake_gmail_and_moves_a_card(conn, data_dir, settings, 
     found._pass()
     assert found.notice == "Read 1 new e-mail: 1 card moved, 0 to check."
     assert tracker.stage(conn, acme) == "applied" and one(conn, "SELECT history_id FROM gmail_sync")[0] == "5"
+
+
+def test_a_chosen_period_is_read_without_moving_the_sync_position(conn, data_dir, settings, connected):
+    found = Mailer(data_dir, httpx.MockTransport(fake := FakeGoogle({"/messages": [{}]})))
+    found._pass((date(2026, 10, 1), date(2026, 10, 31)))
+    assert found.period_notice == "Read 0 new e-mails from 2026-10-01 to 2026-10-31: 0 cards moved, 0 to check."
+    assert found.notice is None and found.tried is None and fake.calls("/profile") == 0
+    assert one(conn, "SELECT count(*) FROM gmail_sync")[0] == 0
+
+
+def test_a_period_and_a_sync_asked_together_both_run_the_period_first(data_dir, monkeypatch):
+    found, ran = Mailer(data_dir), []
+    monkeypatch.setattr(found, "_words", lambda period: ran.append(period) or "Read 0 new e-mails.")
+    found._again, found.period = True, (date(2026, 10, 1), date(2026, 10, 31))
+    found._passes()
+    assert ran == [(date(2026, 10, 1), date(2026, 10, 31)), None]
+    assert found.notice == found.period_notice == "Read 0 new e-mails." and found._thread is None
+
+
+def test_a_period_blocked_by_another_dashboard_asks_to_press_again(data_dir, settings, connected, monkeypatch):
+    def busy(*_):
+        raise mailer_module.collect.CollectError(mailer_module.BUSY)
+
+    monkeypatch.setattr(mailer_module.collect, "lock", busy)
+    found = Mailer(data_dir)
+    found._pass((date(2026, 10, 1), date(2026, 10, 31)))
+    found._pass()
+    assert found.period_notice == mailer_module.PERIOD_BUSY and found.notice == mailer_module.BUSY
 
 
 def test_a_refused_sign_in_is_said_plainly(conn, data_dir, settings, connected):

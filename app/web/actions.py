@@ -280,6 +280,7 @@ def settings_form() -> dict[str, str]:
         "extra_boards": "\n".join(sources.get("extra_boards") or []),
         "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
     } | {name: str(raw.get(name, Config.model_fields[name].default)) for name in NUMBERS}  # defaults from Config
+    form["gmail_read_all"] = "on" if raw.get("gmail_read_all", False) else "off"
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
     scoring, defaults = raw.get("scoring") or {}, ScoringSettings()
@@ -342,6 +343,7 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
             "phonebook_lists": _lines(form.get("phonebook_lists", "")),
         },
         **{name: _whole(form.get(name, "")) for name in NUMBERS},
+        "gmail_read_all": form.get("gmail_read_all") == "on",
     }
     scoring = dict(old.get("scoring") or {}) | {
         name: read(form[name]) for name, read in SCORING_FIELDS.items() if name in form

@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+from datetime import date, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -197,6 +198,21 @@ def test_sync_now_needs_the_page_s_token_and_starts_a_pass(client, monkeypatch):
     assert client.post("/settings/gmail/sync", follow_redirects=False).status_code == 403 and not pressed
     assert post(client, "/settings/gmail/sync").headers["location"] == "/settings/gmail?done=syncing"
     assert pressed == [1] and "Syncing now" in client.get("/settings/gmail?done=syncing").text
+
+
+def test_reading_a_period_needs_the_token_and_two_dates_in_order(client, monkeypatch):
+    asked = []
+    monkeypatch.setattr(client.app.state.mailer, "read_period", lambda *dates: asked.append(dates))
+    today, address = date.today(), "/settings/gmail/period"
+    assert client.post(address, data={"start": "2026-10-01", "end": "2026-10-31"}).status_code == 403
+    assert "Choose both dates." in post(client, address, start="", end=today.isoformat()).text
+    wrong = post(client, address, start=today.isoformat(), end=(today - timedelta(days=1)).isoformat())
+    future = post(client, address, start="2026-10-01", end=(today + timedelta(days=1)).isoformat())
+    assert wrong.status_code == future.status_code == 400 and not asked
+    assert post(client, address, start="2026-10-01", end=today.isoformat()).headers["location"].endswith("done=period")
+    assert asked == [(date(2026, 10, 1), today)]
+    client.app.state.mailer.period_notice = "Read 2 new e-mails from 2026-10-01 to 2026-10-31: 1 card moved."
+    assert '<p class="result">Latest period: Read 2 new e-mails from 2026-10-01' in client.get("/settings/gmail").text
 
 
 def test_the_page_shows_the_address_gmail_gives_and_the_last_sync(client, conn, google):

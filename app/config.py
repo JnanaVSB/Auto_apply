@@ -246,6 +246,7 @@ class Config(BaseModel):
     tracker_stale_days: Annotated[int, Field(ge=1, le=365, strict=True)] = 21  # Tracker: days unchanged before greying
     gmail_lookback_days: Annotated[int, Field(ge=1, le=365, strict=True)] = 60  # Gmail: days the first sync reads
     gmail_every_minutes: Annotated[int, Field(ge=0, le=1440, strict=True)] = 30  # Gmail: sync while open; 0 = off
+    gmail_read_all: Annotated[bool, Field(strict=True)] = False  # Gmail: sort every e-mail, not only job-signed ones
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()

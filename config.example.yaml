@@ -37,6 +37,8 @@ tracker_stale_days: 21
 gmail_lookback_days: 60
 # While the dashboard is open, sync Gmail every this many minutes (5 to 1440). 0 = off.
 gmail_every_minutes: 30
+# Gmail: sort every e-mail (true, for an inbox used only for job hunting) or only those with a job sign (false).
+gmail_read_all: false
 # New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
 requests_per_second: 1
 

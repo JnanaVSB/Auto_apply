@@ -207,6 +207,8 @@ class Gmail:
                 raise HistoryTooOld(
                     "Gmail no longer has the changes since the last sync; looking again from the start."
                 )
+            if reply.status_code == 204:  # nothing to send back (a search that found nothing): an empty answer
+                return {}
             if reply.status_code != 200:
                 raise GmailError(f"Gmail refused the request ({reply.status_code}); the next sync tries again.")
             found = _json(reply)

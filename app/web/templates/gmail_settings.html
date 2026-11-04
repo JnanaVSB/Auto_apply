@@ -46,7 +46,16 @@
   {{ csrf_field() }}
   <button type="submit">Sync now</button>
 </form>
+<form method="post" action="/settings/gmail/period" class="stacked">
+  {{ csrf_field() }}
+  <p class="hint">Read e-mails from a period, for older ones the first sync didn't reach: both days are included,
+    e-mails already read are skipped, and the regular sync carries on as before.</p>
+  <label>From <input name="start" type="date" required max="{{ today }}"></label>
+  <label>To <input name="end" type="date" required value="{{ today }}" max="{{ today }}"></label>
+  <p><button type="submit">Read this period</button></p>
+</form>
 {% endif %}
+{% if period_notice %}<p class="{{ 'error' if period_failed else 'result' }}">Latest period: {{ period_notice }}</p>{% endif %}
 <p class="hint">How far back the first sync reads and how often it syncs: the Gmail numbers on
   <a href="/settings">Settings</a>.</p>
 

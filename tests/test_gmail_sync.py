@@ -1,6 +1,6 @@
 """One Gmail sync pass against a stand-in Gmail built from made-up e-mails (no HTTP, no keychain)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from helpers import add_job, one
@@ -309,6 +309,41 @@ def test_a_company_s_ordinary_mail_leaves_nothing_behind_but_its_job_mail_is_loo
     assert row(conn, "shop") is None and row(conn, "news") is None
     assert row(conn, "job")[0] == "unclear"
     assert one(conn, "SELECT count(*) FROM emails")[0] == 1
+
+
+def test_read_all_sorts_every_e_mail_and_searches_without_job_signs(conn, acme):
+    tracker.move(conn, acme, "ready", "applied", NOW.date())
+    gmail = FakeGmail(
+        email("chat", "Acme Team <team@acme.example>", "Quick chat?", "Are you free on Tuesday?"),
+        email("news", "Shop <news@shop.example>", "Our autumn sale"),
+    )
+    assert sync.run(conn, gmail, 60, NOW, read_all=True) == "Read 2 new e-mails: 0 cards moved, 1 to check."
+    assert gmail.queries == ["newer_than:60d -in:sent -in:drafts -in:spam -in:trash -in:chats"]
+    assert row(conn, "chat")[:2] == ("unclear", acme) and row(conn, "news") is None
+
+
+def test_read_all_never_moves_a_card_on_mail_with_no_job_sign(conn, acme):
+    tracker.move(conn, acme, "ready", "applied", NOW.date())
+    gmail = FakeGmail(email("webinar", "Acme <news@acme.example>", "Confirm your availability for our webinar"))
+    assert sync.run(conn, gmail, 60, NOW, read_all=True) == "Read 1 new e-mail: 0 cards moved, 1 to check."
+    assert tracker.stage(conn, acme) == "applied" and row(conn, "webinar")[:4] == ("unclear", acme, 0, 1)
+
+
+def test_a_chosen_period_is_read_once_and_leaves_the_regular_sync_where_it_was(conn, acme):
+    gmail = FakeGmail(email("m1", "Acme <no-reply@greenhouse.io>", "Thank you for applying to Acme"))
+    result = sync.period(conn, gmail, date(2026, 10, 1), date(2026, 10, 31))
+    assert result == "Read 1 new e-mail from 2026-10-01 to 2026-10-31: 1 card moved, 0 to check."
+    assert gmail.queries[0].startswith("after:2026/10/01 before:2026/11/01 -in:sent -in:drafts")
+    assert "{from:greenhouse.io " in gmail.queries[0] and tracker.stage(conn, acme) == "applied"
+    assert one(conn, "SELECT count(*) FROM gmail_sync")[0] == 0  # nothing of the regular sync's is saved
+    assert sync.period(conn, gmail, date(2026, 10, 1), date(2026, 10, 31)).startswith("Read 0 new e-mails")
+
+
+def test_a_period_with_more_than_one_search_reads_says_so(conn, monkeypatch):
+    monkeypatch.setattr(sync, "SEARCH_LIMIT", 1)
+    gmail = FakeGmail(email("news", "Shop <news@shop.example>", "Our autumn sale"))
+    result = sync.period(conn, gmail, date(2026, 10, 1), date(2026, 10, 31), read_all=True)
+    assert result.endswith("choose a period that ends earlier.") and not sync.failed(result)
 
 
 def test_a_model_that_can_t_answer_stops_the_batch_after_one_try(conn, acme, monkeypatch):

@@ -59,6 +59,12 @@
     <input name="gmail_lookback_days" type="number" min="1" max="365" step="1" value="{{ form.gmail_lookback_days }}"></label>
   <label>Sync every this many minutes while the dashboard is open (0 = off, 5 to 1440; 30 is the default)
     <input name="gmail_every_minutes" type="number" min="0" max="1440" step="1" value="{{ form.gmail_every_minutes }}"></label>
+  <label>Which e-mails a sync sorts
+    <select name="gmail_read_all">
+      {% for value, label in [("off", "only those with a job sign: from a job system, in a known conversation or with a job word"), ("on", "all my e-mails: for an inbox used only for job hunting")] %}
+      <option value="{{ value }}"{% if form.gmail_read_all == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
 
   <h2>Politeness</h2>
   <label>Requests per second to each job site (1 to 5; 1 is polite and the default)

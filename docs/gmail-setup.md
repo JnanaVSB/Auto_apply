@@ -18,6 +18,10 @@ guide connects your own Gmail in about ten minutes. You only need a Google accou
   to) usually leaves nothing behind in the dashboard. Mail that uses a job word in another sense (a rental or
   credit-card "application", say) may still appear on **E-mails to check**: **Dismiss** removes it and forgets its
   subject.
+- An inbox used only for job hunting: in the **Gmail** section of the main **Settings** page, set **Which e-mails a
+  sync sorts** to **all my e-mails**. Then every e-mail is sorted (still never your sent mail, drafts, spam, bin or
+  chats), and the first sync looks back at all of them. A company you applied to writing without a clear phrase
+  ("Quick chat?") waits on **E-mails to check**, and so may other mail with a cautious word ("unfortunately").
 - When it moves a card: only on a clear e-mail, and only forward. Mixed news (for example an offer that also says
   "we will not be moving forward"), or a soft no without a clear one ("unfortunately", "regret to inform", "not
   selected", "the position has been filled", …), waits on **E-mails to check** for the local model or you.
@@ -69,6 +73,11 @@ Treat the client secret like a password: don't share it, don't send it to anyone
 
 The first sync reads the last 60 days; after that the dashboard syncs every 30 minutes while it is open. Both numbers
 are in the **Gmail** section of the main **Settings** page. **Sync now** on Settings → Gmail syncs at once.
+
+Older e-mails the first sync didn't reach: on Settings → Gmail, choose a **From** and a **To** date under **Read this
+period** and press it. Both days are included, e-mails already read are skipped, and the regular sync carries on as
+before. Gmail gives the newest first, so a period with more than about 5,000 e-mails reads the newest 5,000 and says
+so: choose a period that ends earlier for the rest.
 
 ## 7. Testing mode: connect again about once a week
 Google ends a testing app's sign-in after 7 days. Settings → Gmail shows when ("Google asks you to connect again after

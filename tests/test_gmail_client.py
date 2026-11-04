@@ -125,6 +125,11 @@ def test_search_and_history_follow_every_page():
     assert search[1].url.params["pageToken"] == "p2" and "nextPageToken" in search[0].url.params["fields"]
 
 
+def test_a_search_that_finds_nothing_is_an_empty_list():
+    with gmail(FakeGoogle({"/messages": [httpx.Response(204)]})) as box:
+        assert box.search("newer_than:60d") == []
+
+
 def test_a_history_gmail_no_longer_has_asks_for_a_fresh_search():
     with gmail(FakeGoogle({"/history": [404]})) as box, pytest.raises(HistoryTooOld):
         box.history("1")

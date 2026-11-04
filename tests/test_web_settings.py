@@ -125,6 +125,13 @@ def test_the_phone_book_schedule_and_requests_per_second_are_saved_and_shown(cli
     assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="2"' in client.get("/settings").text
 
 
+def test_reading_all_e_mails_is_saved_and_shown(client, settings_file):
+    assert not load_config(settings_file).gmail_read_all
+    assert "Saved." in save(client, gmail_read_all="on").text
+    assert load_config(settings_file).gmail_read_all
+    assert '<option value="on" selected>all my e-mails' in client.get("/settings").text
+
+
 def test_phone_book_lists_are_saved_and_shown(client, settings_file):
     other = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
     save(client, phonebook_lists=f" {other} \n\n{other}")

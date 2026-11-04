@@ -120,6 +120,7 @@ def test_the_dashboard_schedule_is_0_to_168_hours(tmp_path, value, ok):
         ("gmail_lookback_days", "1", True), ("gmail_lookback_days", "366", False),
         ("gmail_every_minutes", "0", True), ("gmail_every_minutes", "5", True), ("gmail_every_minutes", "1", False),
         ("gmail_every_minutes", "4", False), ("gmail_every_minutes", "1441", False),
+        ("gmail_read_all", '"false"', False),
         ("requests_per_second", "1", True), ("requests_per_second", "5", True),
         ("requests_per_second", "0", False), ("requests_per_second", "6", False),
         ("requests_per_second", "0.5", False), ("requests_per_second", '"2"', False),

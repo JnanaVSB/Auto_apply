@@ -9,7 +9,7 @@ import re
 import secrets
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -29,6 +29,7 @@ VISIBLE = re.compile(r"[\x21-\x7e]{1,200}")  # as Google gives them: visible cha
 DONE = {  # ?done=…: fixed words only
     "client": "Google client saved. Now press Connect.",
     "syncing": "Syncing now; this page shows the result when you reload it.",
+    "period": "Reading that period now; this page shows the result when you reload it.",
     "no-client": "Save your Google client ID and secret first.",
     "disconnected": "Disconnected: the app can no longer read your Gmail.",
     "disconnected-here": (
@@ -119,6 +120,17 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         request.app.state.mailer.wake()
         return RedirectResponse(f"{PAGE}?done=syncing", 303)
 
+    @app.post(PAGE + "/period")
+    async def read_period(request: Request) -> Response:
+        try:
+            start, end = (date.fromisoformat(request.state.form.get(name, "")) for name in ("start", "end"))
+        except ValueError:
+            return await _view(request, page, 400, problem="Choose both dates.")
+        if start > end or end > date.today():
+            return await _view(request, page, 400, problem="The From date comes first, and To is today at the latest.")
+        request.app.state.mailer.read_period(start, end)
+        return RedirectResponse(f"{PAGE}?done=period", 303)
+
     @app.post(PAGE + "/disconnect")
     async def disconnect(request: Request) -> Response:
         """Google is asked to forget the sign-in, then it is removed here either way, with the sync's position, so a
@@ -151,6 +163,9 @@ async def _view(request: Request, page: Callable[..., HTMLResponse], status: int
     if last_sync:
         values["last_sync"] = f"{datetime.fromisoformat(last_sync).astimezone():%Y-%m-%d %H:%M}"
     values["failed"] = sync.failed(values["last_result"])
+    values["today"] = date.today().isoformat()  # the period form's latest date
+    values["period_notice"] = request.app.state.mailer.period_notice
+    values["period_failed"] = sync.failed(values["period_notice"])
     mailer_notice = request.app.state.mailer.notice
     values["latest"] = mailer_notice if mailer_notice != values["last_result"] else None  # e.g. "busy elsewhere"
     if all(sign_in):
