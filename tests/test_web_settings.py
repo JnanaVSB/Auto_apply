@@ -40,7 +40,8 @@ def client(client, settings_file):
 def form(**changes):
     values = {
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",
-        "collect_every_hours": "0", "phonebook_every_days": "30", "requests_per_second": "1",
+        "collect_every_hours": "0", "phonebook_every_days": "30", "tracker_stale_days": "21",
+        "requests_per_second": "1",
         "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
         "list_level_1": "intern", "phonebook_lists": "",
     }  # fmt: skip
@@ -117,9 +118,9 @@ def test_the_phone_book_schedule_and_requests_per_second_are_saved_and_shown(cli
         in client.get("/settings").text
     )  # not in the file yet: the default, monthly
     assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="1"' in client.get("/settings").text
-    save(client, phonebook_every_days="7", requests_per_second="2")
+    save(client, phonebook_every_days="7", requests_per_second="2", tracker_stale_days="30")
     config = load_config(settings_file)
-    assert (config.phonebook_every_days, config.requests_per_second) == (7, 2)
+    assert (config.phonebook_every_days, config.requests_per_second, config.tracker_stale_days) == (7, 2, 30)
     assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="2"' in client.get("/settings").text
 
 

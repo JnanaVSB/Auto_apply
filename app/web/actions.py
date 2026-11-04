@@ -29,7 +29,8 @@ LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
-NUMBERS = ("collect_every_hours", "phonebook_every_days", "requests_per_second")  # whole numbers on the settings form
+# Whole numbers on the settings form
+NUMBERS = ("collect_every_hours", "phonebook_every_days", "tracker_stale_days", "requests_per_second")
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
 SAVE_ANSWER = """INSERT INTO answer_key (job_id, label, marked_on) VALUES (?, ?, ?)
     ON CONFLICT (job_id) DO UPDATE SET label = excluded.label, marked_on = excluded.marked_on"""

@@ -31,6 +31,8 @@ sources:
 collect_every_hours: 0
 # While the dashboard is open, refresh the phone book every this many days (1 to 365; 30 = monthly). 0 = off.
 phonebook_every_days: 30
+# Tracker: grey out a card in Applied, Online Assessment or Interview after this many days unchanged (1 to 365).
+tracker_stale_days: 21
 # New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
 requests_per_second: 1
 

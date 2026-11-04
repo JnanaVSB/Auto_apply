@@ -48,6 +48,11 @@
   <label>Refresh the phone book every this many days while the dashboard is open (0 = off, up to 365)
     <input name="phonebook_every_days" type="number" min="0" max="365" step="1" value="{{ form.phonebook_every_days }}"></label>
 
+  <h2>Tracker</h2>
+  <label>Grey out a card in Applied, Online Assessment or Interview after this many days with no change (1 to 365; 21 is
+    the default)
+    <input name="tracker_stale_days" type="number" min="1" max="365" step="1" value="{{ form.tracker_stale_days }}"></label>
+
   <h2>Politeness</h2>
   <label>Requests per second to each job site (1 to 5; 1 is polite and the default)
     <input name="requests_per_second" type="number" min="1" max="5" step="1" value="{{ form.requests_per_second }}"></label>
