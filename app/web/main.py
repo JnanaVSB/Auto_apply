@@ -59,12 +59,25 @@ SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queu
 VIEWS = ("table", "cards")  # the job lists' two views; with no choice the stylesheet shows Cards
 VIEW_COOKIE = "auto_apply_view"  # named for this app, like the session cookie: cookies on 127.0.0.1 are shared
 LISTS = ("/", "/ready")  # the pages with the Table | Cards switch
+LOOK_COOKIE = "auto_apply_look"  # this browser's colours and mode, "<colours>.<mode>", e.g. "E.dark"
+SCHEMES = {  # the stylesheet's colour schemes (data-palette); the first is the default and needs no attribute
+    "today": "Teal (default)",
+    "A": "A · Olive and walnut",
+    "B": "B · Sage and espresso",
+    "C": "C · Moss and cream",
+    "D": "D · Mix (A, warmer brown titles)",
+    "E": "E · Forest rail and cognac",
+    "F": "F · Espresso rail and olive",
+    "G": "G · Olive-black and brass",
+}
+MODES = {"auto": "Auto (as this device)", "light": "Light", "dark": "Dark"}  # data-theme; the first is the default
 templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE, "SCORE_THESE": SCORE_THESE}
 templates.env.globals |= {  # the filter form's words, shared with its "Filters" summary
     "SOURCE_LABELS": queries.SOURCE_LABELS,
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
 }
+templates.env.globals |= {"SCHEMES": SCHEMES, "MODES": MODES}  # the Look form on Settings
 
 
 def create_app(
@@ -153,6 +166,18 @@ def create_app(
             raise HTTPException(400, "Choose Table or Cards.")
         response = RedirectResponse(_in_view(request.state.form.get("back", ""), choice), 303)
         response.set_cookie(VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True)
+        return response
+
+    @app.post("/look")
+    async def choose_look(request: Request) -> Response:
+        """Colours and mode for every page, kept in this browser; back to the Look section on Settings."""
+        scheme, mode = request.state.form.get("scheme"), request.state.form.get("mode")
+        if scheme not in SCHEMES or mode not in MODES:
+            raise HTTPException(400, "Choose colours and a mode from the lists.")
+        response = RedirectResponse("/settings?look=changed#look", 303)
+        response.set_cookie(
+            LOOK_COOKIE, f"{scheme}.{mode}", max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True
+        )
         return response
 
     @app.post("/logout")
@@ -512,6 +537,12 @@ def _view(request: Request) -> str | None:
     return next((found for found in asked if found in VIEWS), None)
 
 
+def _look(request: Request) -> tuple[str, str]:
+    """This browser's colours and mode; an unknown or damaged cookie gives the defaults (teal, as the device)."""
+    scheme, _, mode = request.cookies.get(LOOK_COOKIE, "").partition(".")
+    return (scheme, mode) if scheme in SCHEMES and mode in MODES else ("today", "auto")
+
+
 def _to_job(job_id: int, form: dict[str, str]) -> Response:
     """Back to the job's page after a change, keeping the way back to the list."""
     return RedirectResponse(f"/jobs/{job_id}?back={quote(_back(form.get('back', '')), safe='')}", 303)
@@ -529,6 +560,7 @@ def _page(request: Request, name: str, status: int = 200, **values) -> HTMLRespo
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
     values["list_view"] = _view(request)
+    values["look"] = _look(request)
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 

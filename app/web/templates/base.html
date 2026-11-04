@@ -1,5 +1,6 @@
 <!doctype html>
-<html lang="en">
+{% set scheme, mode = look %}{# chosen on Settings; the defaults need no attribute #}
+<html lang="en"{% if scheme != "today" %} data-palette="{{ scheme }}"{% endif %}{% if mode != "auto" %} data-theme="{{ mode }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

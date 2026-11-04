@@ -118,4 +118,26 @@
 </form>
 {% endfor %}
 {% endif %}
+
+<h2 id="look">Look</h2>
+{% if request.query_params.get("look") == "changed" %}<p class="result" role="status">Look changed in this browser.</p>{% endif %}
+<form method="post" action="/look" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <p class="hint">Colours and light or dark for every page, kept in this browser only (not in data/config.yaml).</p>
+  <label>Colours
+    <select name="scheme">
+      {% for value, words in SCHEMES.items() %}
+      <option value="{{ value }}"{% if value == look[0] %} selected{% endif %}>{{ words }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Mode
+    <select name="mode">
+      {% for value, words in MODES.items() %}
+      <option value="{{ value }}"{% if value == look[1] %} selected{% endif %}>{{ words }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Use this look</button>
+</form>
 {% endblock %}

@@ -10,19 +10,26 @@
   font-weight: 600; font-style: normal; font-display: swap; }
 
 /* ---------- Tokens ---------- */
+/* Colours are light-dark(light value, dark value): the page follows the device's light or dark setting unless a
+   mode is chosen on Settings (data-theme, below). */
 :root {
   --serif: "Source Serif 4", Georgia, serif;
   --sans: "Source Sans 3", system-ui, sans-serif;
 
-  --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2;
-  --text: #1b2128; --muted: #56606b;
-  --line: #e1e5ea; --line-strong: #7e8894;
-  --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
-  --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e; --danger-soft: #fce9e7;
-  --highlight: #ffe58f; --on-highlight: #1b2128;  /* <mark>: highlighted words */
-  --glass: rgb(255 255 255 / 86%);  /* the bottom bar */
-  --shadow: 0 1px 2px rgb(27 33 40 / 6%), 0 4px 16px rgb(27 33 40 / 6%);
-  --shadow-raised: 0 2px 4px rgb(27 33 40 / 6%), 0 12px 32px rgb(27 33 40 / 12%);
+  --bg: light-dark(#f3f5f7, #111417); --surface: light-dark(#ffffff, #1a1e23); --sunken: light-dark(#ebeef2, #22272d);
+  --text: light-dark(#1b2128, #e6e9ed); --muted: light-dark(#56606b, #a1aab4);
+  --line: light-dark(#e1e5ea, #2b3138); --line-strong: light-dark(#7e8894, #6e7884);
+  --accent: light-dark(#0f6a80, #6fc8dd); --on-accent: light-dark(#ffffff, #082029);
+  --accent-soft: light-dark(#e3f1f5, #15303a);
+  --ok: light-dark(#2e6b34, #86c98e); --ok-soft: light-dark(#e7f4e8, #182a1b);
+  --warn: light-dark(#8a4f00, #e7b565); --warn-soft: light-dark(#fdf0d9, #2c2416);
+  --danger: light-dark(#b3261e, #f0928a); --danger-soft: light-dark(#fce9e7, #311c1a);
+  --highlight: light-dark(#ffe58f, #665214); --on-highlight: light-dark(#1b2128, #e6e9ed);  /* <mark> */
+  --glass: color-mix(in srgb, var(--surface) 86%, transparent);  /* the bottom bar */
+  --shadow: 0 1px 2px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 40%)),
+    0 4px 16px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 35%));
+  --shadow-raised: 0 2px 4px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 45%)),
+    0 12px 32px light-dark(rgb(27 33 40 / 12%), rgb(0 0 0 / 55%));
 
   --radius-s: 10px; --radius: 14px; --radius-l: 20px;
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
@@ -30,23 +37,100 @@
   --control: 2.5rem;     /* 40 px controls with a mouse */
   --rail: 5.5rem;        /* the icon rail */
   --lane-min: 11rem;     /* Tracker: lanes share the width down to this, then the board scrolls inside its box */
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111417; --surface: #1a1e23; --sunken: #22272d;
-    --text: #e6e9ed; --muted: #a1aab4;
-    --line: #2b3138; --line-strong: #6e7884;
-    --accent: #6fc8dd; --on-accent: #082029; --accent-soft: #15303a;
-    --ok: #86c98e; --ok-soft: #182a1b; --warn: #e7b565; --warn-soft: #2c2416; --danger: #f0928a; --danger-soft: #311c1a;
-    --highlight: #665214; --on-highlight: #e6e9ed;
-    --glass: rgb(26 30 35 / 86%);
-    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 16px rgb(0 0 0 / 35%);
-    --shadow-raised: 0 2px 4px rgb(0 0 0 / 45%), 0 12px 32px rgb(0 0 0 / 55%);
-    color-scheme: dark;
-  }
+  color-scheme: light dark;
 }
 @media (width < 64rem) { :root { --control: var(--tap); } }
+
+/* ---------- Colour schemes ---------- */
+/* Chosen per browser on Settings (Look): data-theme forces a mode, data-palette swaps the colours. Teal above is the
+   default. A-G share ok, warn and danger, and give titles their own colour; E-G add a dark frame. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-palette] {
+  --ok: light-dark(#2d6a4f, #8fcaa9); --ok-soft: light-dark(#e3f0e8, #18291f);
+  --warn: light-dark(#8a5200, #e3b46a); --warn-soft: light-dark(#f8ecd6, #2c2416);
+  --danger: light-dark(#a83222, #f0958a); --danger-soft: light-dark(#f9e4e0, #311c1a);
+  .brand-mark { background: var(--title); }
+}
+:where(:root[data-palette]) :is(h1, h2) { color: var(--title); }  /* as weak as h1, h2: the lane titles keep theirs */
+:root:is([data-palette="A"], [data-palette="D"]) {  /* A: olive and walnut; D: A with warmer brown titles */
+  --bg: light-dark(#f6f6f0, #121310); --surface: light-dark(#ffffff, #1b1d17); --sunken: light-dark(#ecede3, #23261e);
+  --text: light-dark(#1c1d17, #e9e9e1); --muted: light-dark(#5a5d4c, #abae9b); --title: light-dark(#3d2b1f, #dcbf9f);
+  --line: light-dark(#e1e3d6, #2d3026); --line-strong: light-dark(#868b74, #737863);
+  --accent: light-dark(#4e5c2c, #b4c383); --on-accent: light-dark(#ffffff, #1a1f0c);
+  --accent-soft: light-dark(#e9edda, #2b3119);
+}
+:root[data-palette="D"] { --title: light-dark(#553a28, #debf9c); }
+:root[data-palette="B"] {  /* sage and espresso */
+  --bg: light-dark(#f4f5f1, #111311); --surface: light-dark(#fdfdfb, #1a1d1a); --sunken: light-dark(#e8ebe3, #232722);
+  --text: light-dark(#181a17, #e7e9e4); --muted: light-dark(#585e54, #a8aea3); --title: light-dark(#4a3222, #d8b48f);
+  --line: light-dark(#dfe3da, #2b302a); --line-strong: light-dark(#838a7e, #717a6e);
+  --accent: light-dark(#5b6b3a, #aebd86); --on-accent: light-dark(#ffffff, #182010);
+  --accent-soft: light-dark(#e6ebdb, #283022);
+}
+:root[data-palette="C"] {  /* moss and cream */
+  --bg: light-dark(#f8f6ef, #13120e); --surface: light-dark(#fffefa, #1c1b16); --sunken: light-dark(#efece1, #25241d);
+  --text: light-dark(#1d1b16, #ebe8de); --muted: light-dark(#5f5b4d, #aeaa98); --title: light-dark(#5a3a1e, #e0c09a);
+  --line: light-dark(#e5e1d3, #2f2d25); --line-strong: light-dark(#8a8572, #7a7663);
+  --accent: light-dark(#424d22, #b9c48c); --on-accent: light-dark(#ffffff, #1b200d);
+  --accent-soft: light-dark(#e8ebd6, #2c3019);
+}
+:root[data-palette="E"] {  /* forest frame and cognac */
+  --bg: light-dark(#f1f2e8, #11130e); --surface: light-dark(#ffffff, #1a1d15); --sunken: light-dark(#e4e7d6, #23271c);
+  --text: light-dark(#1b1c16, #e9eadf); --muted: light-dark(#55594a, #adb19c); --title: light-dark(#7a4422, #e0b48c);
+  --line: light-dark(#d9dcc8, #2d3125); --line-strong: light-dark(#7d826a, #757a62);
+  --accent: light-dark(#44531e, #bccb84); --on-accent: light-dark(#ffffff, #192009);
+  --accent-soft: light-dark(#e1e8c9, #2c3419);
+  --chrome: light-dark(#2c3520, #0c0e09); --on-chrome: light-dark(#eef0e2, #e6e8da);
+  --chrome-muted: light-dark(#b7bea2, #a3a990); --chrome-line: light-dark(#3d4830, #1e2318);
+  --chrome-current: light-dark(#46552f, #2f3a1f); --on-chrome-current: light-dark(#ffffff, #f3f5e8);
+  --chrome-mark: light-dark(#c8d48c, #bccb84);
+}
+:root[data-palette="F"] {  /* espresso frame and olive */
+  --bg: light-dark(#f5f2ea, #13110e); --surface: light-dark(#fffdf8, #1d1a15); --sunken: light-dark(#ebe6da, #27231d);
+  --text: light-dark(#1e1a15, #ece7dd); --muted: light-dark(#5d564b, #b1a998); --title: light-dark(#5b3720, #dcb48e);
+  --line: light-dark(#e2dccd, #312c24); --line-strong: light-dark(#887f6e, #7d7564);
+  --accent: light-dark(#4a5a24, #b9c77c); --on-accent: light-dark(#ffffff, #1b200b);
+  --accent-soft: light-dark(#e6ead2, #2d311c);
+  --chrome: light-dark(#2b211a, #0e0c09); --on-chrome: light-dark(#f2ece3, #ece6dc);
+  --chrome-muted: light-dark(#c4b6a5, #a99f8d); --chrome-line: light-dark(#3e3127, #221d17);
+  --chrome-current: light-dark(#4b3a2b, #33291f); --on-chrome-current: light-dark(#ffffff, #f6f1e8);
+  --chrome-mark: #b9c77c;
+}
+:root[data-palette="G"] {  /* olive-black frame and brass */
+  --bg: light-dark(#eef0e6, #10120c); --surface: light-dark(#fbfcf7, #191c13); --sunken: light-dark(#e0e4d2, #22261a);
+  --text: light-dark(#191b14, #e8eadc); --muted: light-dark(#53584a, #aab098); --title: light-dark(#4a2e18, #d9b27a);
+  --line: light-dark(#d4d8c3, #2c3122); --line-strong: light-dark(#787e66, #737a5f);
+  --accent: light-dark(#3a4718, #c2cf8a); --on-accent: light-dark(#ffffff, #1a200b);
+  --accent-soft: light-dark(#dde5c3, #2b3318);
+  --chrome: light-dark(#1f2416, #0a0b07); --on-chrome: light-dark(#ecefe0, #e4e7d6);
+  --chrome-muted: light-dark(#b0b79b, #a0a78b); --chrome-line: light-dark(#2f3622, #1b1f14);
+  --chrome-current: light-dark(#38422a, #2c3420); --on-chrome-current: light-dark(#ffffff, #f2f4e6);
+  --chrome-mark: #d2b06a;
+}
+/* E-G: the rail, cost bar and phone bottom bar on the dark frame; table headers on a band. */
+:root:is([data-palette="E"], [data-palette="F"], [data-palette="G"]) {
+  --chrome-warn: #e3b46a;  /* the paused notice: A-G's dark warn, in both modes */
+  .rail { background: var(--chrome); border-right-color: var(--chrome-line); }
+  .rail :is(.nav-group a, .logout button) { color: var(--on-chrome); }
+  .rail :is(.nav-group a, .logout button) .icon { color: var(--chrome-muted); }
+  .rail :is(.nav-group li:first-child, .logout) { border-top-color: var(--chrome-line); }
+  .rail :is(.nav-group a, .logout button):hover { background: color-mix(in srgb, var(--on-chrome) 10%, transparent); }
+  .rail .nav-group a[aria-current="page"] { background: var(--chrome-current); color: var(--on-chrome-current);
+    box-shadow: inset 0 -3px 0 var(--chrome-mark); }
+  .rail .nav-group a[aria-current="page"] .icon { color: var(--on-chrome-current); }
+  :is(.rail, .topbar) :focus-visible { outline-color: var(--chrome-mark); }
+  .brand-mark { background: var(--chrome-mark); color: var(--chrome); }
+  .topbar { background: var(--chrome); border-bottom-color: var(--chrome-line); color: var(--chrome-muted); }
+  .topbar > summary:hover, .topbar > :is(table, p), .dock-where strong { color: var(--on-chrome); }
+  .topbar .error { color: var(--chrome-warn); }
+  .topbar a { color: var(--chrome-mark); }
+  .dock > summary { background: color-mix(in srgb, var(--chrome) 92%, transparent); border-color: var(--chrome-line); }
+  .dock-where .caption { color: var(--chrome-muted); }
+  .dock-button { background: var(--chrome-mark); color: var(--chrome); }
+  main th { background: var(--sunken); }
+  @media (prefers-reduced-transparency: reduce) { .dock > summary { background: var(--chrome); } }
+}
 
 /* ---------- Base and type ---------- */
 * { box-sizing: border-box; }
@@ -398,7 +482,7 @@ main:has(.board) { max-width: none; }
 
 /* ---------- Preferences ---------- */
 @media (prefers-contrast: more) {
-  :root { --line: var(--line-strong); }
+  :root, :root[data-palette] { --line: var(--line-strong); }
 }
 @media (prefers-reduced-motion: reduce) {
   .sheet { animation: none; }
