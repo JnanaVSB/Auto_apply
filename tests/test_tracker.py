@@ -224,3 +224,12 @@ def test_a_bad_date_or_a_long_name_saves_nothing(conn, company, applied_on):
 
 def test_tomorrow_is_allowed_for_another_time_zone(conn):
     assert add(conn, applied_on=date(2026, 11, 5))[0] == "Added to Applied."
+
+
+def test_a_grey_card_comes_first_so_a_long_lane_never_hides_it(conn):
+    with conn:
+        grey = place(conn, "applied", days_ago=30)
+        for _ in range(tracker.LANE_CARDS):
+            place(conn, "applied", days_ago=1)
+    cards = lane(conn, "applied")["cards"]
+    assert cards[0]["id"] == grey and cards[0]["stale"] and not any(card["stale"] for card in cards[1:])

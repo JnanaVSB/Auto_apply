@@ -121,9 +121,10 @@ def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
 
 
 def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all: str | None = None) -> list[dict]:
-    """The lanes in board order, each {"stage", "name", "cards", "count", "more"}; a lane shows its newest
-    LANE_CARDS cards unless it is `show_all`. `now` is this computer's local time, aware: the day counter counts local
-    dates, and a waiting card goes grey when it hasn't changed for `stale_days`."""
+    """The lanes in board order, each {"stage", "name", "cards", "count", "more"}; a lane shows its grey cards, then
+    the rest, each newest change first, LANE_CARDS of them unless it is `show_all`. `now` is this computer's local
+    time, aware: the day counter counts local dates, and a waiting card goes grey when it hasn't changed for
+    `stale_days`."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
     for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, _ in conn.execute(BOARD):
@@ -139,6 +140,8 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "stale": stage_ in WAITING and datetime.fromisoformat(changed_on) < cutoff,
             }
         )
+    for cards in lanes.values():  # grey cards first, so "Show all" never hides the ones to check
+        cards.sort(key=lambda card: not card["stale"])
     return [
         {
             "stage": stage_,

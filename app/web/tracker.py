@@ -50,7 +50,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if start not in tracker.STAGES or to not in tracker.STAGES or start == to:
             raise HTTPException(400, "Choose a stage from the list.")
         moved = tracker.move(conn, job_id, start, to, date.today())
-        return RedirectResponse(f"{PAGE}?{f'moved={to}' if moved else 'notice=stale'}#job-{job_id}", 303)
+        return RedirectResponse(f"{PAGE}?{f'moved={to}' if moved else 'notice=stale'}", 303)
 
     @app.post(PAGE + "/{job_id:int}/round")
     async def save_round(request: Request, job_id: int) -> Response:
@@ -59,10 +59,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if round_ not in tracker.ROUNDS:
             raise HTTPException(400, "Choose a round from the list.")
         if tracker.set_round(conn, job_id, round_):
-            return RedirectResponse(f"{PAGE}?notice=round#job-{job_id}", 303)
+            return RedirectResponse(f"{PAGE}?notice=round", 303)
         if tracker.stage(conn, job_id) != "interview":  # moved meanwhile
-            return RedirectResponse(f"{PAGE}?notice=stale#job-{job_id}", 303)
-        return RedirectResponse(f"{PAGE}#job-{job_id}", 303)  # the same round: nothing to say
+            return RedirectResponse(f"{PAGE}?notice=stale", 303)
+        return RedirectResponse(PAGE, 303)  # the same round: nothing to say
 
     @app.post(PAGE + "/add")
     async def add_application(request: Request) -> Response:

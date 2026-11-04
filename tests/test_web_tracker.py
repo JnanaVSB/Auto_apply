@@ -45,15 +45,15 @@ def test_the_page_shows_six_lanes_and_a_ready_card_and_the_menu_has_tracker(clie
 
 def test_i_applied_moves_the_card_and_a_second_tab_is_told(client, conn, ready):
     reply = post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
-    assert (reply.status_code, reply.headers["location"]) == (303, f"/tracker?moved=applied#job-{ready}")
+    assert (reply.status_code, reply.headers["location"]) == (303, "/tracker?moved=applied")
     assert tracker.stage(conn, ready) == "applied"
     assert "Moved to Applied." in client.get(reply.headers["location"]).text
     again = post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
-    assert again.headers["location"] == f"/tracker?notice=stale#job-{ready}"
+    assert again.headers["location"] == "/tracker?notice=stale"
     assert "Already moved in another tab" in client.get(again.headers["location"]).text
 
 
-@pytest.mark.parametrize("start, to", [("ready", "ghosted"), ("applied", "applied"), ("", "applied")])
+@pytest.mark.parametrize("start, to", [("ready", "ghosted"), ("applied", "applied"), ("", "applied"), ("ready", "")])
 def test_an_unknown_or_unchanged_stage_is_refused(client, ready, start, to):
     assert post(client, f"/tracker/{ready}/move", **{"from": start, "to": to}).status_code == 400
 
@@ -69,15 +69,11 @@ def test_a_move_without_the_page_s_token_is_refused(client, conn, ready):
 
 
 def test_the_round_is_saved_only_on_an_interview_card(client, conn, ready):
-    assert (
-        post(client, f"/tracker/{ready}/round", round="2").headers["location"] == f"/tracker?notice=stale#job-{ready}"
-    )
+    assert post(client, f"/tracker/{ready}/round", round="2").headers["location"] == "/tracker?notice=stale"
     tracker.move(conn, ready, "ready", "interview", date(2026, 11, 4))
     assert post(client, f"/tracker/{ready}/round", round="9").status_code == 400
-    assert (
-        post(client, f"/tracker/{ready}/round", round="2").headers["location"] == f"/tracker?notice=round#job-{ready}"
-    )
-    assert post(client, f"/tracker/{ready}/round", round="2").headers["location"] == f"/tracker#job-{ready}"
+    assert post(client, f"/tracker/{ready}/round", round="2").headers["location"] == "/tracker?notice=round"
+    assert post(client, f"/tracker/{ready}/round", round="2").headers["location"] == "/tracker"
     assert 'value="2" selected' in client.get("/tracker").text
 
 
