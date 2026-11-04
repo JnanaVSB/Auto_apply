@@ -815,6 +815,37 @@ def test_version_15_rebuilds_versions_and_steps_for_the_council_and_keeps_every_
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
 
 
+def test_version_16_adds_the_tracker_and_keeps_jobs(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_15:
+        version_15.setattr(db, "UPGRADES", db.UPGRADES[:15])
+        version_15.setattr(db, "SCHEMA_VERSION", 15)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+    card = "INSERT OR REPLACE INTO tracker (job_id, stage, round, applied_on, changed_on) VALUES (1, {}, 'now')"
+    move = "INSERT INTO tracker_moves (job_id, from_stage, to_stage, moved_by, moved_on) VALUES (1, 'ready', {}, 'now')"
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT company FROM jobs").fetchall() == [("Acme",)]
+        with conn:
+            conn.execute(card.format("'applied', NULL, '2026-11-04'"))
+            conn.execute(card.format("'interview', '2', '2026-11-04'"))
+            conn.execute(move.format("'applied', 'you'"))
+        for bad in [
+            card.format("'interview', NULL, '2026-11-04'"),
+            card.format("'applied', '1', '2026-11-04'"),
+            card.format("'ready', NULL, '2026-11-04'"),
+            card.format("'applied', NULL, NULL"),
+            card.format("'ghosted', NULL, '2026-11-04'"),
+            move.format("'applied', 'robot'"),
+            move.format("'ghosted', 'you'"),
+        ]:
+            with pytest.raises(sqlcipher3.IntegrityError):
+                conn.execute(bad)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v15") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+
+
 PILOT = (
     "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, pilot_id, lineup, created_on) "
     "VALUES ({}, 1, 'pilot', {}, '[]', '{{}}', 'writing', 1, '{}', 'now')"

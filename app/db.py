@@ -534,6 +534,32 @@ UPGRADES = (
         PRIMARY KEY (step_id, objection)
     );
     """,
+    # 16: Phase 5, the Tracker. A job's place on the board, and every move. A job with a finished resume version and
+    # no row (or stage 'ready') is in Ready. Rows are never deleted: the history stays even if a card goes back to
+    # Ready.
+    """
+    CREATE TABLE tracker (
+        job_id INTEGER PRIMARY KEY REFERENCES jobs (id),
+        stage TEXT NOT NULL CHECK (stage IN ('ready', 'applied', 'assessment', 'interview', 'offer', 'rejected')),
+        round TEXT CHECK (round IN ('1', '2', '3', '4', '5', 'final')),  -- Interview only, else NULL
+        applied_on TEXT,  -- the local date (YYYY-MM-DD) the day counter counts from; NULL in Ready
+        changed_on TEXT NOT NULL,  -- the last move or round change (UTC, ISO), for greying out
+        CHECK ((stage = 'interview') = (round IS NOT NULL)),
+        CHECK ((stage = 'ready') = (applied_on IS NULL))
+    );
+    CREATE TABLE tracker_moves (  -- the history the job page shows
+        id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        from_stage TEXT NOT NULL
+            CHECK (from_stage IN ('ready', 'applied', 'assessment', 'interview', 'offer', 'rejected')),
+        to_stage TEXT NOT NULL CHECK (to_stage IN ('ready', 'applied', 'assessment', 'interview', 'offer', 'rejected')),
+        round TEXT CHECK (round IN ('1', '2', '3', '4', '5', 'final')),  -- the round after the move (Interview), else
+        -- NULL
+        moved_by TEXT NOT NULL CHECK (moved_by IN ('you', 'gmail')),  -- Phase 6 writes 'gmail'
+        moved_on TEXT NOT NULL
+    );
+    CREATE INDEX tracker_moves_job ON tracker_moves (job_id, id);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
