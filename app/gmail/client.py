@@ -20,7 +20,11 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 CLIENT_ID, CLIENT_SECRET, REFRESH = "gmail-client-id", "gmail-client-secret", "gmail-refresh-token"  # keychain names
-WAITS = (2, 4, 8)  # seconds between tries when Gmail is busy (429 or 5xx); then the next sync tries again
+WAITS = (2, 4, 8)  # seconds between tries when Google is busy (429 or 5xx); then the next sync tries again
+MAX_WAIT = 60  # the most a Retry-After is waited
+MAX_PAGES = 50  # pages per search or change list; beyond it the next pass reads on (the change list's position stops
+# at the last change read)
+BUSY = "Gmail is busy; the next sync tries again."
 BODY_LIMIT = 4000  # characters of an e-mail's text the local model may read
 UNEXPECTED = "Gmail answered in an unexpected way; nothing was changed."
 _sleep = time.sleep  # tests replace it
@@ -66,6 +70,7 @@ class Gmail:
                          "grant_type": "refresh_token"}  # fmt: skip
         self._client = httpx.Client(transport=transport, timeout=30)
         self._access, self._expires = "", 0.0  # in memory only
+        self._budget = float(sum(WAITS))  # seconds of waiting for a busy Google, shared by every request of this pass
 
     def __enter__(self) -> "Gmail":
         return self
@@ -86,17 +91,21 @@ class Gmail:
     def search(self, query: str) -> list[str]:
         """The ids of the messages a Gmail search finds, every page."""
         params = {"q": query, "maxResults": 100, "fields": "messages/id,nextPageToken"}
-        return [message["id"] for page in self._pages("/messages", params) for message in page.get("messages", [])]
+        return [message["id"] for page in self._pages("/messages", params)[0] for message in page.get("messages", [])]
 
     @_shaped
     def history(self, start: str) -> tuple[list[str], str]:
         """The ids of the messages added since `start`, and the newest position Gmail reports."""
         ids, newest = [], start
-        for page in self._pages("/history", {"startHistoryId": start, "historyTypes": "messageAdded"}):
+        pages, more = self._pages("/history", {"startHistoryId": start, "historyTypes": "messageAdded"})
+        for page in pages:
             ids += [
                 added["message"]["id"] for entry in page.get("history", []) for added in entry.get("messagesAdded", [])
             ]
             newest = str(page.get("historyId", newest))
+        if more:  # stopped early: the next pass reads on from the last change read here
+            newest = next((str(entry["id"]) for page in reversed(pages) for entry in reversed(page.get("history", []))),
+                          start)  # fmt: skip
         return ids, newest
 
     @_shaped
@@ -132,22 +141,40 @@ class Gmail:
         text = _decode(plain) if plain is not None else html_to_text(_decode(html)) if html is not None else ""
         return text[:BODY_LIMIT]
 
-    def _pages(self, path: str, params: dict) -> list[dict]:
+    def _pages(self, path: str, params: dict) -> tuple[list[dict], bool]:
+        """Up to MAX_PAGES pages, and whether there were more."""
         pages, token = [], None
-        while True:
+        while len(pages) < MAX_PAGES:
             page = self._get(path, params | ({"pageToken": token} if token else {}))
             pages.append(page)
             token = page.get("nextPageToken")
             if not token:
-                return pages
+                return pages, False
+        return pages, True
+
+    def _wait(self, reply: httpx.Response, tried: int) -> None:
+        """Google is busy: wait its Retry-After (seconds, at most MAX_WAIT) or the next of WAITS, out of this pass's
+        budget; past the tries or the budget, "busy" (the next sync tries again)."""
+        after = reply.headers.get("retry-after", "")
+        wait = min(int(after), MAX_WAIT) if after.isdigit() else WAITS[min(tried, len(WAITS) - 1)]
+        if tried >= len(WAITS) or wait > self._budget:
+            raise GmailError(BUSY)
+        self._budget -= wait
+        _sleep(wait)
 
     def _token(self) -> str:
         if self._access and self._expires - time.time() > 60:
             return self._access
-        try:
-            reply = self._client.post(TOKEN_URL, data=self._sign_in)
-        except httpx.HTTPError:
-            raise GmailError("Gmail could not be reached (no internet?); the next sync tries again.") from None
+        tried = 0
+        while True:
+            try:
+                reply = self._client.post(TOKEN_URL, data=self._sign_in)
+            except httpx.HTTPError:
+                raise GmailError("Gmail could not be reached (no internet?); the next sync tries again.") from None
+            if reply.status_code != 429 and reply.status_code < 500:
+                break
+            self._wait(reply, tried)
+            tried += 1
         found = _json(reply) or {}
         if reply.status_code == 400 and found.get("error") == "invalid_grant":
             raise Reconnect
@@ -159,7 +186,7 @@ class Gmail:
         return self._access
 
     def _get(self, path: str, params: dict) -> dict:
-        refreshed, waits = False, iter(WAITS)
+        refreshed, tried = False, 0
         while True:
             try:
                 reply = self._client.get(
@@ -171,10 +198,8 @@ class Gmail:
                 self._access, refreshed = "", True
                 continue
             if reply.status_code == 429 or reply.status_code >= 500:
-                wait = next(waits, None)
-                if wait is None:
-                    raise GmailError("Gmail is busy; the next sync tries again.")
-                _sleep(wait)
+                self._wait(reply, tried)
+                tried += 1
                 continue
             if reply.status_code == 404 and path.startswith("/messages/"):
                 raise Gone("That e-mail is no longer in Gmail.")

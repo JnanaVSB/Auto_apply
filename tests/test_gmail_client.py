@@ -245,3 +245,52 @@ def test_an_exchange_google_refuses_says_so_without_its_answer(answer, words):
             httpx.MockTransport(FakeGoogle({"/token": [answer]})),
         )
     assert SNIPPET not in str(error.value) and ACCESS not in str(error.value)
+
+
+def test_a_busy_sign_in_address_is_waited_out_like_gmail(waits):
+    fake = FakeGoogle({"/token": [503, 503, TOKEN], "/profile": [{"historyId": "1"}]})
+    with gmail(fake) as box:
+        assert box.profile()[1] == "1"
+    assert waits == [2, 4]
+
+
+def test_a_sign_in_address_busy_too_long_says_busy_not_the_client_id(waits):
+    fake = FakeGoogle({"/token": [503], "/profile": [{}]})
+    with gmail(fake) as box, pytest.raises(GmailError, match="busy") as error:
+        box.profile()
+    assert "client ID" not in str(error.value) and waits == [2, 4, 8]
+
+
+def test_one_wait_budget_is_shared_by_every_request_of_a_pass(waits):
+    fake = FakeGoogle({"/profile": [429, 429, 429, {"historyId": "1"}, 429, {"historyId": "2"}]})
+    with gmail(fake) as box:
+        assert box.profile()[1] == "1"
+        with pytest.raises(GmailError, match="busy"):
+            box.profile()
+    assert waits == [2, 4, 8]
+
+
+@pytest.mark.parametrize("after, seen", [("5", [5]), ("300", [])])
+def test_retry_after_is_used_up_to_a_minute_within_the_budget(waits, after, seen):
+    busy = httpx.Response(429, headers={"Retry-After": after})
+    fake = FakeGoogle({"/profile": [busy, {"historyId": "1"}]})
+    with gmail(fake) as box:
+        if seen:
+            assert box.profile()[1] == "1"
+        else:  # a minute is more than this pass may still wait
+            with pytest.raises(GmailError, match="busy"):
+                box.profile()
+    assert waits == seen
+
+
+def test_paging_stops_at_the_cap_and_the_change_list_resumes_from_the_last_change_read(monkeypatch):
+    monkeypatch.setattr(client, "MAX_PAGES", 3)
+    fake = FakeGoogle({
+        "/messages": [{"messages": [{"id": "a"}], "nextPageToken": "again"}],
+        "/history": [{"history": [{"id": "41", "messagesAdded": [{"message": {"id": "d"}}]}], "historyId": "99",
+                      "nextPageToken": "again"}],
+    })  # fmt: skip
+    with gmail(fake) as box:
+        assert box.search("x") == ["a", "a", "a"]
+        assert box.history("40") == (["d", "d", "d"], "41")
+    assert fake.calls("/messages") == 3 and fake.calls("/history") == 3
