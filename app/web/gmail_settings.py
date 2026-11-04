@@ -111,6 +111,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         with conn:
             conn.execute("INSERT OR IGNORE INTO gmail_sync (id) VALUES (1)")
             conn.execute(CONNECTED, (collect.now(),))
+        request.app.state.mailer.wake()  # a sync now, not only when the set minutes since a failed try have passed
         return page(request, "gmail_done.html", sentence="Gmail connected. The app can now read your mail (read-only).")
 
     @app.post(PAGE + "/sync")

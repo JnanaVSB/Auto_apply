@@ -10,9 +10,15 @@ guide connects your own Gmail in about ten minutes. You only need a Google accou
   applications (from job systems such as Greenhouse or Lever, or with words like "application" or "interview" in the
   subject), at most about 5,000 e-mails on that first look back. After that, each sync looks at every new e-mail's
   sender, subject and Gmail's short preview (not its text) to decide whether it is about one of your applications.
-- What it never reads: your own sent mail, drafts, spam, the bin and chats are skipped.
-- What it leaves alone: an e-mail that isn't about an application (personal mail, newsletters, a shop's order mail,
-  even from a company you applied to) leaves nothing behind in the dashboard.
+- What it skips: your own sent mail, drafts, spam, the bin and chats. Their sender and subject may be looked at, but
+  they never move a card and leave nothing behind.
+- What it leaves alone: an e-mail counts as about an application only when it comes from a job system, continues a
+  conversation already matched to one of your jobs, or uses a job word such as "application", "candidate" or
+  "interview". Anything else (personal mail, newsletters, a shop's order or sale mail, even from a company you applied
+  to) leaves nothing behind in the dashboard.
+- When it moves a card: only on a clear e-mail, and only forward. Mixed news (for example an offer that also says
+  "regret to inform"), or "unfortunately" without a clear no, waits on **E-mails to check** for the local model or
+  you.
 - What it keeps, only for an e-mail it matched to one of your applications or that waits for you on **E-mails to
   check**: the date, the sender's domain (for example `greenhouse.io`), what it was (confirmation, interview, …) and
   the job. The subject is kept only while the e-mail waits on E-mails to check, and is forgotten once you decide. The
@@ -66,8 +72,10 @@ are in the **Gmail** section of the main **Settings** page. **Sync now** on Sett
 Google ends a testing app's sign-in after 7 days. Settings → Gmail shows when ("Google asks you to connect again after
 7 days, around <date>"). When the sync says **Gmail needs connecting again**, open Settings → Gmail and press
 **Connect again**. The next sync carries on from the last sync that worked. If the gap was long and Gmail no longer
-has the list of changes since then, the sync searches again from the day before that last good sync, so nothing in
-between is missed (again up to about 5,000 e-mails); e-mails it already read are not read twice.
+has the list of changes since then, the sync searches again from the day before that last good sync, the same way as
+the first sync: e-mails from job systems or with job words in the subject, up to about 5,000. A reply such as
+"Re: Tuesday" from a company in that gap isn't found that way; check your inbox for anything from the companies you
+applied to. E-mails it already read are not read twice.
 
 Taking the project out of testing would need a review by Google; you don't need that for your own use.
 
@@ -75,7 +83,8 @@ Taking the project out of testing would need a review by Google; you don't need 
 - In the dashboard: **Settings → Gmail → Disconnect**. The dashboard asks Google to forget the sign-in, removes it
   from your keychain, and forgets where the last sync stopped, so connecting again (even another account) starts with
   a fresh look back. The e-mails it already sorted stay on your cards.
-- Pressing **Connect again** while connected also asks Google to forget the earlier sign-in once the new one works.
+- Pressing **Connect again** while connected simply replaces the saved sign-in with the new one. Only Disconnect asks
+  Google to forget a sign-in.
 - In your Google account: [myaccount.google.com](https://myaccount.google.com) → **Security** → **Your connections to
   third-party apps & services** (or **Third-party access**) → your app → **Delete all connections**. Use this too if
   the dashboard says Google could not be told.

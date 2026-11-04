@@ -99,13 +99,16 @@ def test_connect_sends_you_to_google_read_only_with_a_one_time_check(client):
     }  # fmt: skip
 
 
-def test_google_s_answer_saves_the_lasting_sign_in_once(client, conn, google):
+def test_google_s_answer_saves_the_lasting_sign_in_once(client, conn, google, monkeypatch):
+    synced = []
+    monkeypatch.setattr(client.app.state.mailer, "wake", lambda: synced.append(1))
     save_client(client)
     state = connect(client)["state"]
     reply = back_from_google(client, state=state, code=CODE)
     assert reply.status_code == 200 and "Gmail connected" in reply.text and 'href="/settings/gmail"' in reply.text
     assert CODE not in reply.text and LASTING not in reply.text and state not in reply.text
     assert get_secret(REFRESH) == LASTING and one(conn, "SELECT connected_on FROM gmail_sync")[0]
+    assert synced == [1]  # a sync starts right away
     sent = parse_qs(google.requests[-1].content.decode())
     assert sent["code"] == [CODE] and sent["code_verifier"] and sent["grant_type"] == ["authorization_code"]
     again = back_from_google(client, state=state, code=CODE)
