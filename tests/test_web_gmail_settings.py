@@ -9,7 +9,7 @@ import pytest
 from helpers import csrf, log_in, one
 from test_gmail_client import FakeGoogle
 
-from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH
+from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
 from app.keychain import get_secret, set_secret
 from app.web import gmail_settings
 
@@ -22,7 +22,7 @@ SECRET = "made-up-secret"  # noqa: S105 (a made-up test value)
 @pytest.fixture
 def google(client):
     """A fake Google for the dashboard: a token answer with a lasting sign-in, and revoke."""
-    fake = FakeGoogle({"/token": [{"refresh_token": LASTING, "access_token": "a"}], "/revoke": [{}]})
+    fake = FakeGoogle({"/token": [{"refresh_token": LASTING, "access_token": "a", "scope": SCOPE}], "/revoke": [{}]})
     client.app.state.gmail_transport = httpx.MockTransport(fake)
     return fake
 
@@ -112,13 +112,13 @@ def test_google_s_answer_saves_the_lasting_sign_in_once(client, conn, google):
     assert again.status_code == 400 and "no longer valid" in again.text
 
 
-def test_a_wrong_state_is_refused_and_ends_the_waiting_connect(client, google):
+def test_a_wrong_state_is_refused_and_leaves_your_connect_waiting(client, google):
     save_client(client)
     state = connect(client)["state"]
     assert back_from_google(client, state="guessed", code=CODE).status_code == 400
-    assert client.app.state.gmail_pending is None
-    assert back_from_google(client, state=state, code=CODE).status_code == 400
-    assert get_secret(REFRESH) is None and not google.requests
+    assert get_secret(REFRESH) is None and not google.requests and client.app.state.gmail_pending
+    assert back_from_google(client, state=state, code=CODE).status_code == 200  # your own answer still works
+    assert get_secret(REFRESH) == LASTING and client.app.state.gmail_pending is None
 
 
 def test_an_answer_after_ten_minutes_is_refused(client, google, monkeypatch):
@@ -138,7 +138,11 @@ def test_a_cancelled_sign_in_saves_nothing(client, google):
 
 @pytest.mark.parametrize(
     "answer, words",
-    [(400, "Google refused the sign-in (400)"), ({"access_token": "a"}, "didn&#39;t return a lasting sign-in")],
+    [
+        (400, "Google refused the sign-in (400)"),
+        ({"access_token": "a", "scope": SCOPE}, "didn&#39;t return a lasting sign-in"),
+        ({"refresh_token": LASTING, "scope": "openid email"}, "The read-only permission wasn&#39;t granted"),
+    ],
 )
 def test_google_refusing_the_code_saves_nothing(client, google, answer, words):
     google.replies["/token"] = [answer]
@@ -211,3 +215,20 @@ def test_an_address_gmail_can_t_give_is_said_plainly(client, google):
     save_client(client)
     set_secret(REFRESH, LASTING)
     assert "The address can't be read right now: Gmail needs connecting again" in client.get("/settings/gmail").text
+
+
+def test_connecting_again_asks_google_to_forget_the_earlier_sign_in(client, google):
+    set_secret(REFRESH, "made-up-earlier-sign-in")
+    save_client(client)
+    assert back_from_google(client, state=connect(client)["state"], code=CODE).status_code == 200
+    assert get_secret(REFRESH) == LASTING
+    revoked = [request for request in google.requests if request.url.path == "/revoke"]
+    assert len(revoked) == 1 and b"made-up-earlier-sign-in" in revoked[0].content
+
+
+def test_disconnect_also_forgets_where_the_sync_was(client, conn, google):
+    set_secret(REFRESH, LASTING)
+    with conn:
+        conn.execute("INSERT INTO gmail_sync (id, history_id, connected_on) VALUES (1, '500', 'x')")
+    post(client, "/settings/gmail/disconnect")
+    assert one(conn, "SELECT history_id, connected_on FROM gmail_sync") == (None, None)

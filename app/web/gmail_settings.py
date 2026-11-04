@@ -89,13 +89,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.get(CALLBACK)
     async def google_answer(request: Request) -> Response:
         """Google sends you back here (without the login cookie); the one-time state is the check."""
-        pending, request.app.state.gmail_pending = request.app.state.gmail_pending, None  # used once, also on failure
-        params = request.query_params
-        if (
-            pending is None
-            or not hmac.compare_digest(pending["state"].encode(), params.get("state", "").encode())
-            or _now() - pending["created"] > PENDING_MINUTES * 60
-        ):
+        pending, params = request.app.state.gmail_pending, request.query_params
+        if pending is None or not hmac.compare_digest(pending["state"].encode(), params.get("state", "").encode()):
+            return page(request, "gmail_done.html", 400, sentence=STALE)  # a stray answer leaves your Connect waiting
+        request.app.state.gmail_pending = None  # its own answer uses it once, whatever happens next
+        if _now() - pending["created"] > PENDING_MINUTES * 60:
             return page(request, "gmail_done.html", 400, sentence=STALE)
         if "error" in params:
             return page(request, "gmail_done.html", 400, sentence="Google sign-in was cancelled; nothing was saved.")
@@ -105,9 +103,12 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
                 raise GmailError(DONE["no-client"])
             sign_in = (params.get("code", ""), client_id, client_secret, pending["redirect"], pending["verifier"])
             token = await run_in_threadpool(exchange, *sign_in, request.app.state.gmail_transport)
+            old = get_secret(REFRESH)
             set_secret(REFRESH, token)
         except (GmailError, KeychainError) as error:
             return page(request, "gmail_done.html", 400, sentence=str(error))
+        if old and old != token:  # connected again: Google is asked to forget the earlier sign-in (best effort)
+            await run_in_threadpool(revoke, old, request.app.state.gmail_transport)
         conn = request.app.state.conn
         with conn:
             conn.execute("INSERT OR IGNORE INTO gmail_sync (id) VALUES (1)")
@@ -121,7 +122,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 
     @app.post(PAGE + "/disconnect")
     async def disconnect(request: Request) -> Response:
-        """Google is asked to forget the sign-in, then it is removed here either way; e-mails already read stay."""
+        """Google is asked to forget the sign-in, then it is removed here either way, with the sync's position, so a
+        next connect (maybe another account) starts fresh; e-mails already read stay."""
         try:
             token = get_secret(REFRESH)
             told = await run_in_threadpool(revoke, token, request.app.state.gmail_transport) if token else True
@@ -130,7 +132,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             return await _view(request, page, 400, problem=str(error))
         conn = request.app.state.conn
         with conn:
-            conn.execute(CONNECTED, (None,))
+            conn.execute("UPDATE gmail_sync SET connected_on = NULL, history_id = NULL WHERE id = 1")
         return RedirectResponse(f"{PAGE}?done={'disconnected' if told else 'disconnected-here'}", 303)
 
 

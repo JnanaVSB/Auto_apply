@@ -34,7 +34,7 @@
     {{ label_select(email.label) }}
     <button type="submit">Link</button>
   </form>
-  <p><a href="/tracker?applied={{ email.day.isoformat() }}#add">Add as an application</a></p>
+  {% if email.label in ("confirmation", "unclear") %}<p><a href="/tracker?applied={{ email.day.isoformat() }}#add">Add as an application</a></p>{% endif %}
   <form method="post" action="/tracker/emails/{{ email.id }}/dismiss">
     {{ csrf_field() }}
     <button type="submit">Dismiss</button>

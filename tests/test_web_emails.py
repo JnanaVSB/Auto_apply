@@ -110,3 +110,10 @@ def test_the_job_page_lists_the_job_s_e_mails(client, conn, jobs, phoenix):
     email(conn, "new", label="interview", job=jobs[0], to_check=0)
     text = client.get(f"/jobs/{jobs[0]}").text
     assert "2026-11-04 03:00 · Interview · greenhouse.io" in text and "Now in Ready." in text
+
+
+@pytest.mark.parametrize("label, offered", [("confirmation", True), ("unclear", True), ("rejection", False),
+                                            ("interview", False)])  # fmt: skip
+def test_add_as_an_application_is_offered_only_where_it_fits(client, conn, jobs, label, offered):
+    email(conn, "abc123", label=label)
+    assert ("Add as an application" in client.get("/tracker/emails").text) is offered

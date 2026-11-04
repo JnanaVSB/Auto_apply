@@ -223,7 +223,8 @@ def exchange(
     verifier: str,
     transport: httpx.BaseTransport | None = None,
 ) -> str:
-    """The lasting sign-in (refresh token) for the one-time code Google sent back after you approved."""
+    """The lasting sign-in (refresh token) for the one-time code Google sent back after you approved; refused unless
+    the read-only permission was granted."""
     data = {"grant_type": "authorization_code", "code": code, "client_id": client_id, "client_secret": client_secret,
             "redirect_uri": redirect_uri, "code_verifier": verifier}  # fmt: skip
     try:
@@ -233,7 +234,10 @@ def exchange(
         raise GmailError("Google could not be reached (no internet?); press Connect again.") from None
     if reply.status_code != 200:
         raise GmailError(f"Google refused the sign-in ({reply.status_code}); press Connect again.")
-    token = (_json(reply) or {}).get("refresh_token")
+    found = _json(reply) or {}
+    if SCOPE not in str(found.get("scope", "")).split():  # you can untick it on Google's page
+        raise GmailError("The read-only permission wasn't granted; press Connect again and tick it.")
+    token = found.get("refresh_token")
     if not isinstance(token, str) or not token:
         raise GmailError("Google didn't return a lasting sign-in; press Connect again.")
     return token
