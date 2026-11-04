@@ -1,0 +1,73 @@
+"""The rules that sort an e-mail by its sender, subject and preview (made-up e-mails only)."""
+
+import pytest
+
+from app.gmail.classify import classify, job_system, sender
+
+BOARD = "boards.greenhouse.io"  # a job system's sender
+SHOP = "news.example.com"  # anyone else
+
+
+@pytest.mark.parametrize(
+    "subject, snippet, label",
+    [
+        ("Your application to Acme", "Unfortunately we will not be moving forward.", "rejection"),
+        ("Offer from Acme", "We are pleased to offer you the role of ML Intern.", "offer"),
+        ("Next steps", "We would like to schedule an interview with you next week.", "interview"),
+        ("Acme coding challenge", "Please complete the HackerRank test within 5 days.", "assessment"),
+        ("Thank you for applying to Acme", "We have received your application.", "confirmation"),
+    ],
+)
+def test_each_label_has_its_phrases(subject, snippet, label):
+    assert classify(BOARD, subject, snippet) == label
+
+
+def test_a_rejection_wins_over_thanks_and_an_interview_mention():
+    snippet = "Thank you for applying and for your interview. Unfortunately we decided to pursue other candidates."
+    assert classify(BOARD, "Your application", snippet) == "rejection"
+
+
+def test_an_interview_invite_that_thanks_you_for_applying_is_an_interview():
+    assert classify(BOARD, "Thank you for applying", "We would like to invite you to interview.") == "interview"
+
+
+def test_offering_benefits_is_not_an_offer():
+    assert classify(SHOP, "Join us", "We offer great benefits and an assessment of your skills.") == "other"
+
+
+@pytest.mark.parametrize("domain, label", [(BOARD, "unclear"), ("acme.myworkdayjobs.com", "unclear"), (SHOP, "other")])
+def test_with_no_phrase_a_job_system_is_unclear_and_anyone_else_other(domain, label):
+    assert classify(domain, "Update on your candidacy", "Please log in to see the status.") == label
+
+
+@pytest.mark.parametrize("domain, label", [(BOARD, "unclear"), (SHOP, "other")])
+def test_another_language_is_left_to_the_local_model_only_from_a_job_system(domain, label):
+    assert classify(domain, "Tu solicitud", "Lamentablemente no seguiremos con tu candidatura.") == label
+
+
+def test_case_spacing_and_curly_apostrophes_do_not_matter():
+    assert classify(BOARD, "UPDATE", "We’re  sorry:\nwe are NOT   MOVING\tFORWARD.") == "rejection"
+    assert classify(BOARD, "Update", "We won’t be moving forward.") == "rejection"
+
+
+def test_the_preview_is_read_as_gmail_sends_it_html_escaped():
+    assert classify(BOARD, "Update", "we won&#39;t be moving forward &amp; wish you well") == "rejection"
+
+
+@pytest.mark.parametrize(
+    "domain, found",
+    [("greenhouse.io", True), ("us.greenhouse.io", True), ("evilgreenhouse.io", False),
+     ("greenhouse.io.example.com", False), ("us.greenhouse-mail.io", False), ("", False)],
+)  # fmt: skip
+def test_a_job_system_is_its_own_domain_or_under_it_never_a_lookalike(domain, found):
+    assert job_system(domain) is found
+
+
+@pytest.mark.parametrize(
+    "header, found",
+    [("Acme Recruiting <no-reply@Boards.Greenhouse.io>", ("Acme Recruiting", "boards.greenhouse.io")),
+     ('"Doe, Jane" <jane@example.com>', ("Doe, Jane", "example.com")),
+     ("not an address", ("", "")), ("", ("", "")), ("Someone <@>", ("", ""))],
+)  # fmt: skip
+def test_the_sender_is_the_display_name_and_the_address_s_domain(header, found):
+    assert sender(header) == found
