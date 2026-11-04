@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 
 import httpx
 import pytest
+import sqlcipher3
 from helpers import ACME, ACME_JOB, FakeWeb, add_job, board_job, one
 
 from app import fetch, tracker
@@ -226,10 +227,48 @@ def test_tomorrow_is_allowed_for_another_time_zone(conn):
     assert add(conn, applied_on=date(2026, 11, 5))[0] == "Added to Applied."
 
 
-def test_a_grey_card_comes_first_so_a_long_lane_never_hides_it(conn):
+def test_a_new_card_shows_in_a_lane_full_of_grey_ones_and_the_hidden_grey_ones_are_counted(conn, job):
     with conn:
-        grey = place(conn, "applied", days_ago=30)
-        for _ in range(tracker.LANE_CARDS):
-            place(conn, "applied", days_ago=1)
-    cards = lane(conn, "applied")["cards"]
-    assert cards[0]["id"] == grey and cards[0]["stale"] and not any(card["stale"] for card in cards[1:])
+        for _ in range(tracker.LANE_CARDS + 1):
+            place(conn, "applied", days_ago=30)
+    tracker.move(conn, job, "ready", "applied", DAY)
+    shown = lane(conn, "applied")
+    assert shown["cards"][0]["id"] == job and not shown["cards"][0]["stale"]
+    assert (len(shown["cards"]), shown["count"], shown["grey_hidden"]) == (30, 32, 2)
+    assert lane(conn, "applied", show_all="applied")["grey_hidden"] == 0
+
+
+def test_a_saved_job_goes_to_applied_even_when_its_posting_is_gone_or_the_board_is_offline(conn):
+    other = ACME_JOB.replace("123", "456")
+    with conn:
+        gone, offline = (
+            add_job(conn, "ML Intern", apply_url=ACME_JOB),
+            add_job(conn, "Robotics Intern", apply_url=other),
+        )
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({ACME: {"jobs": []}})))) as fetcher:
+        assert add(conn, link=ACME_JOB, fetcher=fetcher) == ("Added to Applied.", gone)
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({}, down=("boards-api.greenhouse.io",))))) as fetcher:
+        assert add(conn, link=other, fetcher=fetcher) == ("Added to Applied.", offline)
+    assert one(conn, "SELECT count(*) FROM jobs")[0] == 2
+
+
+def test_a_move_or_round_change_whose_history_fails_changes_nothing(conn, job, monkeypatch):
+    with pytest.raises(sqlcipher3.IntegrityError):
+        tracker.move(conn, job, "ready", "applied", DAY, moved_by="robot")
+    assert tracker.stage(conn, job) is None and moves(conn, job) == 0
+    tracker.move(conn, job, "ready", "interview", DAY)
+    monkeypatch.setattr(tracker, "ADD_MOVE", "INSERT INTO no_such_table VALUES (?, ?, ?, ?, ?, ?)")
+    with pytest.raises(sqlcipher3.OperationalError):
+        tracker.set_round(conn, job, "2")
+    assert card(conn, job)[1] == "1" and moves(conn, job) == 1
+
+
+def test_a_job_is_on_the_board_with_a_card_or_a_finished_version(conn, job):
+    with conn:
+        versioned, by_hand = add_job(conn, "Versioned"), add_job(conn, "By hand")
+        version(conn, versioned)
+        version(conn, by_hand, "by_hand")
+    assert not tracker.on_board(conn, job) and not tracker.on_board(conn, by_hand)
+    assert tracker.on_board(conn, versioned)
+    tracker.move(conn, job, "ready", "applied", DAY)
+    assert tracker.on_board(conn, job)

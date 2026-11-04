@@ -22,7 +22,7 @@ STAGES = {  # board order
 ROUNDS = {"1": "Round 1", "2": "Round 2", "3": "Round 3", "4": "Round 4", "5": "Round 5", "final": "Final"}
 WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey when nothing changes for a while
 LANE_CARDS = 30  # cards a lane shows before "Show all"
-BAD_DATE = "Choose the date you applied: not in the future, not before 2000."
+BAD_DATE = "Choose the date you applied: not later than tomorrow, not before 2000."
 # Every card, newest change first. A card past Ready always shows, whatever "Not interested", closed or its versions;
 # Ready holds a job with a finished resume version, or one you moved back, unless it is "Not interested".
 BOARD = """SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
@@ -76,11 +76,14 @@ def add_application(
         raise ValueError("Company and role are at most 200 characters each.")
     if not date(2000, 1, 1) <= applied_on <= today + timedelta(days=1):
         raise ValueError(BAD_DATE)
-    collect.add(conn, fetcher, link, details=(company, role))  # CollectError if it can't be saved
     link = link.strip()
     posting = posting_of(link)
     source = (f"{posting[0]}:{posting[1]}", posting[2]) if posting else ("manual", link)
-    job_id = conn.execute(FIND, (*source, jobs.clean_url(link))).fetchone()[0]
+    found = (*source, jobs.clean_url(link))
+    job_id = conn.execute(FIND, found).fetchone()[0]
+    if job_id is None:  # saved first; a job already saved needs no board, even if its posting is gone
+        collect.add(conn, fetcher, link, details=(company, role))  # CollectError if it can't be saved
+        job_id = conn.execute(FIND, found).fetchone()[0]
     now_in = stage(conn, job_id)
     if now_in not in (None, "ready"):
         return f"Already on the Tracker, in {STAGES[now_in]}; not changed.", job_id
@@ -114,6 +117,17 @@ def history(conn: sqlcipher3.Connection, job_id: int) -> list[dict]:
     return [dict(zip(("from_stage", "to_stage", "round", "moved_by", "moved_on"), row, strict=True)) for row in rows]
 
 
+def on_board(conn: sqlcipher3.Connection, job_id: int) -> bool:
+    """Whether the job has a card: a place on the Tracker, or a finished resume version (then it is in Ready)."""
+    return bool(
+        conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM tracker WHERE job_id = :job) OR EXISTS (SELECT 1 FROM preparations "
+            "WHERE job_id = :job AND kind = 'resume' AND status = 'done')",
+            {"job": job_id},
+        ).fetchone()[0]
+    )
+
+
 def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
     """The card's stage, or None when it has no row (a job with a finished version is then in Ready)."""
     row = conn.execute("SELECT stage FROM tracker WHERE job_id = ?", (job_id,)).fetchone()
@@ -121,10 +135,10 @@ def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
 
 
 def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all: str | None = None) -> list[dict]:
-    """The lanes in board order, each {"stage", "name", "cards", "count", "more"}; a lane shows its grey cards, then
-    the rest, each newest change first, LANE_CARDS of them unless it is `show_all`. `now` is this computer's local
-    time, aware: the day counter counts local dates, and a waiting card goes grey when it hasn't changed for
-    `stale_days`."""
+    """The lanes in board order, each {"stage", "name", "cards", "count", "more", "grey_hidden"}; a lane shows its
+    newest LANE_CARDS cards unless it is `show_all`, and counts the grey cards that leaves out. `now` is this
+    computer's local time, aware: the day counter counts local dates, and a waiting card goes grey when it hasn't
+    changed for `stale_days`."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
     for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, _ in conn.execute(BOARD):
@@ -140,15 +154,18 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "stale": stage_ in WAITING and datetime.fromisoformat(changed_on) < cutoff,
             }
         )
-    for cards in lanes.values():  # grey cards first, so "Show all" never hides the ones to check
-        cards.sort(key=lambda card: not card["stale"])
-    return [
-        {
-            "stage": stage_,
-            "name": name,
-            "cards": lanes[stage_] if show_all == stage_ else lanes[stage_][:LANE_CARDS],
-            "count": len(lanes[stage_]),
-            "more": stage_ != show_all and len(lanes[stage_]) > LANE_CARDS,
-        }
-        for stage_, name in STAGES.items()
-    ]
+    shown_lanes = []
+    for stage_, name in STAGES.items():
+        cards = lanes[stage_]
+        shown = cards if show_all == stage_ else cards[:LANE_CARDS]
+        shown_lanes.append(
+            {
+                "stage": stage_,
+                "name": name,
+                "cards": shown,
+                "count": len(cards),
+                "more": len(cards) > len(shown),
+                "grey_hidden": sum(card["stale"] for card in cards[len(shown) :]),  # so a grey card is never missed
+            }
+        )
+    return shown_lanes
