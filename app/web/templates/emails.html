@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}E-mails to check{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro label_select(chosen) %}
+  <label>It is <select name="label" required>
+    {% if chosen == "unclear" %}<option value="" selected disabled>Choose…</option>{% endif %}
+    {% for value in labels %}<option value="{{ value }}"{% if value == chosen %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}
+  </select></label>
+{% endmacro %}
+{% block content %}
+<h1>E-mails to check</h1>
+<p><a href="/tracker">Back to the Tracker</a></p>
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+<p class="hint">E-mails the sync couldn't place on a card by itself. Say which card each is about and what it is, or
+  dismiss it. Its subject is forgotten either way; the e-mail stays in your Gmail.</p>
+{% for email in emails %}
+<section class="email">
+  <h2>{{ email.subject or "(no subject)" }}</h2>
+  <p class="muted">{{ email.when }} · {{ email.domain }} · {{ email.label | capitalize }}</p>
+  {% for card in email.candidates %}
+  <form method="post" action="/tracker/emails/{{ email.id }}/link">
+    {{ csrf_field() }}
+    <input type="hidden" name="job" value="{{ card.id }}">
+    {{ label_select(email.label) }}
+    <button type="submit" class="primary">This is {{ card.company }} · {{ card.title }}</button>
+  </form>
+  {% endfor %}
+  <form method="post" action="/tracker/emails/{{ email.id }}/link">
+    {{ csrf_field() }}
+    <label>{{ "Another job" if email.candidates else "Which job" }} <select name="job" required>
+      <option value="" selected disabled>Choose…</option>
+      {% for card in cards %}<option value="{{ card.id }}">{{ card.company }} · {{ card.title }}</option>{% endfor %}
+    </select></label>
+    {{ label_select(email.label) }}
+    <button type="submit">Link</button>
+  </form>
+  <p><a href="/tracker?applied={{ email.day.isoformat() }}#add">Add as an application</a></p>
+  <form method="post" action="/tracker/emails/{{ email.id }}/dismiss">
+    {{ csrf_field() }}
+    <button type="submit">Dismiss</button>
+  </form>
+</section>
+{% else %}
+<p>Nothing to check.</p>
+{% endfor %}
+{% endblock %}

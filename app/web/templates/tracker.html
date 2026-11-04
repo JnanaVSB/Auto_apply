@@ -2,10 +2,11 @@
 {% block title %}Tracker{% endblock %}
 {% block content %}
 <h1>Tracker</h1>
+{% if to_check %}<p><a href="/tracker/emails">E-mails to check ({{ to_check }})</a></p>{% endif %}
 {% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
 {% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
 
-<details class="filters-fold"{% if problem %} open{% endif %}>
+<details class="filters-fold" id="add"{% if problem or add_on %} open{% endif %}>
 <summary>Add an application</summary>
 <form method="post" action="/tracker/add">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -13,7 +14,7 @@
     <label>Company <input name="company" maxlength="200" value="{{ typed.company if typed else '' }}"></label>
     <label>Role <input name="role" maxlength="200" value="{{ typed.role if typed else '' }}"></label>
     <label>Link <input name="link" type="url" required maxlength="4000" value="{{ typed.link if typed else '' }}"></label>
-    <label>Date applied <input name="applied_on" type="date" required value="{{ typed.applied_on if typed else today.isoformat() }}"></label>
+    <label>Date applied <input name="applied_on" type="date" required value="{{ typed.applied_on if typed else (add_on or today).isoformat() }}"></label>
   </p>
   <p><button type="submit" class="primary">Add</button></p>
 </form>
@@ -37,7 +38,8 @@
         <h3><a href="/jobs/{{ card.id }}?back=/tracker">{{ card.title }}</a></h3>
         {% if card.days is not none %}<span class="days"><span aria-hidden="true">{{ card.days }} d</span><span class="sr-only">{{ card.days }} day{{ "" if card.days == 1 else "s" }} since you applied</span></span>{% endif %}
         <p class="company">{{ card.company }}</p>
-        <p class="meta"><span>{{ card.site }}</span>{% if lane.stage == "ready" and card.closed %}<span class="mark warn">closed</span>{% endif %}</p>
+        <p class="meta"><span>{{ card.site }}</span>{% if card.email %}<span>E-mail {{ card.email[0] }} · {{ card.email[1] | capitalize }}</span>{% endif %}
+          {%- if lane.stage == "ready" and card.closed %}<span class="mark warn">closed</span>{% endif %}</p>
         {% if lane.stage == "ready" %}
         <form method="post" action="/tracker/{{ card.id }}/move">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">

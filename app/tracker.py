@@ -31,7 +31,9 @@ CARDS = """FROM jobs j LEFT JOIN tracker t ON t.job_id = j.id
 # resume version, or one you moved back, unless it is "Not interested".
 SHOWN = "(t.stage != 'ready' OR (j.not_interested = 0 AND (t.job_id IS NOT NULL OR f.job_id IS NOT NULL)))"
 BOARD = f"""SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
-        t.changed_on, t.last_email_on {CARDS}
+        t.changed_on, t.last_email_on, e.received_on, e.label {CARDS}
+    LEFT JOIN emails e ON e.message_id = (SELECT message_id FROM emails WHERE job_id = j.id ORDER BY received_on DESC
+        LIMIT 1)
     WHERE {SHOWN} ORDER BY coalesce(t.changed_on, f.done_on) DESC, j.id DESC"""  # noqa: S608 (fixed text)
 PLACE = f"SELECT coalesce(t.stage, 'ready'), t.round, coalesce({SHOWN}, 0) {CARDS} WHERE j.id = ?"  # noqa: S608
 # One statement, so the check and the write can't be split by another tab's move: a job with no row is in Ready, so a
@@ -150,7 +152,8 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
     waiting card goes grey after `stale_days` with no change and no e-mail."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
-    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, emailed in conn.execute(BOARD):
+    rows = conn.execute(BOARD)
+    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, emailed, *latest in rows:
         lanes[stage_].append(
             {
                 "id": job_id,
@@ -160,6 +163,7 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "closed": status != "open",
                 "round": round_,
                 "days": None if applied_on is None else max(0, (today - date.fromisoformat(applied_on)).days),
+                "email": _email(*latest),
                 "stale": stage_ in WAITING and datetime.fromisoformat(max(changed_on, emailed or changed_on)) < cutoff,
             }
         )
@@ -180,3 +184,11 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
             }
         )
     return shown_lanes
+
+
+def _email(received_on: str | None, label: str | None) -> tuple[str, str] | None:
+    """A card's newest e-mail: its local day ("3 Nov") and what it was, or None."""
+    if received_on is None:
+        return None
+    day = datetime.fromisoformat(received_on).astimezone()
+    return f"{day.day} {day:%b}", label

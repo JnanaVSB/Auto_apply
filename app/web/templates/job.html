@@ -128,6 +128,12 @@
 <ul>{% for move in tracker_box.moves %}
   <li>{{ move.when }} · {{ move.from }} → {{ move.to }}{% if move.round %} · {{ move.round }}{% endif %} · by {{ move.by }}</li>
 {% endfor %}</ul>
+{% if tracker_box.emails %}
+<h3>E-mails</h3>
+<ul>{% for email in tracker_box.emails %}
+  <li>{{ email.when }} · {{ email.label | capitalize }} · {{ email.domain }}</li>
+{% endfor %}</ul>
+{% endif %}
 {% endif %}
 
 <h2>Where this job is listed</h2>

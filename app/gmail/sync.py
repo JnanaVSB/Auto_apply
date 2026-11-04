@@ -72,7 +72,8 @@ def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple
     found = match.match(cards, name, domain, message["subject"], thread[0] if thread else None)
     if label == "other" and len(found) == 1:
         label = "unclear"  # a company you applied to wrote and no phrase fits: the local model decides
-    job, moved, check = (found[0], False, False) if len(found) == 1 else (None, False, label != "other")
+    job, moved = (found[0] if len(found) == 1 else None), False
+    check = label == "unclear" if job is not None else label != "other"  # unclear stays on the list until decided
     if job is not None:
         moved = apply.update(conn, job, label, datetime.fromisoformat(message["received_on"]))
     with conn:  # saved after its card: a crash in between only reads it again, and a card never moves back

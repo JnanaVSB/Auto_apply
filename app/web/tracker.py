@@ -15,6 +15,7 @@ from starlette.exceptions import HTTPException
 from app import db, tracker
 from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher
+from app.gmail import apply
 from app.web import actions, queries
 
 PAGE = "/tracker"
@@ -31,10 +32,14 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             stale_days = load_config().tracker_stale_days
         except ConfigError:  # shown on the Settings page; the default meanwhile
             stale_days = Config.model_fields["tracker_stale_days"].default
-        local = datetime.now().astimezone()
-        lanes = tracker.board(request.app.state.conn, local, stale_days, request.query_params.get("all"))
+        local, conn = datetime.now().astimezone(), request.app.state.conn
+        lanes = tracker.board(conn, local, stale_days, request.query_params.get("all"))
+        try:  # "Add as an application" from E-mails to check: the e-mail's day
+            values.setdefault("add_on", date.fromisoformat(request.query_params.get("applied", "")))
+        except ValueError:
+            pass
         return page(request, "tracker.html", status, lanes=lanes, stale_days=stale_days, today=local.date(),
-                    stages=tracker.STAGES, rounds=tracker.ROUNDS, **values)  # fmt: skip
+                    stages=tracker.STAGES, rounds=tracker.ROUNDS, to_check=apply.waiting(conn), **values)  # fmt: skip
 
     @app.get(PAGE)
     async def tracker_page(request: Request) -> Response:
@@ -78,11 +83,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
 
 
 def job_box(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
-    """The job page's Tracker box: where the card is, whether the board shows it, and every move, newest first, at
-    this computer's local time; None for a job never moved (a Ready card no one has moved yet has no history to
-    show)."""
-    moves = tracker.history(conn, job_id)
-    if not moves:
+    """The job page's Tracker box: where the card is, whether the board shows it, and every move and e-mail, newest
+    first, at this computer's local time; None for a job with neither (a Ready card no one has moved and no e-mail
+    has named yet)."""
+    moves, emails = tracker.history(conn, job_id), apply.of_job(conn, job_id)
+    if not moves and not emails:
         return None
     lane, round_, shown = tracker.place(conn, job_id)
     return {
@@ -90,6 +95,7 @@ def job_box(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
         "stage": tracker.STAGES[lane],
         "shown": shown,
         "round": tracker.ROUNDS.get(round_),
+        "emails": emails,
         "moves": [
             {
                 "when": datetime.fromisoformat(move["moved_on"]).astimezone().strftime("%Y-%m-%d %H:%M"),

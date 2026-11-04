@@ -107,7 +107,8 @@ def test_a_reply_in_the_same_thread_is_about_the_same_job(conn, acme):
 def test_the_company_writing_with_no_phrase_is_unclear_for_the_local_model(conn, acme):
     tracker.move(conn, acme, "ready", "applied", NOW.date())
     sync.run(conn, FakeGmail(email("m1", "Acme Team <team@acme.example>", "A quick note")), 60, NOW)
-    assert row(conn, "m1") == ("unclear", acme, 0, 0, None, "[]") and tracker.stage(conn, acme) == "applied"
+    assert row(conn, "m1") == ("unclear", acme, 0, 1, "A quick note", f"[{acme}]")  # on the list until decided
+    assert tracker.stage(conn, acme) == "applied"
     assert one(conn, "SELECT last_email_on FROM tracker WHERE job_id = ?", acme)[0] == "2026-11-04T10:00:00+00:00"
 
 
