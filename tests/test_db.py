@@ -846,6 +846,40 @@ def test_version_16_adds_the_tracker_and_keeps_jobs(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
+def test_version_17_adds_the_gmail_tables_and_keeps_the_tracker(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_16:
+        version_16.setattr(db, "UPGRADES", db.UPGRADES[:16])
+        version_16.setattr(db, "SCHEMA_VERSION", 16)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute(
+                "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (1, 'applied', '2026-11-04', 'now')"
+            )
+    email = (
+        "INSERT INTO emails (message_id, thread_id, received_on, sender_domain, label, labelled_by, to_check, subject) "
+        "VALUES ({}, 't1', 'now', 'example.com', {}, {}, {}, {})"
+    )
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT stage, last_email_on FROM tracker").fetchall() == [("applied", None)]
+        with conn:
+            conn.execute(email.format("'m1'", "'rejection'", "'rules'", 0, "NULL"))
+            conn.execute(email.format("'m2'", "'unclear'", "'local model'", 1, "'Your application'"))
+            conn.execute("INSERT INTO gmail_sync (id) VALUES (1)")
+        for bad in [
+            email.format("'m3'", "'offer'", "'rules'", 0, "'Kept without a check'"),
+            email.format("'m4'", "'spam'", "'rules'", 0, "NULL"),
+            email.format("'m5'", "'offer'", "'cloud'", 0, "NULL"),
+            email.format("'m1'", "'offer'", "'you'", 0, "NULL"),
+            "INSERT INTO gmail_sync (id) VALUES (2)",
+        ]:
+            with pytest.raises(sqlcipher3.IntegrityError):
+                conn.execute(bad)
+    with _open_as_is(path / f"{db.DB_FILE}.bak-v16") as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+
+
 PILOT = (
     "INSERT INTO preparations (id, job_id, kind, version, sources, writer, status, pilot_id, lineup, created_on) "
     "VALUES ({}, 1, 'pilot', {}, '[]', '{{}}', 'writing', 1, '{}', 'now')"
