@@ -54,7 +54,7 @@
         <form method="post" action="/tracker/{{ card.id }}/move">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <input type="hidden" name="from" value="{{ lane.stage }}">
-          <label>Move to <select name="to" required><option value="" selected disabled>Choose a stage</option>{% for value, name in stages.items() if value != lane.stage %}<option value="{{ value }}">{{ name }}</option>{% endfor %}</select></label>
+          <label>Move to <select name="to" required><option value="" selected disabled>Choose…</option>{% for value, name in stages.items() if value != lane.stage %}<option value="{{ value }}">{{ name }}</option>{% endfor %}</select></label>
           <button type="submit">Move</button>
         </form>
       </li>
