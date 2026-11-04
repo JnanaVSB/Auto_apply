@@ -27,7 +27,7 @@
   {% for lane in lanes %}
   {% set outcome = lane.stage in ("offer", "rejected") %}
   {% if lane.stage == "offer" %}<div class="outcome-gap" aria-hidden="true"></div>{% endif %}
-  <details class="lane" id="lane-{{ lane.stage }}"{% if not outcome %} open{% endif %}>
+  <details class="lane" id="lane-{{ lane.stage }}"{% if not outcome or lane.full %} open{% endif %}>
     <summary><h2>{{ lane.name }}</h2><span class="count"><span aria-hidden="true">{{ lane.count }}</span><span class="sr-only">{{ lane.count }} job{{ "" if lane.count == 1 else "s" }}</span></span>
       {%- if outcome %}<span class="kind">Outcome</span>{% endif %}</summary>
     {% if lane.grey_hidden %}<p class="hint"><a href="/tracker?all={{ lane.stage }}#lane-{{ lane.stage }}">{{ lane.grey_hidden }} card{{ " needs" if lane.grey_hidden == 1 else "s need" }} checking</a></p>{% endif %}

@@ -272,3 +272,10 @@ def test_a_job_is_on_the_board_with_a_card_or_a_finished_version(conn, job):
     assert tracker.on_board(conn, versioned)
     tracker.move(conn, job, "ready", "applied", DAY)
     assert tracker.on_board(conn, job)
+
+
+def test_show_all_puts_grey_cards_first_and_the_normal_view_keeps_the_newest_first(conn):
+    with conn:
+        grey, fresh = place(conn, "applied", days_ago=30), place(conn, "applied", days_ago=1)
+    assert ids(conn, "applied") == [fresh, grey]
+    assert [card["id"] for card in lane(conn, "applied", show_all="applied")["cards"]] == [grey, fresh]

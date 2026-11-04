@@ -135,8 +135,9 @@ def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
 
 
 def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all: str | None = None) -> list[dict]:
-    """The lanes in board order, each {"stage", "name", "cards", "count", "more", "grey_hidden"}; a lane shows its
-    newest LANE_CARDS cards unless it is `show_all`, and counts the grey cards that leaves out. `now` is this
+    """The lanes in board order, each {"stage", "name", "full", "cards", "count", "more", "grey_hidden"}; a lane shows
+    its newest LANE_CARDS cards and counts the grey cards that leaves out, or, when it is `show_all`, all of them with
+    the grey ones first. `now` is this
     computer's local time, aware: the day counter counts local dates, and a waiting card goes grey when it hasn't
     changed for `stale_days`."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
@@ -157,11 +158,13 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
     shown_lanes = []
     for stage_, name in STAGES.items():
         cards = lanes[stage_]
-        shown = cards if show_all == stage_ else cards[:LANE_CARDS]
+        full = show_all == stage_  # the whole lane, its grey cards (the ones to check) first
+        shown = sorted(cards, key=lambda card: not card["stale"]) if full else cards[:LANE_CARDS]
         shown_lanes.append(
             {
                 "stage": stage_,
                 "name": name,
+                "full": full,
                 "cards": shown,
                 "count": len(cards),
                 "more": len(cards) > len(shown),

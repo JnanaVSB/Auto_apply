@@ -213,6 +213,7 @@ def test_a_job_without_a_finished_version_cannot_be_moved_onto_the_board(client,
         (LINK, "", None, "Both the company and the job title are needed."),
         (ACME_JOB, "Acme", {"jobs": []}, "no longer on the Greenhouse board"),
         (ACME_JOB, "Acme", 500, "The job&#39;s board could not be read"),
+        (ACME_JOB, "Acme", {"jobs": "not a list"}, "The job&#39;s board could not be read (unexpected format"),
     ],
 )
 def test_add_explains_a_link_it_cannot_save_and_keeps_what_was_typed(
@@ -240,3 +241,8 @@ def test_the_job_page_says_when_the_board_hides_its_card(client, conn, ready):
         conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (ready,))
     text = client.get(f"/jobs/{ready}").text
     assert "Not shown on the board (marked Not interested)." in text and "Open on the Tracker" not in text
+
+
+def test_the_lane_shown_in_full_opens_even_an_outcome(client):
+    assert 'id="lane-rejected" open' in client.get("/tracker?all=rejected").text
+    assert 'id="lane-rejected" open' not in client.get("/tracker").text
