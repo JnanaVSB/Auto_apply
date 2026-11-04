@@ -8,7 +8,7 @@ from test_tracker import version
 
 from app import tracker
 from app.config import AIRole
-from app.gmail import model, sync
+from app.gmail import apply, model, sync
 from app.gmail.client import GmailError, Gone, HistoryTooOld
 
 NOW = datetime(2026, 11, 4, 18, 0, tzinfo=UTC)
@@ -326,13 +326,30 @@ def test_scoring_is_checked_before_each_e_mail_the_model_reads(conn, acme, answe
     assert len(answers["asked"]) == 2
 
 
-def test_an_unclear_e_mail_gone_from_gmail_stays_on_the_list_without_failing(conn, acme, answers):
+def test_an_unclear_e_mail_gone_from_gmail_leaves_the_list_and_is_never_fetched_again(conn, acme, answers):
     gmail = unclear_mailbox()
     sync.run(conn, gmail, 60, NOW)
     gmail.gone.add("m1")
     answers["An update"] = "rejection"
     assert sync.run(conn, gmail, 60, NOW, LOCAL).endswith("1 sorted by the local model.")
-    assert row(conn, "m1")[0] == "unclear"
+    assert row(conn, "m1") == ("unclear", acme, 0, 0, None, "[]")
+    asked = len(answers["asked"])
+    sync.run(conn, gmail, 60, NOW, LOCAL)
+    assert len(answers["asked"]) == asked  # not asked about again
+
+
+def test_your_decision_while_the_model_reads_wins(conn, acme, monkeypatch):
+    sync.run(conn, unclear_mailbox(), 60, NOW)
+
+    def slow(role, subject, snippet, body):  # you decide on m1 while the model is still reading it
+        if subject == "A quick note about your application":
+            apply.decide(conn, "m1", acme, "rejection")
+        return "interview"
+
+    monkeypatch.setattr(model, "label", slow)
+    sync.run(conn, unclear_mailbox(), 60, NOW, LOCAL)
+    assert one(conn, "SELECT label, labelled_by FROM emails WHERE message_id = 'm1'") == ("rejection", "you")
+    assert tracker.stage(conn, acme) == "rejected"
 
 
 @pytest.mark.parametrize("stage, kept", [("applied", ("confirmation", 0)), ("interview", ("unclear", 1))])

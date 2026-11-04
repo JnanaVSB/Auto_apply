@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app import collect
+from app.gmail import sync
 from app.gmail.client import AUTH_URL, CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE, Gmail, GmailError, exchange, revoke
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
 
@@ -103,12 +104,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
                 raise GmailError(DONE["no-client"])
             sign_in = (params.get("code", ""), client_id, client_secret, pending["redirect"], pending["verifier"])
             token = await run_in_threadpool(exchange, *sign_in, request.app.state.gmail_transport)
-            old = get_secret(REFRESH)
-            set_secret(REFRESH, token)
+            set_secret(REFRESH, token)  # replaces an earlier sign-in; only Disconnect asks Google to forget one
         except (GmailError, KeychainError) as error:
             return page(request, "gmail_done.html", 400, sentence=str(error))
-        if old and old != token:  # connected again: Google is asked to forget the earlier sign-in (best effort)
-            await run_in_threadpool(revoke, old, request.app.state.gmail_transport)
         conn = request.app.state.conn
         with conn:
             conn.execute("INSERT OR IGNORE INTO gmail_sync (id) VALUES (1)")
@@ -151,6 +149,7 @@ async def _view(request: Request, page: Callable[..., HTMLResponse], status: int
         values["since"], values["again"] = since, since + timedelta(days=7)
     if last_sync:
         values["last_sync"] = f"{datetime.fromisoformat(last_sync).astimezone():%Y-%m-%d %H:%M}"
+    values["failed"] = sync.failed(values["last_result"])
     mailer_notice = request.app.state.mailer.notice
     values["latest"] = mailer_notice if mailer_notice != values["last_result"] else None  # e.g. "busy elsewhere"
     if all(sign_in):

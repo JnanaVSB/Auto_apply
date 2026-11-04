@@ -217,13 +217,21 @@ def test_an_address_gmail_can_t_give_is_said_plainly(client, google):
     assert "The address can't be read right now: Gmail needs connecting again" in client.get("/settings/gmail").text
 
 
-def test_connecting_again_asks_google_to_forget_the_earlier_sign_in(client, google):
+def test_connecting_again_replaces_the_sign_in_without_asking_google_to_forget_it(client, google):
     set_secret(REFRESH, "made-up-earlier-sign-in")
     save_client(client)
     assert back_from_google(client, state=connect(client)["state"], code=CODE).status_code == 200
-    assert get_secret(REFRESH) == LASTING
-    revoked = [request for request in google.requests if request.url.path == "/revoke"]
-    assert len(revoked) == 1 and b"made-up-earlier-sign-in" in revoked[0].content
+    assert get_secret(REFRESH) == LASTING  # Google may end the whole grant on a revoke, the new sign-in too
+    assert not [request for request in google.requests if request.url.path == "/revoke"]
+
+
+def test_a_failed_try_is_shown_apart_from_the_last_good_sync(client, conn, phoenix):
+    with conn:
+        conn.execute("INSERT INTO gmail_sync (id, last_sync_on, last_result) VALUES (1, ?, ?)",
+                     ("2026-11-04T10:00:00+00:00", "Gmail needs connecting again (Settings → Gmail)."))  # fmt: skip
+    text = client.get("/settings/gmail").text
+    assert "Last good sync 2026-11-04 03:00." in text
+    assert "Latest try failed: Gmail needs connecting again" in text
 
 
 def test_disconnect_also_forgets_where_the_sync_was(client, conn, google):

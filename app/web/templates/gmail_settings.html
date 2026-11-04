@@ -37,7 +37,9 @@
 {% endif %}
 
 <h2>Sync</h2>
-<p>{% if last_sync %}Last sync {{ last_sync }}: {{ last_result }}{% else %}Not synced yet.{% endif %}</p>
+<p>{% if last_sync %}Last good sync {{ last_sync }}{% if failed %}.{% else %}: {{ last_result }}{% endif %}
+  {%- else %}Not synced yet.{% endif %}</p>
+{% if failed %}<p class="error">Latest try failed: {{ last_result }}</p>{% endif %}
 {% if latest %}<p class="error">Latest try: {{ latest }}</p>{% endif %}
 {% if connected %}
 <form method="post" action="/settings/gmail/sync">

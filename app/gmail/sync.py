@@ -31,9 +31,12 @@ MODEL_BATCH = 20  # unclear e-mails the local model sorts per pass
 # one the model never answers stays on the list for you
 UNCLEAR = """SELECT message_id, subject, job_id, received_on FROM emails WHERE label = 'unclear' AND to_check = 1
     ORDER BY received_on DESC LIMIT ?"""
-SORTED_OFF = """UPDATE emails SET label = ?, labelled_by = 'local model', moved = ?, to_check = 0, subject = NULL,
-    candidates = '[]' WHERE message_id = ?"""
-SORTED = "UPDATE emails SET label = ?, labelled_by = 'local model' WHERE message_id = ?"
+# The model's answer is saved only if the e-mail still waits as unclear: a decision you made meanwhile wins
+STILL = "label = 'unclear' AND to_check = 1 AND labelled_by != 'you'"
+SORTED_OFF = f"""UPDATE emails SET label = ?, labelled_by = 'local model', moved = ?, to_check = 0, subject = NULL,
+    candidates = '[]' WHERE message_id = ? AND {STILL}"""  # noqa: S608 (fixed text)
+SORTED = f"UPDATE emails SET label = ?, labelled_by = 'local model' WHERE message_id = ? AND {STILL}"  # noqa: S608
+WAITING = f"SELECT 1 FROM emails WHERE message_id = ? AND {STILL}"  # noqa: S608
 
 
 def run(
@@ -44,9 +47,10 @@ def run(
     role: AIRole | None = None,
     scoring: Callable[[], bool] = lambda: False,
 ) -> str:
-    """One pass; returns its result in plain words (also saved). Then the local model (`role`, Ollama only) sorts the
-    unclear e-mails, each only while no scoring run is using the graphics card. A GmailError is saved as the result
-    and raised again; the e-mails done before it stay done, and the next pass starts from the last good one."""
+    """One pass; returns its result in plain words (also saved; `failed` tells a failure's words apart). Then the
+    local model (`role`, Ollama only) sorts the unclear e-mails, each only while no scoring run is using the graphics
+    card. A GmailError is saved as the result and raised again; the e-mails done before it stay done, and the next
+    pass starts from the last good one."""
     with conn:
         conn.execute("INSERT OR IGNORE INTO gmail_sync (id) VALUES (1)")
     history_id, last_sync = conn.execute("SELECT history_id, last_sync_on FROM gmail_sync WHERE id = 1").fetchone()
@@ -131,11 +135,12 @@ def _sort_unclear(conn: sqlcipher3.Connection, gmail: Gmail, role: AIRole, scori
             break
         try:
             found = model.label(role, subject or "", gmail.message(message_id)["snippet"], gmail.body(message_id))
-        except Gone:  # deleted in Gmail: it stays on your list
+        except Gone:  # deleted in Gmail: off your list, and never fetched again
+            apply.dismiss(conn, message_id)
             continue
         except model.Unavailable:
             break
-        if found is None:  # no answer now: it stays unclear, the next pass asks again
+        if found is None or not conn.execute(WAITING, (message_id,)).fetchone():  # no answer, or you decided meanwhile
             continue
         moved = job is not None and apply.update(conn, job, found, datetime.fromisoformat(received_on))
         with conn:
@@ -149,3 +154,8 @@ def _sort_unclear(conn: sqlcipher3.Connection, gmail: Gmail, role: AIRole, scori
 
 def _count(number: int, word: str) -> str:
     return f"{number} {word}{'' if number == 1 else 's'}"
+
+
+def failed(result: str | None) -> bool:
+    """Whether a saved result is a failure's words rather than a pass's counts ("Read …")."""
+    return bool(result) and not result.startswith("Read ")
