@@ -15,7 +15,7 @@
 {% endif %}
 <p class="summary">{{ "{:,}".format(listing.total) }} job{{ "" if listing.total == 1 else "s" }} ready.</p>
 {% if listing.jobs %}
-<div class="list-{{ list_view or 'auto' }}">
+<div class="list-{{ list_view }}">
 <table class="jobs">
   <thead><tr><th>Job</th><th>Posted</th><th>Score and reasons</th><th>Preparation</th><th>Cost</th><th></th></tr></thead>
   <tbody>

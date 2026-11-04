@@ -394,20 +394,20 @@ td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); mar
 /* The list pages use the window's width beside the rail; their running text keeps a reading length. */
 main:has(.view-switch) { max-width: none; }
 main:has(.view-switch) > p:not(.counts) { max-width: 72ch; }  /* the counts line reads as one row of links */
-/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, Cards. With
+/* The Table | Cards switch: the chosen view (Cards until one is chosen) looks chosen: tint, outline, bold. With
    large text on a phone the two buttons stack, each as wide as the switch; the radius is a pill on one line and
    round corners around two. */
 .view-switch { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; margin: 0 0 var(--space-4);
   padding: 3px; border-radius: calc(var(--control) / 2 + 3px); background: var(--sunken); }
 .view-switch button { flex: 1 1 auto; border-color: transparent; background: transparent; color: var(--muted); }
 .view-switch button:hover { color: var(--text); }
-.view-switch [aria-pressed="true"], .view-switch.auto .to-cards { border-color: var(--accent);
+.view-switch [aria-pressed="true"] { border-color: var(--accent);
   background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .view-switch .now { display: none; }
-.view-switch [aria-pressed="true"] .now, .view-switch.auto .to-cards .now { display: block; }
-/* Which view: Table chosen → "rows"; Cards chosen, or no choice yet → "cards". */
+.view-switch [aria-pressed="true"] .now { display: block; }
+/* Which view: Table → "rows"; Cards → "cards". */
 .list-table { container: rows / inline-size; }
-.list-cards, .list-auto { container: cards / inline-size; }
+.list-cards { container: cards / inline-size; }
 /* Cards: one card per job from the same row: title and score, company, details, labels and actions. */
 @container cards (width >= 0) {
   .jobs { display: block; overflow: visible; }

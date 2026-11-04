@@ -56,7 +56,7 @@ templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value
 ANSWERS = ("yes", "maybe", "no", "clear")
 LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
 SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queue every job
-VIEWS = ("table", "cards")  # the job lists' two views; with no choice the stylesheet shows Cards
+VIEWS = ("table", "cards")  # the job lists' two views; Cards until one is chosen
 VIEW_COOKIE = "auto_apply_view"  # named for this app, like the session cookie: cookies on 127.0.0.1 are shared
 LISTS = ("/", "/ready")  # the pages with the Table | Cards switch
 LOOK_COOKIE = "auto_apply_look"  # this browser's colours and mode, "<colours>.<mode>", e.g. "E.dark"
@@ -536,11 +536,11 @@ def _in_view(address: str, choice: str) -> str:
     return f"{parts.path}?{urlencode([*pairs, ('view', choice)])}"
 
 
-def _view(request: Request) -> str | None:
-    """The job lists' view: as the page address asks, else as this browser keeps it. None, also for an unknown or
-    damaged value, leaves it to the stylesheet (Cards)."""
+def _view(request: Request) -> str:
+    """The job lists' view: as the page address asks, else as this browser keeps it, else Cards (also for an unknown
+    or damaged value)."""
     asked = (request.query_params.get("view"), request.cookies.get(VIEW_COOKIE))
-    return next((found for found in asked if found in VIEWS), None)
+    return next((found for found in asked if found in VIEWS), "cards")
 
 
 def _look(request: Request) -> tuple[str, str]:

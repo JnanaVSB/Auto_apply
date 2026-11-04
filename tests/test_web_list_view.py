@@ -27,8 +27,9 @@ def test_the_switch_keeps_the_view_and_returns_to_the_same_list(client):
     assert cookie.startswith(f"{main.VIEW_COOKIE}=cards;") and "Max-Age=31536000" in cookie and "Path=/" in cookie
     assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Secure" not in cookie
     assert '<div class="list-cards">' in client.get("/").text  # the cookie, without the address
-    assert 'value="cards" class="to-cards" aria-pressed="true"' in client.get("/ready").text
+    assert 'value="cards" aria-pressed="true"' in client.get("/ready").text
     assert switch(client, "table", "/ready?page=3").headers["location"] == "/ready?page=3&view=table"
+    assert '<div class="list-table">' in client.get("/").text  # the new choice, from the cookie alone
 
 
 def test_choosing_the_same_view_again_changes_nothing(client):
@@ -37,17 +38,16 @@ def test_choosing_the_same_view_again_changes_nothing(client):
     assert first.headers["set-cookie"] == second.headers["set-cookie"]
 
 
-def test_without_a_choice_the_stylesheet_decides(client):
+def test_without_a_choice_the_list_shows_cards_and_says_so(client):
     text = client.get("/").text
-    assert (
-        '<div class="list-auto">' in text and 'class="view-switch auto"' in text and 'aria-pressed="true"' not in text
-    )
+    assert '<div class="list-cards">' in text
+    assert 'value="cards" aria-pressed="true"' in text and 'value="table" aria-pressed="false"' in text
 
 
 @pytest.mark.parametrize("value", ["", "grid", "TABLE", "cards2", "table cards"])
-def test_an_unknown_or_damaged_view_counts_as_no_choice(client, value):
+def test_an_unknown_or_damaged_view_shows_cards(client, value):
     client.cookies.set(main.VIEW_COOKIE, value)
-    assert '<div class="list-auto">' in client.get(f"/?view={value}").text
+    assert '<div class="list-cards">' in client.get(f"/?view={value}").text
 
 
 def test_the_page_address_shows_a_view_without_any_cookie(client):
