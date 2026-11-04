@@ -95,21 +95,19 @@ def _new_ids(gmail: Gmail, history_id: str | None, last_sync: str | None, days: 
 
 def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple[bool, bool]:
     """Sort, match and save one e-mail, moving its card first; whether it moved a card and whether it is to check.
-    Mail that stays "other" leaves nothing behind: no row, no effect on any card."""
+    Mail with no job signal (a job system, a thread already matched, or a job word) leaves nothing behind, whatever
+    its phrases; so does job mail that stays "other" and matches no card."""
     name, domain = classify.sender(message["from"])
-    label = classify.classify(domain, message["subject"], message["snippet"])
     thread = conn.execute(THREAD, (message["thread_id"],)).fetchone()
+    if not (classify.job_system(domain) or thread or classify.job_like(message["subject"], message["snippet"])):
+        return False, False  # e.g. a pay slip's "take-home pay" or a shop's "unfortunately your parcel is late"
+    label = classify.classify(domain, message["subject"], message["snippet"])
     found = match.match(cards, name, domain, message["subject"], thread[0] if thread else None)
     job, moved = (found[0] if len(found) == 1 else None), False
-    job_like = (
-        classify.job_system(domain) or thread is not None or classify.job_like(message["subject"], message["snippet"])
-    )
-    if label == "other" and job is not None and job_like:
-        label = "unclear"  # a company you applied to wrote about the job and no phrase fits: the local model decides
-    if label == "unclear" and job is None and not job_like:
-        label = "other"  # e.g. a shop's "unfortunately your order is late": not about a job
-    if label == "confirmation" and job is not None and tracker.stage(conn, job) not in (None, "ready"):
-        label = "unclear"  # "thank you for applying" on a card already past it often opens a no: the model reads on
+    if label == "other" and found:
+        label = "unclear"  # a company you applied to wrote about the job and no phrase fits: the model or you decide
+    if label == "confirmation" and job is not None and tracker.stage(conn, job) not in (None, "ready", "applied"):
+        label = "unclear"  # "thank you for applying" on a card already past Applied often opens a no
     if label == "other":
         return False, False
     check = label == "unclear" if job is not None else label != "other"  # unclear stays on the list until decided

@@ -335,10 +335,11 @@ def test_an_unclear_e_mail_gone_from_gmail_stays_on_the_list_without_failing(con
     assert row(conn, "m1")[0] == "unclear"
 
 
-def test_thank_you_for_applying_on_a_card_already_past_it_is_left_for_a_closer_look(conn, acme):
-    tracker.move(conn, acme, "ready", "applied", NOW.date())
+@pytest.mark.parametrize("stage, kept", [("applied", ("confirmation", 0)), ("interview", ("unclear", 1))])
+def test_thank_you_for_applying_is_quiet_in_applied_and_looked_at_past_it(conn, acme, stage, kept):
+    tracker.move(conn, acme, "ready", stage, NOW.date())
     sync.run(conn, FakeGmail(email("m1", "Acme <no-reply@greenhouse.io>", "Thank you for applying to Acme")), 60, NOW)
-    assert row(conn, "m1")[:4] == ("unclear", acme, 0, 1) and tracker.stage(conn, acme) == "applied"
+    assert (row(conn, "m1")[0], row(conn, "m1")[3]) == kept and tracker.stage(conn, acme) == stage
 
 
 def test_a_shop_s_unfortunately_about_no_job_leaves_nothing(conn, acme):
@@ -349,3 +350,26 @@ def test_a_shop_s_unfortunately_about_no_job_leaves_nothing(conn, acme):
         NOW,
     )
     assert row(conn, "m1") is None
+
+
+@pytest.mark.parametrize(
+    "sender, subject, snippet",
+    [("Payroll <pay@payroll.example>", "Your take-home pay for October", ""),
+     ("Clinic <hello@clinic.example>", "Visit", "Please confirm your availability for your visit."),
+     ("Fixit <shop@fixit.example>", "Ready for pickup", "Your phone screen repair is ready."),
+     ("Acme Store <orders@acme.example>", "Your order", "Unfortunately your package is delayed."),
+     ("Acme Store <deals@acme.example>", "Today's offer: 30% off headphones", "")],
+)  # fmt: skip
+def test_mail_with_no_job_signal_leaves_nothing_whatever_its_words(conn, acme, sender, subject, snippet):
+    tracker.move(conn, acme, "ready", "applied", NOW.date())
+    sync.run(conn, FakeGmail(email("m1", sender, subject, snippet)), 60, NOW)
+    assert row(conn, "m1") is None
+    assert one(conn, "SELECT last_email_on FROM tracker WHERE job_id = ?", acme)[0] is None
+
+
+def test_job_mail_from_a_company_with_two_cards_waits_for_you_with_both(conn, acme):
+    with conn:
+        other = add_job(conn, "Robotics Intern", company="Acme")
+        version(conn, other)
+    sync.run(conn, FakeGmail(email("m1", "Acme Team <team@acme.example>", "About your interview next week")), 60, NOW)
+    assert row(conn, "m1") == ("unclear", None, 0, 1, "About your interview next week", f"[{acme}, {other}]")

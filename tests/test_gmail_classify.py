@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.gmail.classify import classify, job_system, sender
+from app.gmail.classify import classify, job_like, job_system, sender
 
 BOARD = "boards.greenhouse.io"  # a job system's sender
 SHOP = "news.example.com"  # anyone else
@@ -82,3 +82,36 @@ def test_the_sender_is_the_display_name_and_the_address_s_domain(header, found):
 )  # fmt: skip
 def test_common_ways_of_saying_no_are_rejections_and_unfortunately_alone_is_unclear(snippet, label):
     assert classify(SHOP, "Your application", snippet) == label
+
+
+@pytest.mark.parametrize(
+    "snippet, label",
+    [("Congratulations! After meeting many other candidates, we are pleased to offer you the role.", "offer"),
+     ("Quick note: we will not be moving the time, see you at 10.", "other"),
+     ("You will join other candidates for a group exercise.", "other"),
+     ("We would like to schedule an interview. If you prefer not to proceed, just reply.", "interview"),
+     ("We are pleased to offer you the role, and regret to inform you the start date moved.", "unclear")],
+)  # fmt: skip
+def test_good_news_is_never_read_as_a_rejection_and_mixed_news_is_unclear(snippet, label):
+    assert classify(SHOP, "Next steps", snippet) == label
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    ["Unfortunately, you did not pass to the next round of our process.",
+     "Unfortunately we won't be able to invite you to interview at this time.",
+     "Unfortunately the coding challenge results did not meet our bar.",
+     "Thank you for applying. Unfortunately, we have filled the role.",
+     "Unfortunately we cannot extend an offer at this time."],
+)  # fmt: skip
+def test_unfortunately_without_a_clear_no_is_unclear_whatever_else_it_says(snippet):
+    assert classify(SHOP, "Your application", snippet) == "unclear"
+
+
+@pytest.mark.parametrize(
+    "subject, job_like_",
+    [("Your applications", True), ("Two interviews next week", True), ("Thanks for applying", True),
+     ("Your job offer", True), ("Today's offer: 30% off", False), ("Your take-home pay for October", False)],
+)  # fmt: skip
+def test_job_words_include_plurals_but_not_a_shop_s_offer(subject, job_like_):
+    assert job_like(subject, "") is job_like_

@@ -10,13 +10,15 @@ JOB_SYSTEMS = (  # where application e-mails come from; a sender counts if its d
     "greenhouse.io", "lever.co", "ashbyhq.com", "myworkday.com", "myworkdayjobs.com", "smartrecruiters.com",
     "icims.com", "jobvite.com", "workable.com", "bamboohr.com",
 )  # fmt: skip
-# The first label with a phrase in the e-mail wins, so the order matters: a rejection often thanks you for applying
-# and may mention an interview; an interview invite often thanks you for applying too.
+# Whole phrases only: a card moves only on a clear signal. A rejection phrase wins over a thank-you, but with an
+# offer, interview or assessment phrase as well the e-mail is mixed and waits as "unclear". Otherwise the first label
+# in this order wins: an interview invite often thanks you for applying too.
 RULES = (
     ("rejection", ("not moving forward", "not to move forward", "will not be moving forward",
-                   "won't be moving forward", "will not be moving", "decided to pursue other candidates",
-                   "move forward with other candidates", "other candidates", "other applicants", "not to proceed",
-                   "not be proceeding", "not be advancing", "regret to inform", "position has been filled",
+                   "won't be moving forward", "decided to pursue other candidates",
+                   "move forward with other candidates", "decided to move forward with other",
+                   "not to proceed with your application", "not be proceeding with your application",
+                   "not be advancing your application", "regret to inform", "position has been filled",
                    "not been selected")),
     ("offer", ("pleased to offer", "offer letter", "extend an offer", "extend you an offer", "job offer")),
     ("interview", ("schedule an interview", "invite you to interview", "invitation to interview",
@@ -29,7 +31,11 @@ RULES = (
                       "thank you for your application", "thank you for your interest in")),
 )  # fmt: skip
 # Words that make a company's own e-mail worth a closer look (whole words); without one it is just their mail
-JOB_WORDS = re.compile(r"\b(application|applied|candidate|position|role|recruiter|interview|assessment|offer)\b")
+JOB_WORDS = re.compile(
+    r"\b(applications?|applied|applying|candidates?|positions?|roles?|recruiters?|interviews?|assessments?|job offers?|"
+    r"offer letters?)\b"
+)
+GOOD_NEWS = {"offer", "interview", "assessment"}
 SPACES = re.compile(r"\s+")
 QUOTES = str.maketrans("\N{LEFT SINGLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK}", "''")  # as phones type them
 
@@ -45,14 +51,17 @@ def job_like(subject: str, snippet: str) -> bool:
 
 
 def classify(domain: str, subject: str, snippet: str) -> str:
-    """The e-mail's label from its subject and preview (as Gmail sends it, HTML-escaped); with no phrase, "unclear"
-    from a job system or when it says "unfortunately", else "other"."""
+    """The e-mail's label from its subject and preview (as Gmail sends it, HTML-escaped). Mixed news, or
+    "unfortunately" without a clear no, is "unclear" (the local model or you decide); with no phrase, "unclear" from a
+    job system, else "other"."""
     text = _text(subject, snippet)
-    for label, phrases in RULES:
-        if any(phrase in text for phrase in phrases):
-            return label
-    if "unfortunately" in text:  # alone it can be a reschedule as well as a no: the local model reads it
+    found = [label for label, phrases in RULES if any(phrase in text for phrase in phrases)]
+    if "rejection" in found:
+        return "unclear" if GOOD_NEWS.intersection(found) else "rejection"
+    if "unfortunately" in text:  # it can open a no as well as a reschedule: never a move on its own
         return "unclear"
+    if found:
+        return found[0]
     return "unclear" if job_system(domain) else "other"
 
 
