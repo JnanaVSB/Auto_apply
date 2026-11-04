@@ -553,8 +553,7 @@ UPGRADES = (
         from_stage TEXT NOT NULL
             CHECK (from_stage IN ('ready', 'applied', 'assessment', 'interview', 'offer', 'rejected')),
         to_stage TEXT NOT NULL CHECK (to_stage IN ('ready', 'applied', 'assessment', 'interview', 'offer', 'rejected')),
-        round TEXT CHECK (round IN ('1', '2', '3', '4', '5', 'final')),  -- the round after the move (Interview), else
-        -- NULL
+        round TEXT CHECK (round IN ('1', '2', '3', '4', '5', 'final')),  -- the round after the move, else NULL
         moved_by TEXT NOT NULL CHECK (moved_by IN ('you', 'gmail')),  -- Phase 6 writes 'gmail'
         moved_on TEXT NOT NULL
     );
