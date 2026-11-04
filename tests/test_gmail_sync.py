@@ -7,7 +7,8 @@ from helpers import add_job, one
 from test_tracker import version
 
 from app import tracker
-from app.gmail import sync
+from app.config import AIRole
+from app.gmail import model, sync
 from app.gmail.client import GmailError, HistoryTooOld
 
 NOW = datetime(2026, 11, 4, 18, 0, tzinfo=UTC)
@@ -23,7 +24,7 @@ class FakeGmail:
 
     def __init__(self, *messages):
         self.messages, self.added, self.position = {}, [], 100
-        self.queries, self.arrives_during_search, self.too_old, self.broken = [], None, False, set()
+        self.queries, self.arrives_during_search, self.too_old, self.broken, self.bodies = [], None, False, set(), []
         for message in messages:
             self.deliver(message)
 
@@ -47,6 +48,10 @@ class FakeGmail:
         if self.too_old:
             raise HistoryTooOld("too old")
         return [message_id for position, message_id in self.added if position > int(start)], str(self.position)
+
+    def body(self, message_id):
+        self.bodies.append(message_id)
+        return self.messages[message_id].get("body", "")
 
     def message(self, message_id):
         if message_id in self.broken:
@@ -159,3 +164,74 @@ def test_the_same_sync_twice_reads_nothing_again(conn, acme):
         conn.execute("UPDATE gmail_sync SET history_id = NULL")  # e.g. Disconnect and Connect again: a fresh search
     assert sync.run(conn, gmail, 60, NOW) == "Read 0 new e-mails: 0 cards moved, 0 to check."
     assert one(conn, "SELECT count(*) FROM emails")[0] == 1 and len(tracker.history(conn, acme)) == 1
+
+
+LOCAL = AIRole(model="gemma4:26b-a4b-it-q8_0")
+PRIVATE_TEXT = "Dear Jordan, your made-up interview code is 4321"
+
+
+@pytest.fixture
+def answers(monkeypatch):
+    """The local model's answer for each e-mail it is asked about (by subject); records each question."""
+    found = {"asked": []}
+
+    def fake(role, subject, snippet, body):
+        found["asked"].append(subject)
+        return found.get(subject)
+
+    monkeypatch.setattr(model, "label", fake)
+    return found
+
+
+def unclear_mailbox():
+    return FakeGmail(
+        email("m1", "Acme Team <team@acme.example>", "A quick note") | {"body": PRIVATE_TEXT},  # Acme's card
+        email("m2", "Jobs <no-reply@greenhouse.io>", "An update") | {"body": PRIVATE_TEXT},  # no card named
+    )
+
+
+def test_the_local_model_sorts_an_unclear_e_mail_with_its_card_off_the_list(conn, acme, answers):
+    answers["A quick note"] = "interview"
+    result = sync.run(conn, unclear_mailbox(), 60, NOW, LOCAL)
+    assert row(conn, "m1") == ("interview", acme, 1, 0, None, "[]") and tracker.stage(conn, acme) == "interview"
+    assert one(conn, "SELECT labelled_by FROM emails WHERE message_id = 'm1'")[0] == "local model"
+    assert result.endswith(", 1 sorted by the local model.")
+
+
+def test_other_takes_it_off_the_list_without_a_move(conn, acme, answers):
+    answers["A quick note"] = "other"
+    sync.run(conn, unclear_mailbox(), 60, NOW, LOCAL)
+    assert row(conn, "m1") == ("other", acme, 0, 0, None, "[]") and tracker.stage(conn, acme) is None
+
+
+def test_an_e_mail_with_no_card_keeps_waiting_for_you_with_its_new_label(conn, acme, answers):
+    answers["An update"] = "rejection"
+    sync.run(conn, unclear_mailbox(), 60, NOW, LOCAL)
+    assert row(conn, "m2") == ("rejection", None, 0, 1, "An update", "[]")
+    assert row(conn, "m1")[0] == "unclear"  # no answer for it: it stays unclear
+
+
+@pytest.mark.parametrize("role, scoring", [(LOCAL, True), (None, False)])
+def test_the_model_waits_while_scoring_runs_or_when_none_is_set(conn, acme, answers, role, scoring):
+    answers["A quick note"] = "interview"
+    gmail = unclear_mailbox()
+    sync.run(conn, gmail, 60, NOW, role, scoring)
+    assert not answers["asked"] and not gmail.bodies and row(conn, "m1")[0] == "unclear"
+
+
+def test_at_most_a_batch_of_e_mails_is_sorted_per_pass_newest_first(conn, acme, answers):
+    gmail = FakeGmail(*(
+        email(f"m{n}", "Jobs <no-reply@greenhouse.io>", f"Update {n}", received=f"2026-11-04T10:{n:02}:00+00:00")
+        for n in range(25)
+    ))  # fmt: skip
+    sync.run(conn, gmail, 60, NOW, LOCAL)
+    assert answers["asked"] == [f"Update {n}" for n in range(24, 4, -1)]
+
+
+def test_an_e_mail_s_text_is_never_saved(conn, acme, answers):
+    answers["A quick note"] = "interview"
+    gmail = unclear_mailbox()
+    sync.run(conn, gmail, 60, NOW, LOCAL)
+    assert gmail.bodies  # it was read for the model
+    saved = " ".join(str(value) for found in conn.execute("SELECT * FROM emails") for value in found)
+    assert "Jordan" not in saved and "4321" not in saved

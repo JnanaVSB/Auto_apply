@@ -14,6 +14,7 @@ import sqlcipher3
 
 from app import collect, db
 from app.config import ConfigError, load_config
+from app.council import runner
 from app.gmail import client, sync
 from app.keychain import KeychainError, get_secret
 
@@ -72,7 +73,10 @@ class Mailer:
                     self.notice = NOT_CONNECTED
                     return
                 with client.Gmail(*sign_in, transport=self.transport) as gmail:
-                    self.notice = sync.run(conn, gmail, config.gmail_lookback_days, datetime.now(UTC))
+                    scoring = runner._scoring(config)  # the local model waits while scoring uses the graphics card
+                    self.notice = sync.run(
+                        conn, gmail, config.gmail_lookback_days, datetime.now(UTC), config.ai.evaluator, scoring
+                    )
         except (client.GmailError, KeychainError, collect.CollectError) as error:
             self.notice = str(error)
         except ConfigError as error:

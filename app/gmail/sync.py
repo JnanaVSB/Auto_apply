@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 
 import sqlcipher3
 
-from app.gmail import apply, classify, match
+from app.config import AIRole
+from app.gmail import apply, classify, match, model
 from app.gmail.client import Gmail, GmailError, HistoryTooOld
 
 # Gmail's own search only narrows what is read ({…} means "any of"); the rules decide what each e-mail is.
@@ -20,11 +21,27 @@ THREAD = "SELECT job_id FROM emails WHERE thread_id = ? AND job_id IS NOT NULL O
 SAVE = """INSERT INTO emails (message_id, thread_id, received_on, sender_domain, label, labelled_by, job_id, moved,
     to_check, subject, candidates) VALUES (?, ?, ?, ?, ?, 'rules', ?, ?, ?, ?, ?)"""
 RESULT = "UPDATE gmail_sync SET last_sync_on = ?, last_result = ? WHERE id = 1"
+MODEL_BATCH = 20  # unclear e-mails the local model sorts per pass
+# Still on your list (one you dismissed is left alone), newest first: new mail matters most for the board, and an old
+# one the model never answers stays on the list for you
+UNCLEAR = """SELECT message_id, subject, job_id, received_on FROM emails WHERE label = 'unclear' AND to_check = 1
+    ORDER BY received_on DESC LIMIT ?"""
+SORTED_OFF = """UPDATE emails SET label = ?, labelled_by = 'local model', moved = ?, to_check = 0, subject = NULL,
+    candidates = '[]' WHERE message_id = ?"""
+SORTED = "UPDATE emails SET label = ?, labelled_by = 'local model' WHERE message_id = ?"
 
 
-def run(conn: sqlcipher3.Connection, gmail: Gmail, lookback_days: int, now: datetime) -> str:
-    """One pass; returns its result in plain words (also saved). A GmailError is saved as the result and raised again;
-    the e-mails done before it stay done."""
+def run(
+    conn: sqlcipher3.Connection,
+    gmail: Gmail,
+    lookback_days: int,
+    now: datetime,
+    role: AIRole | None = None,
+    scoring: bool = False,
+) -> str:
+    """One pass; returns its result in plain words (also saved). Then the local model (`role`, Ollama only) sorts the
+    unclear e-mails, unless a scoring run is using the graphics card. A GmailError is saved as the result and raised
+    again; the e-mails done before it stay done."""
     with conn:
         conn.execute("INSERT OR IGNORE INTO gmail_sync (id) VALUES (1)")
     history_id, last_sync = conn.execute("SELECT history_id, last_sync_on FROM gmail_sync WHERE id = 1").fetchone()
@@ -38,11 +55,13 @@ def run(conn: sqlcipher3.Connection, gmail: Gmail, lookback_days: int, now: date
                 continue  # each e-mail is read once
             found = _one(conn, gmail.message(message_id), cards)
             read, moved, to_check = read + 1, moved + found[0], to_check + found[1]
+        by_model = 0 if scoring or role is None else _sort_unclear(conn, gmail, role)
     except GmailError as error:
         with conn:
             conn.execute(RESULT, (at, str(error)))
         raise
-    result = f"Read {_count(read, 'new e-mail')}: {_count(moved, 'card')} moved, {to_check} to check."
+    result = f"Read {_count(read, 'new e-mail')}: {_count(moved, 'card')} moved, {to_check} to check"
+    result += f", {by_model} sorted by the local model." if by_model else "."
     with conn:
         conn.execute("UPDATE gmail_sync SET history_id = ? WHERE id = 1", (newest,))
         conn.execute(RESULT, (at, result))
@@ -82,6 +101,25 @@ def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple
             message["subject"] if check else None, json.dumps(found if check else []),
         ))  # fmt: skip
     return moved, check
+
+
+def _sort_unclear(conn: sqlcipher3.Connection, gmail: Gmail, role: AIRole) -> int:
+    """The local model labels the unclear e-mails still on your list; how many it sorted. Its text is read for this
+    and never saved. One with its card moves that card and leaves the list; one without stays for you to choose the
+    card, unless it is "other"."""
+    done = 0
+    for message_id, subject, job, received_on in conn.execute(UNCLEAR, (MODEL_BATCH,)).fetchall():
+        found = model.label(role, subject or "", gmail.message(message_id)["snippet"], gmail.body(message_id))
+        if found is None:  # no answer now: it stays unclear, the next pass asks again
+            continue
+        moved = job is not None and apply.update(conn, job, found, datetime.fromisoformat(received_on))
+        with conn:
+            if job is not None or found == "other":
+                conn.execute(SORTED_OFF, (found, int(moved), message_id))
+            else:
+                conn.execute(SORTED, (found, message_id))
+        done += 1
+    return done
 
 
 def _count(number: int, word: str) -> str:
