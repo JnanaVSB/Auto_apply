@@ -7,6 +7,7 @@ import functools
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -34,6 +35,10 @@ class Reconnect(GmailError):
 
     def __init__(self) -> None:
         super().__init__("Gmail needs connecting again (Settings → Gmail).")
+
+
+class Gone(GmailError):
+    """That e-mail is no longer in Gmail (deleted, a replaced draft, purged spam): it is skipped."""
 
 
 class HistoryTooOld(GmailError):
@@ -96,12 +101,19 @@ class Gmail:
 
     @_shaped
     def message(self, message_id: str) -> dict:
-        """One message's thread, time (UTC), sender, subject and Gmail's preview; never its text."""
+        """One message's thread, time (UTC), sender, subject, Gmail's preview and labels (SENT, SPAM, …); never its
+        text. The time is when Gmail got it, else its Date line, else now."""
         found = self._get(
             f"/messages/{message_id}", {"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}
         )
         headers = {header["name"].lower(): header["value"] for header in found.get("payload", {}).get("headers", [])}
-        received = datetime.fromtimestamp(int(found.get("internalDate", 0)) / 1000, UTC)
+        if "internalDate" in found:
+            received = datetime.fromtimestamp(int(found["internalDate"]) / 1000, UTC)
+        else:
+            try:
+                received = parsedate_to_datetime(headers.get("date", "")).astimezone(UTC)
+            except (TypeError, ValueError):
+                received = datetime.now(UTC)
         return {
             "id": found.get("id", message_id),
             "thread_id": found.get("threadId", ""),
@@ -109,6 +121,7 @@ class Gmail:
             "from": headers.get("from", ""),
             "subject": headers.get("subject", ""),
             "snippet": found.get("snippet", ""),
+            "labels": [str(label) for label in found.get("labelIds", [])],
         }
 
     @_shaped
@@ -163,6 +176,8 @@ class Gmail:
                     raise GmailError("Gmail is busy; the next sync tries again.")
                 _sleep(wait)
                 continue
+            if reply.status_code == 404 and path.startswith("/messages/"):
+                raise Gone("That e-mail is no longer in Gmail.")
             if reply.status_code == 404 and path == "/history":
                 raise HistoryTooOld(
                     "Gmail no longer has the changes since the last sync; looking again from the start."

@@ -29,6 +29,7 @@ class Mailer:
     data_dir: Path
     transport: httpx.BaseTransport | None = None  # tests set a fake Google
     notice: str | None = None  # the last pass's words, for Settings → Gmail
+    tried: datetime | None = None  # the last pass's start: a failing pass waits the set minutes too
     _again: bool = False
     _thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -51,7 +52,7 @@ class Mailer:
         if not connected:
             return
         row = conn.execute("SELECT last_sync_on FROM gmail_sync WHERE id = 1").fetchone()
-        last = datetime.fromisoformat(row[0]) if row and row[0] else None
+        last = max(filter(None, (datetime.fromisoformat(row[0]) if row and row[0] else None, self.tried)), default=None)
         if last is None or datetime.now(UTC) - last >= timedelta(minutes=minutes):
             self.wake()
 
@@ -65,6 +66,7 @@ class Mailer:
             self._pass()
 
     def _pass(self) -> None:
+        self.tried = datetime.now(UTC)
         try:
             with closing(collect.lock(self.data_dir, LOCK, BUSY)), closing(db.connect(self.data_dir)) as conn:
                 config = load_config()
@@ -73,10 +75,10 @@ class Mailer:
                     self.notice = NOT_CONNECTED
                     return
                 with client.Gmail(*sign_in, transport=self.transport) as gmail:
-                    scoring = runner._scoring(config)  # the local model waits while scoring uses the graphics card
                     self.notice = sync.run(
-                        conn, gmail, config.gmail_lookback_days, datetime.now(UTC), config.ai.evaluator, scoring
-                    )
+                        conn, gmail, config.gmail_lookback_days, datetime.now(UTC), config.ai.evaluator,
+                        lambda: runner._scoring(config),  # the local model waits while scoring uses the graphics card
+                    )  # fmt: skip
         except (client.GmailError, KeychainError, collect.CollectError) as error:
             self.notice = str(error)
         except ConfigError as error:

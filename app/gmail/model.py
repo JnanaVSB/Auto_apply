@@ -25,16 +25,22 @@ MARKER = re.compile(r"<\s*(/?)\s*email\s*>", re.IGNORECASE)  # look-alikes of th
 Ask = Callable[..., str]
 
 
+class Unavailable(Exception):  # noqa: N818 (a state, like llm.StopScoring)
+    """The local model can't answer at all now (Ollama off, model missing): the rest of the batch waits."""
+
+
 def label(role: AIRole, subject: str, snippet: str, body: str, ask: Ask = llm.ask) -> str | None:
     """The e-mail's label, or None (the e-mail stays unclear): a cloud role, two answers of the wrong shape, or a
-    model that can't answer now."""
+    busy model. Raises Unavailable when no e-mail can be sorted now."""
     if role.service != "ollama":
         return None
     email = MARKER.sub(lambda marker: f"[{marker[1]}email]", f"Subject: {subject}\nPreview: {snippet}\n\n{body}")
     for retry in (False, True):
         try:
             answer = _checked(ask(role, INSTRUCTIONS, f"<email>\n{email}\n</email>", SHAPE, retry=retry))
-        except llm.LLMError:  # busy, too long, stopped: it stays unclear, the next sync tries again
+        except llm.StopScoring:  # Ollama off or the model missing: every e-mail would fail the same way
+            raise Unavailable from None
+        except llm.LLMError:  # busy or too long: this one stays unclear, the next sync tries again
             return None
         if answer:
             return answer

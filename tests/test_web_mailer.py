@@ -129,3 +129,13 @@ def test_presses_while_a_pass_runs_give_one_more_pass_never_two_at_once(data_dir
             break
         threading.Event().wait(0.02)
     assert (passes[0], most[0]) == (2, 1)
+
+
+def test_a_pass_that_just_failed_is_not_tried_again_before_the_set_minutes(conn, settings, connected, mailer):
+    synced(conn, 120)  # the last good sync, two hours ago
+    mailer.tried = datetime.now(UTC) - timedelta(minutes=10)  # a try that failed ten minutes ago
+    mailer.tick(conn)
+    assert mailer.woken == 0
+    mailer.tried -= timedelta(minutes=25)
+    mailer.tick(conn)
+    assert mailer.woken == 1

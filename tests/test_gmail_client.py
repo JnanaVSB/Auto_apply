@@ -132,13 +132,35 @@ def test_a_history_gmail_no_longer_has_asks_for_a_fresh_search():
 
 def test_a_message_gives_its_headers_whatever_their_case_and_its_time_in_utc():
     found = {"id": "m1", "threadId": "t1", "internalDate": "1793790000000", "snippet": "We&#39;d like to talk",
+             "labelIds": ["INBOX", "UNREAD"],
              "payload": {"headers": [{"name": "FROM", "value": "Acme <jobs@acme.example>"},
                                      {"name": "date", "value": "Wed, 4 Nov 2026"}]}}  # fmt: skip
     with gmail(FakeGoogle({"/messages/m1": [found]})) as box:
         assert box.message("m1") == {
             "id": "m1", "thread_id": "t1", "received_on": "2026-11-04T11:00:00+00:00",
             "from": "Acme <jobs@acme.example>", "subject": "", "snippet": "We&#39;d like to talk",
+            "labels": ["INBOX", "UNREAD"],
         }  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "date, received",
+    [("Wed, 04 Nov 2026 09:30:00 -0700", "2026-11-04T16:30:00+00:00"), ("not a date", None), ("", None)],
+)
+def test_a_message_gmail_gives_no_time_for_takes_its_date_line_else_now(date, received):
+    found = {"id": "m1", "payload": {"headers": [{"name": "Date", "value": date}]}}
+    with gmail(FakeGoogle({"/messages/m1": [found]})) as box:
+        got = box.message("m1")["received_on"]
+    if received:
+        assert got == received
+    else:  # now, never 1970
+        assert abs(datetime.fromisoformat(got) - datetime.now(UTC)).total_seconds() < 60
+
+
+@pytest.mark.parametrize("read", [lambda box: box.message("m1"), lambda box: box.body("m1")])
+def test_an_e_mail_no_longer_in_gmail_is_gone_not_a_failure(read):
+    with gmail(FakeGoogle({"/messages/m1": [404]})) as box, pytest.raises(client.Gone):
+        read(box)
 
 
 @pytest.mark.parametrize(

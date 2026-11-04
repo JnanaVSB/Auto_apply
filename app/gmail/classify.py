@@ -26,6 +26,8 @@ RULES = (
                       "received your application", "application has been received",
                       "thank you for your application", "thank you for your interest in")),
 )  # fmt: skip
+# Words that make a company's own e-mail worth a closer look (whole words); without one it is just their mail
+JOB_WORDS = re.compile(r"\b(application|applied|candidate|position|role|recruiter|interview|assessment|offer)\b")
 SPACES = re.compile(r"\s+")
 QUOTES = str.maketrans("\N{LEFT SINGLE QUOTATION MARK}\N{RIGHT SINGLE QUOTATION MARK}", "''")  # as phones type them
 
@@ -35,14 +37,24 @@ def job_system(domain: str) -> bool:
     return any(domain == system or domain.endswith("." + system) for system in JOB_SYSTEMS)
 
 
+def job_like(subject: str, snippet: str) -> bool:
+    """Whether the subject or preview has one of the job words."""
+    return bool(JOB_WORDS.search(_text(subject, snippet)))
+
+
 def classify(domain: str, subject: str, snippet: str) -> str:
     """The e-mail's label from its subject and preview (as Gmail sends it, HTML-escaped); with no phrase, "unclear"
     from a job system, else "other"."""
-    text = SPACES.sub(" ", f"{subject} {html.unescape(snippet)}".casefold().translate(QUOTES))
+    text = _text(subject, snippet)
     for label, phrases in RULES:
         if any(phrase in text for phrase in phrases):
             return label
     return "unclear" if job_system(domain) else "other"
+
+
+def _text(subject: str, snippet: str) -> str:
+    """The subject and preview as the rules read them: lower case, plain apostrophes, single spaces."""
+    return SPACES.sub(" ", f"{subject} {html.unescape(snippet)}".casefold().translate(QUOTES))
 
 
 def sender(from_header: str) -> tuple[str, str]:
