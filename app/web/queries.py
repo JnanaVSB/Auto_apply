@@ -189,7 +189,7 @@ class Filters:
             found.append('only "please check location"')
         found += [*self.remote, *self.sponsorship]
         if self.status != Filters.status:
-            found += self.status
+            found += self.status or ["any status"]  # no box ticked: every status, closed jobs too
         if self.reason:
             found.append(f"reason: {self.reason}")
         found += [SCORING_LABELS[value] for value in self.scoring]

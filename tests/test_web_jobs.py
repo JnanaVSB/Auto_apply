@@ -79,6 +79,7 @@ def test_values_the_dashboard_does_not_know_are_ignored():
     [
         ("", []),
         ("f=1&status=open&page=3", []),  # the first view, on another page
+        ("f=1", ["any status"]),  # no Status box ticked: closed jobs are shown too
         ("f=1&status=open&scoring=low&scoring=quick&sort=score",
          ["low score", "low score (quick check)", "Sort: highest score"]),
         ("q=robot&source=simplify%3Asummer2027&level=intern&us=unclear&check=1&remote=remote&sponsorship=offers&f=1"
