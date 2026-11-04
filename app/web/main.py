@@ -39,6 +39,7 @@ from app.web import (
     writer_settings,
 )
 from app.web.collector import Collector
+from app.web.mailer import Mailer
 from app.web.preparer import Preparer
 from app.web.scorer import Scorer
 
@@ -97,6 +98,7 @@ def create_app(
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
     app.state.preparer = Preparer(data_dir)  # the council's runner
+    app.state.mailer = Mailer(data_dir)  # the Gmail sync
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
     @app.exception_handler(HTTPException)
@@ -366,7 +368,12 @@ async def _schedule(app: FastAPI) -> None:
     """The schedule's check, once a minute while the dashboard is open."""
     while True:
         await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
-        for runner in (app.state.collector, app.state.scorer, app.state.preparer):  # collections first
+        for runner in (
+            app.state.collector,
+            app.state.scorer,
+            app.state.preparer,
+            app.state.mailer,
+        ):  # collections first
             try:
                 runner.tick(app.state.conn)
             except Exception as error:  # e.g. the database busy for a moment: try again next minute

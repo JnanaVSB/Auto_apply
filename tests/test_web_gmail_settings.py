@@ -182,3 +182,32 @@ def test_the_gmail_pages_keep_the_same_safety_rules(client):
     rules = client.get("/").headers["content-security-policy"]
     assert client.get("/settings/gmail").headers["content-security-policy"] == rules
     assert back_from_google(client, state="x").headers["content-security-policy"] == rules
+
+
+def test_sync_now_needs_the_page_s_token_and_starts_a_pass(client, monkeypatch):
+    pressed = []
+    monkeypatch.setattr(client.app.state.mailer, "wake", lambda: pressed.append(1))
+    assert client.post("/settings/gmail/sync", follow_redirects=False).status_code == 403 and not pressed
+    assert post(client, "/settings/gmail/sync").headers["location"] == "/settings/gmail?done=syncing"
+    assert pressed == [1] and "Syncing now" in client.get("/settings/gmail?done=syncing").text
+
+
+def test_the_page_shows_the_address_gmail_gives_and_the_last_sync(client, conn, google):
+    google.replies["/profile"] = [{"emailAddress": "jordan@example.com", "historyId": "1"}]
+    save_client(client)
+    set_secret(REFRESH, LASTING)
+    text = client.get("/settings/gmail").text
+    assert "jordan@example.com" in text and "Not synced yet." in text and "Sync now" in text
+    with conn:
+        conn.execute("INSERT INTO gmail_sync (id, last_sync_on, last_result) VALUES (1, ?, 'Read 2 new e-mails.')",
+                     ("2026-11-04T10:00:00+00:00",))  # fmt: skip
+    client.app.state.mailer.notice = "A Gmail sync is running in another dashboard; it carries on there."
+    text = client.get("/settings/gmail").text
+    assert "Read 2 new e-mails." in text and "Latest try: A Gmail sync is running" in text
+
+
+def test_an_address_gmail_can_t_give_is_said_plainly(client, google):
+    google.replies["/token"] = [httpx.Response(400, json={"error": "invalid_grant"})]
+    save_client(client)
+    set_secret(REFRESH, LASTING)
+    assert "The address can't be read right now: Gmail needs connecting again" in client.get("/settings/gmail").text

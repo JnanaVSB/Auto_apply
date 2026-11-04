@@ -12,12 +12,13 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app import collect
-from app.gmail.client import AUTH_URL, CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE, GmailError, exchange, revoke
+from app.gmail.client import AUTH_URL, CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE, Gmail, GmailError, exchange, revoke
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
 
 PAGE = "/settings/gmail"
@@ -26,6 +27,7 @@ PENDING_MINUTES = 10  # how long a Connect waits for Google's answer
 VISIBLE = re.compile(r"[\x21-\x7e]{1,200}")  # as Google gives them: visible characters, no spaces
 DONE = {  # ?done=…: fixed words only
     "client": "Google client saved. Now press Connect.",
+    "syncing": "Syncing now; this page shows the result when you reload it.",
     "no-client": "Save your Google client ID and secret first.",
     "disconnected": "Disconnected: the app can no longer read your Gmail.",
     "disconnected-here": (
@@ -44,20 +46,20 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 
     @app.get(PAGE)
     async def gmail_page(request: Request) -> Response:
-        return _view(request, page, notice=DONE.get(request.query_params.get("done", "")))
+        return await _view(request, page, notice=DONE.get(request.query_params.get("done", "")))
 
     @app.post(PAGE + "/client")
     async def save_client(request: Request) -> Response:
         client_id, client_secret = request.state.form.get("client_id", ""), request.state.form.get("client_secret", "")
         if not (VISIBLE.fullmatch(client_id) and client_id.endswith(".apps.googleusercontent.com")):
-            return _view(request, page, 400, problem="The client ID ends with .apps.googleusercontent.com.")
+            return await _view(request, page, 400, problem="The client ID ends with .apps.googleusercontent.com.")
         if not VISIBLE.fullmatch(client_secret):
-            return _view(request, page, 400, problem="Paste the client secret as Google shows it: no spaces.")
+            return await _view(request, page, 400, problem="Paste the client secret as Google shows it: no spaces.")
         try:
             set_secret(CLIENT_ID, client_id)
             set_secret(CLIENT_SECRET, client_secret)
         except KeychainError as error:
-            return _view(request, page, 400, problem=str(error))
+            return await _view(request, page, 400, problem=str(error))
         return RedirectResponse(f"{PAGE}?done=client", 303)
 
     @app.get(PAGE + "/connect")
@@ -66,7 +68,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         try:
             client_id = get_secret(CLIENT_ID) if get_secret(CLIENT_SECRET) else None
         except KeychainError as error:
-            return _view(request, page, 400, problem=str(error))
+            return await _view(request, page, 400, problem=str(error))
         if not client_id:
             return RedirectResponse(f"{PAGE}?done=no-client", 303)
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
@@ -112,6 +114,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             conn.execute(CONNECTED, (collect.now(),))
         return page(request, "gmail_done.html", sentence="Gmail connected. The app can now read your mail (read-only).")
 
+    @app.post(PAGE + "/sync")
+    async def sync_now(request: Request) -> Response:
+        request.app.state.mailer.wake()
+        return RedirectResponse(f"{PAGE}?done=syncing", 303)
+
     @app.post(PAGE + "/disconnect")
     async def disconnect(request: Request) -> Response:
         """Google is asked to forget the sign-in, then it is removed here either way; e-mails already read stay."""
@@ -120,22 +127,41 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             told = await run_in_threadpool(revoke, token, request.app.state.gmail_transport) if token else True
             delete_secret(REFRESH)
         except KeychainError as error:
-            return _view(request, page, 400, problem=str(error))
+            return await _view(request, page, 400, problem=str(error))
         conn = request.app.state.conn
         with conn:
             conn.execute(CONNECTED, (None,))
         return RedirectResponse(f"{PAGE}?done={'disconnected' if told else 'disconnected-here'}", 303)
 
 
-def _view(request: Request, page: Callable[..., HTMLResponse], status: int = 200, **values) -> HTMLResponse:
-    """The page: whether your client is saved and Gmail connected (never the values), and since when."""
+async def _view(request: Request, page: Callable[..., HTMLResponse], status: int = 200, **values) -> HTMLResponse:
+    """The page: whether your client is saved and Gmail connected (never the values), since when, the address (asked
+    of Gmail, never stored) and the last sync."""
     try:
-        values["has_client"] = bool(get_secret(CLIENT_ID) and get_secret(CLIENT_SECRET))
-        values["connected"] = get_secret(REFRESH) is not None
+        sign_in = get_secret(CLIENT_ID), get_secret(CLIENT_SECRET), get_secret(REFRESH)
     except KeychainError as error:
-        values["problem"] = values.get("problem") or str(error)
-    row = request.app.state.conn.execute("SELECT connected_on FROM gmail_sync WHERE id = 1").fetchone()
-    if row and row[0] and values.get("connected"):
-        since = datetime.fromisoformat(row[0]).astimezone().date()
+        sign_in, values["problem"] = (None, None, None), values.get("problem") or str(error)
+    values["has_client"], values["connected"] = bool(sign_in[0] and sign_in[1]), sign_in[2] is not None
+    row = request.app.state.conn.execute("SELECT connected_on, last_sync_on, last_result FROM gmail_sync").fetchone()
+    connected_on, last_sync, values["last_result"] = row or (None, None, None)
+    if connected_on and values["connected"]:
+        since = datetime.fromisoformat(connected_on).astimezone().date()
         values["since"], values["again"] = since, since + timedelta(days=7)
+    if last_sync:
+        values["last_sync"] = f"{datetime.fromisoformat(last_sync).astimezone():%Y-%m-%d %H:%M}"
+    mailer_notice = request.app.state.mailer.notice
+    values["latest"] = mailer_notice if mailer_notice != values["last_result"] else None  # e.g. "busy elsewhere"
+    if all(sign_in):
+        values["address"], values["address_problem"] = await run_in_threadpool(
+            _address, sign_in, request.app.state.gmail_transport
+        )
     return page(request, "gmail_settings.html", status, **values)
+
+
+def _address(sign_in: tuple, transport: httpx.BaseTransport | None) -> tuple[str | None, str | None]:
+    """The connected account's address, or why it can't be read now."""
+    try:
+        with Gmail(*sign_in, transport=transport) as gmail:
+            return gmail.profile()[0], None
+    except GmailError as error:
+        return None, str(error)
