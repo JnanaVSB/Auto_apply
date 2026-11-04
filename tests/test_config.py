@@ -117,6 +117,9 @@ def test_the_dashboard_schedule_is_0_to_168_hours(tmp_path, value, ok):
         ("phonebook_every_days", "366", False), ("phonebook_every_days", "-1", False),
         ("tracker_stale_days", "1", True), ("tracker_stale_days", "365", True),
         ("tracker_stale_days", "0", False), ("tracker_stale_days", "366", False),
+        ("gmail_lookback_days", "1", True), ("gmail_lookback_days", "366", False),
+        ("gmail_every_minutes", "0", True), ("gmail_every_minutes", "5", True), ("gmail_every_minutes", "1", False),
+        ("gmail_every_minutes", "4", False), ("gmail_every_minutes", "1441", False),
         ("requests_per_second", "1", True), ("requests_per_second", "5", True),
         ("requests_per_second", "0", False), ("requests_per_second", "6", False),
         ("requests_per_second", "0.5", False), ("requests_per_second", '"2"', False),
@@ -134,6 +137,7 @@ def test_the_phone_book_schedule_and_requests_per_second_have_limits(tmp_path, s
 def test_without_them_the_phone_book_is_monthly_at_one_request_per_second(tmp_path):
     config = load_config(write(tmp_path, "data_dir: data\n"))
     assert (config.phonebook_every_days, config.requests_per_second, config.tracker_stale_days) == (30, 1, 21)
+    assert (config.gmail_lookback_days, config.gmail_every_minutes) == (60, 30)
 
 
 def test_scoring_settings_have_defaults_and_limits(tmp_path):

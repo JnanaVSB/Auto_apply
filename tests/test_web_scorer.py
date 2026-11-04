@@ -209,6 +209,7 @@ def scoring_form(**changes):
     values = {
         "simplify_categories": "", "keywords": "RL", "extra_boards": "", "phonebook_lists": "",
         "collect_every_hours": "0", "phonebook_every_days": "30", "tracker_stale_days": "21",
+        "gmail_lookback_days": "60", "gmail_every_minutes": "30",
         "requests_per_second": "1",
         "automatic": "off", "minutes_per_day": "90", "ready_threshold": "75", "meaning_threshold": "0.55",
         "skills_threshold": "0.2", "extra_skills": "MuJoCo\nCARLA", "ai_model": "gemma4:26b-a4b-it-qat",

@@ -41,6 +41,7 @@ def form(**changes):
     values = {
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",
         "collect_every_hours": "0", "phonebook_every_days": "30", "tracker_stale_days": "21",
+        "gmail_lookback_days": "60", "gmail_every_minutes": "30",
         "requests_per_second": "1",
         "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
         "list_level_1": "intern", "phonebook_lists": "",

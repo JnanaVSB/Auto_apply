@@ -244,12 +244,23 @@ class Config(BaseModel):
     collect_every_hours: Annotated[int, Field(ge=0, le=168, strict=True)] = 0  # dashboard schedule; 0 = off
     phonebook_every_days: Annotated[int, Field(ge=0, le=365, strict=True)] = 30  # dashboard schedule; 0 = off
     tracker_stale_days: Annotated[int, Field(ge=1, le=365, strict=True)] = 21  # Tracker: days unchanged before greying
+    gmail_lookback_days: Annotated[int, Field(ge=1, le=365, strict=True)] = (
+        60  # Gmail: the first sync reads this far back
+    )
+    gmail_every_minutes: Annotated[int, Field(ge=0, le=1440, strict=True)] = 30  # Gmail: sync while open; 0 = off
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()
     documents: DocumentSettings = DocumentSettings()
     spending: SpendingSettings = SpendingSettings()
     council: CouncilSettings = CouncilSettings()
+
+    @field_validator("gmail_every_minutes")
+    @classmethod
+    def _not_too_often(cls, minutes: int) -> int:
+        if 1 <= minutes <= 4:
+            raise ValueError("at least 5 minutes, or 0 for off")
+        return minutes
 
     @model_validator(mode="after")
     def _automatic_needs_a_council(self) -> "Config":

@@ -32,7 +32,10 @@ CANT_READ = (FetchError, SourceError)  # "The job's board could not be read (…
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 # Whole numbers on the settings form
-NUMBERS = ("collect_every_hours", "phonebook_every_days", "tracker_stale_days", "requests_per_second")
+NUMBERS = (
+    "collect_every_hours", "phonebook_every_days", "tracker_stale_days", "gmail_lookback_days", "gmail_every_minutes",
+    "requests_per_second",
+)  # fmt: skip
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
 SAVE_ANSWER = """INSERT INTO answer_key (job_id, label, marked_on) VALUES (?, ?, ?)
     ON CONFLICT (job_id) DO UPDATE SET label = excluded.label, marked_on = excluded.marked_on"""

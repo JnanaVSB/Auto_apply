@@ -53,6 +53,13 @@
     the default)
     <input name="tracker_stale_days" type="number" min="1" max="365" step="1" value="{{ form.tracker_stale_days }}"></label>
 
+  <h2>Gmail</h2>
+  <p class="hint">Connect your Gmail on <a href="/settings/gmail">Settings → Gmail</a>; these numbers say how it syncs.</p>
+  <label>The first sync reads this many days back (1 to 365; 60 is the default)
+    <input name="gmail_lookback_days" type="number" min="1" max="365" step="1" value="{{ form.gmail_lookback_days }}"></label>
+  <label>Sync every this many minutes while the dashboard is open (0 = off, 5 to 1440; 30 is the default)
+    <input name="gmail_every_minutes" type="number" min="0" max="1440" step="1" value="{{ form.gmail_every_minutes }}"></label>
+
   <h2>Politeness</h2>
   <label>Requests per second to each job site (1 to 5; 1 is polite and the default)
     <input name="requests_per_second" type="number" min="1" max="5" step="1" value="{{ form.requests_per_second }}"></label>
