@@ -71,3 +71,14 @@ def test_a_job_system_is_its_own_domain_or_under_it_never_a_lookalike(domain, fo
 )  # fmt: skip
 def test_the_sender_is_the_display_name_and_the_address_s_domain(header, found):
     assert sender(header) == found
+
+
+@pytest.mark.parametrize(
+    "snippet, label",
+    [("Thank you for your interest in Acme. We have decided to move forward with other candidates.", "rejection"),
+     ("Thank you for applying. We have decided not to proceed with your application.", "rejection"),
+     ("Thanks for applying. We will not be advancing your application.", "rejection"),
+     ("Unfortunately our interviewer is sick; can we move it to Thursday?", "unclear")],
+)  # fmt: skip
+def test_common_ways_of_saying_no_are_rejections_and_unfortunately_alone_is_unclear(snippet, label):
+    assert classify(SHOP, "Your application", snippet) == label

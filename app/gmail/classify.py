@@ -13,9 +13,11 @@ JOB_SYSTEMS = (  # where application e-mails come from; a sender counts if its d
 # The first label with a phrase in the e-mail wins, so the order matters: a rejection often thanks you for applying
 # and may mention an interview; an interview invite often thanks you for applying too.
 RULES = (
-    ("rejection", ("unfortunately", "not moving forward", "not to move forward", "will not be moving forward",
-                   "won't be moving forward", "decided to pursue other candidates", "regret to inform",
-                   "position has been filled", "not been selected")),
+    ("rejection", ("not moving forward", "not to move forward", "will not be moving forward",
+                   "won't be moving forward", "will not be moving", "decided to pursue other candidates",
+                   "move forward with other candidates", "other candidates", "other applicants", "not to proceed",
+                   "not be proceeding", "not be advancing", "regret to inform", "position has been filled",
+                   "not been selected")),
     ("offer", ("pleased to offer", "offer letter", "extend an offer", "extend you an offer", "job offer")),
     ("interview", ("schedule an interview", "invite you to interview", "invitation to interview",
                    "interview invitation", "would like to interview", "phone screen", "next round",
@@ -44,11 +46,13 @@ def job_like(subject: str, snippet: str) -> bool:
 
 def classify(domain: str, subject: str, snippet: str) -> str:
     """The e-mail's label from its subject and preview (as Gmail sends it, HTML-escaped); with no phrase, "unclear"
-    from a job system, else "other"."""
+    from a job system or when it says "unfortunately", else "other"."""
     text = _text(subject, snippet)
     for label, phrases in RULES:
         if any(phrase in text for phrase in phrases):
             return label
+    if "unfortunately" in text:  # alone it can be a reschedule as well as a no: the local model reads it
+        return "unclear"
     return "unclear" if job_system(domain) else "other"
 
 

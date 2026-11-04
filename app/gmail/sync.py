@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import sqlcipher3
 
+from app import tracker
 from app.config import AIRole
 from app.gmail import apply, classify, match, model
 from app.gmail.client import Gmail, GmailError, Gone, HistoryTooOld
@@ -105,6 +106,10 @@ def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple
     )
     if label == "other" and job is not None and job_like:
         label = "unclear"  # a company you applied to wrote about the job and no phrase fits: the local model decides
+    if label == "unclear" and job is None and not job_like:
+        label = "other"  # e.g. a shop's "unfortunately your order is late": not about a job
+    if label == "confirmation" and job is not None and tracker.stage(conn, job) not in (None, "ready"):
+        label = "unclear"  # "thank you for applying" on a card already past it often opens a no: the model reads on
     if label == "other":
         return False, False
     check = label == "unclear" if job is not None else label != "other"  # unclear stays on the list until decided

@@ -83,7 +83,9 @@ def row(conn, message_id):
 def test_the_first_sync_reads_back_sorts_matches_and_keeps_only_what_needs_you(conn, acme):
     gmail = FakeGmail(
         email("m1", "Acme <no-reply@greenhouse.io>", "Thank you for applying to Acme"),
-        email("m2", "Initrode <jobs@initrode.example>", "Your application", "Unfortunately we will not proceed."),
+        email(
+            "m2", "Initrode <jobs@initrode.example>", "Your application", "Unfortunately we will not be moving forward."
+        ),
         email("m3", "Shop <news@shop.example>", "Our autumn sale"),
     )
     result = sync.run(conn, gmail, 60, NOW)
@@ -331,3 +333,19 @@ def test_an_unclear_e_mail_gone_from_gmail_stays_on_the_list_without_failing(con
     answers["An update"] = "rejection"
     assert sync.run(conn, gmail, 60, NOW, LOCAL).endswith("1 sorted by the local model.")
     assert row(conn, "m1")[0] == "unclear"
+
+
+def test_thank_you_for_applying_on_a_card_already_past_it_is_left_for_a_closer_look(conn, acme):
+    tracker.move(conn, acme, "ready", "applied", NOW.date())
+    sync.run(conn, FakeGmail(email("m1", "Acme <no-reply@greenhouse.io>", "Thank you for applying to Acme")), 60, NOW)
+    assert row(conn, "m1")[:4] == ("unclear", acme, 0, 1) and tracker.stage(conn, acme) == "applied"
+
+
+def test_a_shop_s_unfortunately_about_no_job_leaves_nothing(conn, acme):
+    sync.run(
+        conn,
+        FakeGmail(email("m1", "Shop <news@shop.example>", "Delivery", "Unfortunately your parcel is late.")),
+        60,
+        NOW,
+    )
+    assert row(conn, "m1") is None
