@@ -45,7 +45,7 @@
           <button type="submit" class="primary">I applied</button>
         </form>
         {% elif lane.stage == "interview" %}
-        <form method="post" action="/tracker/{{ card.id }}/round" class="round">
+        <form method="post" action="/tracker/{{ card.id }}/round">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
           <label>Round <select name="round">{% for value, name in rounds.items() %}<option value="{{ value }}"{% if value == card.round %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
           <button type="submit">Save</button>

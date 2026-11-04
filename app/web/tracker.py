@@ -12,16 +12,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from app import collect, db, tracker
+from app import db, tracker
 from app.config import Config, ConfigError, load_config
-from app.fetch import Fetcher, FetchError
-from app.keychain import KeychainError
-from app.sources import SourceError
+from app.fetch import Fetcher
 from app.web import actions, queries
 
 PAGE = "/tracker"
-STALE = "Already moved in another tab: the board shows where it is now."
-NOTICES = {"stale": STALE, "round": "Round saved."}  # ?notice=…; ?moved=<stage> says "Moved to …"
+# ?notice=<code> shows one of these fixed lines; anything else in the address shows nothing
+NOTICES = {stage: f"Moved to {name}." for stage, name in tracker.STAGES.items()} | {
+    "stale": tracker.STALE,
+    "round": "Round saved.",
+}
 
 
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) -> None:
@@ -30,17 +31,14 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             stale_days = load_config().tracker_stale_days
         except ConfigError:  # shown on the Settings page; the default meanwhile
             stale_days = Config.model_fields["tracker_stale_days"].default
-        show_all = request.query_params.get("all")
-        lanes = tracker.board(request.app.state.conn, datetime.now().astimezone(), stale_days,
-                              show_all if show_all in tracker.STAGES else None)  # fmt: skip
-        return page(request, "tracker.html", status, lanes=lanes, stale_days=stale_days, today=date.today(),
+        local = datetime.now().astimezone()
+        lanes = tracker.board(request.app.state.conn, local, stale_days, request.query_params.get("all"))
+        return page(request, "tracker.html", status, lanes=lanes, stale_days=stale_days, today=local.date(),
                     stages=tracker.STAGES, rounds=tracker.ROUNDS, **values)  # fmt: skip
 
     @app.get(PAGE)
     async def tracker_page(request: Request) -> Response:
-        moved, notice = request.query_params.get("moved"), request.query_params.get("notice")
-        return board(request, notice=f"Moved to {tracker.STAGES[moved]}." if moved in tracker.STAGES
-                     else NOTICES.get(notice))  # fmt: skip
+        return board(request, notice=NOTICES.get(request.query_params.get("notice")))
 
     @app.post(PAGE + "/{job_id:int}/move")
     async def move_card(request: Request, job_id: int) -> Response:
@@ -52,7 +50,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if start == "ready" and not tracker.on_board(conn, job_id):
             raise HTTPException(400, "This job isn't on the Tracker yet: it has no finished resume version.")
         moved = tracker.move(conn, job_id, start, to, date.today())
-        return RedirectResponse(f"{PAGE}?{f'moved={to}' if moved else 'notice=stale'}", 303)
+        return RedirectResponse(f"{PAGE}?notice={to if moved else 'stale'}", 303)
 
     @app.post(PAGE + "/{job_id:int}/round")
     async def save_round(request: Request, job_id: int) -> Response:
@@ -72,28 +70,25 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         form = request.state.form
         try:
             notice, _ = await run_in_threadpool(_add, data_dir, request.app.state.collector.fetcher, form)
-        except (ValueError, collect.CollectError, ConfigError, KeychainError, db.DatabaseError) as error:
+        except (ValueError, *actions.CANT_SAVE) as error:
             return board(request, 400, problem=str(error), typed=form)
-        except (FetchError, SourceError) as error:
+        except actions.CANT_READ as error:
             return board(request, 400, problem=f"The job's board could not be read ({error}).", typed=form)
         return board(request, notice=notice)
 
 
 def job_box(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
-    """The job page's Tracker box: where the card is, whether the board shows it (not a Not interested job in Ready)
-    and every move, newest first, at this computer's local time; None for a job never on the board."""
+    """The job page's Tracker box: where the card is, whether the board shows it, and every move, newest first, at
+    this computer's local time; None for a job never moved (a Ready card no one has moved yet has no history to
+    show)."""
     moves = tracker.history(conn, job_id)
     if not moves:
         return None
-    lane, round_, skipped = conn.execute(
-        "SELECT coalesce(t.stage, 'ready'), t.round, j.not_interested FROM jobs j "
-        "LEFT JOIN tracker t ON t.job_id = j.id WHERE j.id = ?",
-        (job_id,),
-    ).fetchone()
+    lane, round_, shown = tracker.place(conn, job_id)
     return {
         "lane": lane,
         "stage": tracker.STAGES[lane],
-        "shown": not (lane == "ready" and skipped),
+        "shown": shown,
         "round": tracker.ROUNDS.get(round_),
         "moves": [
             {

@@ -9,7 +9,7 @@ import pytest
 from helpers import ACME, ACME_JOB, add_job, csrf, log_in, one
 from test_tracker import version
 
-from app import tracker
+from app import collect, tracker
 from app.web import main
 from app.web import tracker as tracker_web
 
@@ -45,7 +45,7 @@ def test_the_page_shows_six_lanes_and_a_ready_card_and_the_menu_has_tracker(clie
 
 def test_i_applied_moves_the_card_and_a_second_tab_is_told(client, conn, ready):
     reply = post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
-    assert (reply.status_code, reply.headers["location"]) == (303, "/tracker?moved=applied")
+    assert (reply.status_code, reply.headers["location"]) == (303, "/tracker?notice=applied")
     assert tracker.stage(conn, ready) == "applied"
     assert "Moved to Applied." in client.get(reply.headers["location"]).text
     again = post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
@@ -112,7 +112,7 @@ def test_show_all_lists_a_long_lane_whole_and_ignores_an_unknown_lane(client, co
             job = add_job(conn, "Robotics Intern")
             conn.execute(
                 "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, 'applied', '2026-11-01', ?)",
-                (job, tracker.now()),
+                (job, collect.now()),
             )
     assert len(APPLIED_CARD.findall(client.get("/tracker").text)) == 30
     assert "Show all 31" in client.get("/tracker?all=offer").text
@@ -134,7 +134,7 @@ def phoenix():
     time.tzset()
 
 
-def test_a_job_never_on_the_board_has_no_tracker_box(client, ready):
+def test_a_job_never_moved_has_no_tracker_box(client, ready):
     assert "<h2>Tracker</h2>" not in client.get(f"/jobs/{ready}").text
 
 

@@ -27,6 +27,8 @@ from app.web import queries
 
 LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
+CANT_SAVE = (ConfigError, KeychainError, db.DatabaseError, collect.CollectError)  # said as they are
+CANT_READ = (FetchError, SourceError)  # "The job's board could not be read (…)."
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 # Whole numbers on the settings form
@@ -83,9 +85,9 @@ def add_job(data_dir: Path, fetcher: Fetcher, link: str, company: str, title: st
         with ADDING, closing(db.connect(data_dir)) as conn:
             message = collect.add(conn, fetcher, link, details=(company, title))
             return message, queries.job_id_by_link(conn, link)
-    except (ConfigError, KeychainError, db.DatabaseError, collect.CollectError) as error:
+    except CANT_SAVE as error:
         return str(error), None
-    except (FetchError, SourceError) as error:
+    except CANT_READ as error:
         return f"The job's board could not be read ({error}).", None
 
 

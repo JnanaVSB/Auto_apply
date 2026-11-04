@@ -7,7 +7,6 @@ from urllib.parse import urlsplit
 import sqlcipher3
 
 from app import collect, jobs
-from app.collect import now
 from app.fetch import Fetcher
 from app.sources import posting_of
 
@@ -23,15 +22,18 @@ ROUNDS = {"1": "Round 1", "2": "Round 2", "3": "Round 3", "4": "Round 4", "5": "
 WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey when nothing changes for a while
 LANE_CARDS = 30  # cards a lane shows before "Show all"
 BAD_DATE = "Choose the date you applied: not later than tomorrow, not before 2000."
-# Every card, newest change first. A card past Ready always shows, whatever "Not interested", closed or its versions;
-# Ready holds a job with a finished resume version, or one you moved back, unless it is "Not interested".
-BOARD = """SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
-        t.changed_on, coalesce(t.changed_on, f.done_on) AS sort_on
-    FROM jobs j LEFT JOIN tracker t ON t.job_id = j.id
+STALE = "Already moved in another tab: the board shows where it is now."
+# A job, its card (t) and its newest finished resume version (f), for the board and the job page alike.
+CARDS = """FROM jobs j LEFT JOIN tracker t ON t.job_id = j.id
     LEFT JOIN (SELECT job_id, max(coalesce(finished_on, created_on)) AS done_on FROM preparations
-        WHERE kind = 'resume' AND status = 'done' GROUP BY job_id) f ON f.job_id = j.id
-    WHERE t.stage != 'ready' OR (j.not_interested = 0 AND (t.job_id IS NOT NULL OR f.job_id IS NOT NULL))
-    ORDER BY sort_on DESC, j.id DESC"""
+        WHERE kind = 'resume' AND status = 'done' GROUP BY job_id) f ON f.job_id = j.id"""
+# A card past Ready always shows, whatever "Not interested", closed or its versions; Ready holds a job with a finished
+# resume version, or one you moved back, unless it is "Not interested".
+SHOWN = "(t.stage != 'ready' OR (j.not_interested = 0 AND (t.job_id IS NOT NULL OR f.job_id IS NOT NULL)))"
+BOARD = f"""SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
+        t.changed_on {CARDS}
+    WHERE {SHOWN} ORDER BY coalesce(t.changed_on, f.done_on) DESC, j.id DESC"""  # noqa: S608 (fixed text)
+PLACE = f"SELECT coalesce(t.stage, 'ready'), t.round, coalesce({SHOWN}, 0) {CARDS} WHERE j.id = ?"  # noqa: S608
 # One statement, so the check and the write can't be split by another tab's move: a job with no row is in Ready, so a
 # row is added only when the page showed Ready; an existing row moves only if it is still where the page showed it.
 # The day counter's date is set on leaving Ready, kept between later stages and cleared back in Ready.
@@ -52,12 +54,13 @@ ADD_MOVE = """INSERT INTO tracker_moves (job_id, from_stage, to_stage, round, mo
 
 def move(conn: sqlcipher3.Connection, job_id: int, expected: str, to: str, on: date, moved_by: str = "you") -> bool:
     """Move the card from `expected` (the stage the page showed) to `to`, on the local date `on`, and record it.
-    False when it was moved meanwhile (another tab). The caller checks the job exists."""
+    False when it was moved meanwhile (another tab). The caller checks the job exists and, from Ready, that it is on
+    the board (Add an application skips this on purpose: it puts a new job straight in Applied)."""
     if expected not in STAGES or to not in STAGES or expected == to:
         raise ValueError("Choose two different stages.")
     round_ = "1" if to == "interview" else None
     applied = None if to == "ready" else on.isoformat()
-    at = now()
+    at = collect.now()
     with conn:
         values = {"job": job_id, "to": to, "round": round_, "applied": applied, "now": at, "expected": expected}
         if conn.execute(MOVE, values).rowcount != 1:
@@ -88,7 +91,7 @@ def add_application(
     if now_in not in (None, "ready"):
         return f"Already on the Tracker, in {STAGES[now_in]}; not changed.", job_id
     if not move(conn, job_id, "ready", "applied", applied_on):
-        return "Already moved in another tab: the board shows where it is now.", job_id
+        return STALE, job_id
     return "Added to Applied.", job_id
 
 
@@ -96,7 +99,7 @@ def set_round(conn: sqlcipher3.Connection, job_id: int, round_: str) -> bool:
     """Change an Interview card's round and record it; False when the card isn't in Interview or has that round."""
     if round_ not in ROUNDS:
         raise ValueError("Choose a round from the list.")
-    at = now()
+    at = collect.now()
     with conn:
         changed = conn.execute(
             "UPDATE tracker SET round = ?, changed_on = ? WHERE job_id = ? AND stage = 'interview' AND round != ?",
@@ -128,6 +131,12 @@ def on_board(conn: sqlcipher3.Connection, job_id: int) -> bool:
     )
 
 
+def place(conn: sqlcipher3.Connection, job_id: int) -> tuple[str, str | None, bool]:
+    """Where the job's card is: its stage, its round, and whether the board shows it (the board's own rule)."""
+    stage_, round_, shown = conn.execute(PLACE, (job_id,)).fetchone()
+    return stage_, round_, bool(shown)
+
+
 def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
     """The card's stage, or None when it has no row (a job with a finished version is then in Ready)."""
     row = conn.execute("SELECT stage FROM tracker WHERE job_id = ?", (job_id,)).fetchone()
@@ -137,12 +146,11 @@ def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
 def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all: str | None = None) -> list[dict]:
     """The lanes in board order, each {"stage", "name", "full", "cards", "count", "more", "grey_hidden"}; a lane shows
     its newest LANE_CARDS cards and counts the grey cards that leaves out, or, when it is `show_all`, all of them with
-    the grey ones first. `now` is this
-    computer's local time, aware: the day counter counts local dates, and a waiting card goes grey when it hasn't
-    changed for `stale_days`."""
+    the grey ones first. `now` is this computer's local time, aware: the day counter counts local dates, and a
+    waiting card goes grey when it hasn't changed for `stale_days`."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
-    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, _ in conn.execute(BOARD):
+    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on in conn.execute(BOARD):
         lanes[stage_].append(
             {
                 "id": job_id,
