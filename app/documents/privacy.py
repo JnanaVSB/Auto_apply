@@ -20,10 +20,14 @@ ENDINGS = (
     "com|org|net|io|ai|dev|edu|gov|co|me|app|info|xyz|us|uk|ca|de|in|eu|tech|fr|nl|jp|cn|au|ch|kr|nz|ie|sg|hk|tw|il|br"
     "|ac|site|online|page|blog|cloud|tv"
 )
+# Endings that count in capitals: NET, IO, AI and TECH end tech names and degrees (ML.NET, System.IO, B.TECH)
+CAPS = "|".join(ending.upper() for ending in ENDINGS.split("|") if ending not in ("net", "io", "ai", "tech"))
 # A web address: https:// or www. in any case, else a name.ending with the ending in lower case or followed by "/", so
-# tech names such as ASP.NET or Socket.IO are not addresses
-WEB = re.compile(rf"(?i:https?://|www\.)|\b[\w-]+\.(?:(?:{ENDINGS})\b|(?i:{ENDINGS})/)")
+# tech names such as ASP.NET or Socket.IO are not addresses, or 2+ characters before an ending in CAPS (not B.COM)
+WEB = re.compile(rf"(?i:https?://|www\.)|\b[\w-]+\.(?:(?:{ENDINGS})\b|(?i:{ENDINGS})/)|\b[\w-]{{2,}}\.(?:{CAPS})\b")
 TECH_NAMES = {"asp.net", "vb.net", "ado.net", "socket.io", "fast.ai"}  # also websites, but never yours: allowed alone
+# A tech name standing alone, not part of a longer address (forums.fast.ai/u/sam or sam.socket.io)
+ALONE = re.compile(rf"(?<![\w./-])(?:{'|'.join(map(re.escape, sorted(TECH_NAMES)))})(?![\w/-]|\.\w)", re.I)
 STREET_WORDS = "Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl|Parkway|Pkwy"
 STREET = re.compile(rf"\b\d{{1,6}}\s+(?:[A-Z][\w.'-]*\s+){{1,4}}(?:{STREET_WORDS})\b")  # e.g. 12 Fake Hill Rd
 PLACEHOLDER = re.compile(r"\[(?:ME|EMAIL|PHONE|ADDRESS|LINK)(?:-[0-9]+)?\]")
@@ -112,7 +116,7 @@ def last_check(text: str) -> None:
         raise PrivacyStop("an email address")
     if any(_is_phone(match[0]) for match in PHONE.finditer(text)):
         raise PrivacyStop("a phone number")
-    if any(match[0].lower() not in TECH_NAMES for match in WEB.finditer(text)):
+    if WEB.search(ALONE.sub(" ", text)):
         raise PrivacyStop("a web address")
     if STREET.search(text):
         raise PrivacyStop("a street address")

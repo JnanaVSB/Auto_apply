@@ -142,6 +142,14 @@ def test_no_name_in_the_questionnaire_means_no_filter():
         ("See Example.com for more", "a web address"),
         ("See SAMPLE.ORG/sam", "a web address"),
         ("Contact x@lab.fake-uni.ac.jp", "an email address"),
+        ("Profile at forums.fast.ai/u/sam_sample", "a web address"),  # a tech name inside a longer address
+        ("See socket.io/sam-sample", "a web address"),
+        ("Host sam.socket.io", "a web address"),
+        ("Founded EXAMPLE.COM", "a web address"),  # an ending in capitals
+        ("Site SAMPLE.DEV", "a web address"),
+        ("See ALEX-SAMPLE.ORG", "a web address"),
+        ("Mirror at FAKE.DE", "a web address"),
+        ("Write to sam@fast.ai", "an email address"),  # a tech name never hides an e-mail address
     ],
 )
 def test_the_last_check_stops_contact_like_items_and_names_only_the_kind(text, kind):
@@ -160,6 +168,9 @@ def test_the_last_check_stops_contact_like_items_and_names_only_the_kind(text, k
         "Built REST APIs in ASP.NET Core and VB.NET, with ADO.NET and ML.NET.",  # tech names, not web addresses
         "Real-time chat with Socket.IO and socket.io; took the fast.ai course.",
         "Wrote run.sh, main.rs and lib.cc scripts from 2020–2024.",
+        "Socket.IO, socket.io, and fast.ai.",  # a tech name alone, before a comma or at a sentence's end
+        "Used Json.NET, Akka.NET and System.IO with Character.AI.",
+        "Holds a B.COM, B.Com, B.TECH and M.TECH; uses Google.Cloud.",  # degrees, not addresses
     ],
 )
 def test_ordinary_resume_text_passes_the_last_check(text):
