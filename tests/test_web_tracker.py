@@ -6,7 +6,7 @@ import time
 from datetime import date
 
 import pytest
-from helpers import add_job, csrf, log_in, one
+from helpers import ACME, ACME_JOB, add_job, csrf, log_in, one
 from test_tracker import version
 
 from app import tracker
@@ -142,7 +142,7 @@ def test_the_job_page_shows_where_it_is_and_every_move_newest_first(client, conn
     post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
     post(client, f"/tracker/{ready}/move", **{"from": "applied", "to": "interview"})
     text = client.get(f"/jobs/{ready}").text
-    assert "Now in Interview, Round 1." in text and f'href="/tracker#job-{ready}"' in text
+    assert "Now in Interview, Round 1." in text and f'href="/tracker?all=interview#job-{ready}"' in text
     assert text.index("Applied → Interview · Round 1 · by you") < text.index("Ready → Applied · by you")
 
 
@@ -184,3 +184,59 @@ def test_an_empty_lane_can_take_a_dropped_card(client):
 def test_the_tracker_keeps_the_same_safety_rules_as_every_page(client):
     rules = client.get("/").headers["content-security-policy"]
     assert rules and client.get("/tracker").headers["content-security-policy"] == rules
+
+
+def test_grey_cards_left_out_of_a_long_lane_are_counted_with_a_link(client, conn):
+    with conn:
+        for _ in range(tracker.LANE_CARDS + 1):
+            job = add_job(conn, "Robotics Intern")
+            conn.execute(
+                "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, 'applied', '2026-09-01', "
+                "'2026-09-01T12:00:00+00:00')",
+                (job,),
+            )
+    assert '<a href="/tracker?all=applied#lane-applied">1 card needs checking</a>' in client.get("/tracker").text
+    assert "needs checking" not in client.get("/tracker?all=applied").text
+
+
+def test_a_job_without_a_finished_version_cannot_be_moved_onto_the_board(client, conn):
+    with conn:
+        job = add_job(conn, "No version")
+    reply = post(client, f"/tracker/{job}/move", **{"from": "ready", "to": "offer"})
+    assert reply.status_code == 400 and "has no finished resume version" in reply.text
+    assert tracker.stage(conn, job) is None
+
+
+@pytest.mark.parametrize(
+    "link, company, board, message",
+    [
+        (LINK, "", None, "Both the company and the job title are needed."),
+        (ACME_JOB, "Acme", {"jobs": []}, "no longer on the Greenhouse board"),
+        (ACME_JOB, "Acme", 500, "The job&#39;s board could not be read"),
+    ],
+)
+def test_add_explains_a_link_it_cannot_save_and_keeps_what_was_typed(
+    client, conn, web, no_waiting, link, company, board, message
+):
+    if board is not None:
+        web.pages[ACME] = board
+    form = {"link": link, "company": company, "role": "ML Engineer", "applied_on": "2026-11-01"}
+    reply = post(client, "/tracker/add", **form)
+    assert reply.status_code == 400 and message in reply.text
+    assert f'value="{link}"' in reply.text and 'value="ML Engineer"' in reply.text
+    assert one(conn, "SELECT count(*) FROM jobs")[0] == 0
+
+
+def test_a_ready_card_for_a_closed_job_says_closed(client, conn, ready):
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'closed' WHERE id = ?", (ready,))
+    assert 'mark warn">closed' in client.get("/tracker").text
+
+
+def test_the_job_page_says_when_the_board_hides_its_card(client, conn, ready):
+    post(client, f"/tracker/{ready}/move", **{"from": "ready", "to": "applied"})
+    post(client, f"/tracker/{ready}/move", **{"from": "applied", "to": "ready"})
+    with conn:
+        conn.execute("UPDATE jobs SET not_interested = 1 WHERE id = ?", (ready,))
+    text = client.get(f"/jobs/{ready}").text
+    assert "Not shown on the board (marked Not interested)." in text and "Open on the Tracker" not in text

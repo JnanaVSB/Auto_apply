@@ -49,6 +49,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         start, to = form.get("from"), form.get("to")
         if start not in tracker.STAGES or to not in tracker.STAGES or start == to:
             raise HTTPException(400, "Choose a stage from the list.")
+        if start == "ready" and not tracker.on_board(conn, job_id):
+            raise HTTPException(400, "This job isn't on the Tracker yet: it has no finished resume version.")
         moved = tracker.move(conn, job_id, start, to, date.today())
         return RedirectResponse(f"{PAGE}?{f'moved={to}' if moved else 'notice=stale'}", 303)
 
@@ -78,15 +80,21 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
 
 
 def job_box(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
-    """The job page's Tracker box: where the card is and every move, newest first, at this computer's local time;
-    None for a job never on the board."""
+    """The job page's Tracker box: where the card is, whether the board shows it (not a Not interested job in Ready)
+    and every move, newest first, at this computer's local time; None for a job never on the board."""
     moves = tracker.history(conn, job_id)
     if not moves:
         return None
-    card = conn.execute("SELECT stage, round FROM tracker WHERE job_id = ?", (job_id,)).fetchone() or ("ready", None)
+    lane, round_, skipped = conn.execute(
+        "SELECT coalesce(t.stage, 'ready'), t.round, j.not_interested FROM jobs j "
+        "LEFT JOIN tracker t ON t.job_id = j.id WHERE j.id = ?",
+        (job_id,),
+    ).fetchone()
     return {
-        "stage": tracker.STAGES[card[0]],
-        "round": tracker.ROUNDS.get(card[1]),
+        "lane": lane,
+        "stage": tracker.STAGES[lane],
+        "shown": not (lane == "ready" and skipped),
+        "round": tracker.ROUNDS.get(round_),
         "moves": [
             {
                 "when": datetime.fromisoformat(move["moved_on"]).astimezone().strftime("%Y-%m-%d %H:%M"),
