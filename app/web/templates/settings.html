@@ -120,7 +120,7 @@
 {% endif %}
 
 <h2 id="look">Look</h2>
-{% if request.query_params.get("look") == "changed" %}<p class="result" role="status">Look changed in this browser.</p>{% endif %}
+{% if request.query_params.get("look") == "changed" %}<p class="result" role="status">Look saved for this browser.</p>{% endif %}
 <form method="post" action="/look" class="stacked">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <p class="hint">Colours and light or dark for every page, kept in this browser only (not in data/config.yaml).</p>

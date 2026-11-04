@@ -68,7 +68,7 @@ def test_a_damaged_cookie_gives_the_defaults(client, value):
 def test_settings_shows_the_look_in_use_and_confirms_only_a_change(client):
     text = client.get("/settings").text
     assert '<option value="today" selected>' in text and '<option value="auto" selected>' in text
-    assert "Look changed in this browser." not in text
+    assert "Look saved for this browser." not in text
     text = client.get(choose(client, "C", "light").headers["location"]).text
     assert '<option value="C" selected>' in text and '<option value="light" selected>' in text
-    assert "Look changed in this browser." in text and "Saved." not in text
+    assert "Look saved for this browser." in text and "Saved." not in text

@@ -131,6 +131,21 @@
   main th { background: var(--sunken); }
   @media (prefers-reduced-transparency: reduce) { .dock > summary { background: var(--chrome); } }
 }
+/* Browsers without light-dark() (before Chrome 123, Firefox 120, Safari 17.5) would drop every colour: they get
+   Teal light as plain colours, whatever is chosen; the frame tokens take Teal's frame. */
+@supports not (color: light-dark(#000, #fff)) {
+  :root, :root[data-palette], :root[data-theme] {
+    color-scheme: light;
+    --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2; --text: #1b2128; --muted: #56606b;
+    --line: #e1e5ea; --line-strong: #7e8894; --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
+    --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e;
+    --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128; --glass: #ffffff;
+    --shadow: 0 1px 2px rgb(27 33 40 / 6%), 0 4px 16px rgb(27 33 40 / 6%);
+    --shadow-raised: 0 2px 4px rgb(27 33 40 / 6%), 0 12px 32px rgb(27 33 40 / 12%);
+    --chrome: #ffffff; --on-chrome: #1b2128; --chrome-muted: #56606b; --chrome-line: #e1e5ea;
+    --chrome-current: #e3f1f5; --on-chrome-current: #0f6a80; --chrome-mark: #0f6a80; --chrome-warn: #8a4f00;
+  }
+}
 
 /* ---------- Base and type ---------- */
 * { box-sizing: border-box; }
@@ -247,6 +262,7 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
   border-radius: var(--radius); }
 
 @media (width < 40rem) {
+  html { scroll-padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }  /* focus never hides behind the bar */
   .app { grid-template-columns: minmax(0, 1fr); padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
   .rail { display: none; }
   .dock { display: block; }

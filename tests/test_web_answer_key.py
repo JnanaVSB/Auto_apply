@@ -106,7 +106,7 @@ def starts(client, monkeypatch):
 
 def test_the_answer_key_page(client, jobs):
     text = client.get("/answer-key").text
-    assert 'href="/answer-key"' in text
+    assert "<h1>Answer key</h1>" in text
     assert "You have marked 5 jobs: 2 yes, 1 maybe, 2 no." in text
     assert f"{MODEL} (the chosen model)" in text and "2 of 2" in text
     assert '"maybe": 0 scored, 1 failed, 0 not scored yet' in text

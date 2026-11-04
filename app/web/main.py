@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import mimetypes
 import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
@@ -52,7 +53,6 @@ BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collecti
 log = logging.getLogger("app.web")
 SCHEDULE_CHECK_SECONDS = 60
 templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value shown in a page
-templates.env.globals["US_LABELS"] = queries.US_LABELS
 ANSWERS = ("yes", "maybe", "no", "clear")
 LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
 SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queue every job
@@ -71,13 +71,19 @@ SCHEMES = {  # the stylesheet's colour schemes (data-palette); the first is the 
     "G": "G · Olive-black and brass",
 }
 MODES = {"auto": "Auto (as this device)", "light": "Light", "dark": "Dark"}  # data-theme; the first is the default
-templates.env.globals |= {"SCORING_LABELS": queries.SCORING_LABELS, "LOW_SCORE": LOW_SCORE, "SCORE_THESE": SCORE_THESE}
-templates.env.globals |= {  # the filter form's words, shared with its "Filters" summary
-    "SOURCE_LABELS": queries.SOURCE_LABELS,
+templates.env.globals |= {
+    "US_LABELS": queries.US_LABELS,
+    "SCORING_LABELS": queries.SCORING_LABELS,
+    "LOW_SCORE": LOW_SCORE,
+    "SCORE_THESE": SCORE_THESE,
+    "SOURCE_LABELS": queries.SOURCE_LABELS,  # the filter form's words, shared with its "Filters" summary
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
+    "SCHEMES": SCHEMES,  # the Look form on Settings
+    "MODES": MODES,
 }
-templates.env.globals |= {"SCHEMES": SCHEMES, "MODES": MODES}  # the Look form on Settings
+# Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text)
+mimetypes.add_type("font/woff2", ".woff2")
 
 
 def create_app(
