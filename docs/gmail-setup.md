@@ -6,13 +6,20 @@ guide connects your own Gmail in about ten minutes. You only need a Google accou
 
 ## 1. What it does, and what it never does
 - It reads your Gmail **read-only**. It can never send, delete, archive, mark or change any e-mail.
-- It looks only at e-mails that may be about applications (from job systems such as Greenhouse or Lever, or with
-  words like "application" or "interview" in the subject), and only sorts them and moves Tracker cards.
-- An e-mail's text stays on your computer. When the fixed rules can't tell what an e-mail is, only the local model
-  on your own computer (Ollama) is asked; a cloud model never is.
-- What it keeps for each e-mail it looked at: the date, the sender's domain (for example `greenhouse.io`), what it
-  was (confirmation, interview, …) and the job it matched. The subject is kept only while the e-mail waits on
-  **E-mails to check**, and is forgotten once you decide. The text of an e-mail is never saved.
+- What it reads: the first sync searches back 60 days (the number is in Settings) for e-mails that may be about
+  applications (from job systems such as Greenhouse or Lever, or with words like "application" or "interview" in the
+  subject), at most about 5,000 e-mails on that first look back. After that, each sync looks at every new e-mail's
+  sender, subject and Gmail's short preview (not its text) to decide whether it is about one of your applications.
+- What it never reads: your own sent mail, drafts, spam, the bin and chats are skipped.
+- What it leaves alone: an e-mail that isn't about an application (personal mail, newsletters, a shop's order mail,
+  even from a company you applied to) leaves nothing behind in the dashboard.
+- What it keeps, only for an e-mail it matched to one of your applications or that waits for you on **E-mails to
+  check**: the date, the sender's domain (for example `greenhouse.io`), what it was (confirmation, interview, …) and
+  the job. The subject is kept only while the e-mail waits on E-mails to check, and is forgotten once you decide. The
+  text of an e-mail is never saved.
+- An e-mail's text stays on your computer. When the fixed rules can't tell what an e-mail about an application is,
+  only the local model on your own computer (Ollama) reads it, and only if your scoring model in Settings is the
+  local one; a cloud model never reads your mail.
 - The sign-in it uses is saved only in your computer's keychain, never in a file.
 
 You connect it with your **own** Google Cloud project, so no one else's app ever gets access to your mail.
@@ -46,8 +53,9 @@ Treat the client secret like a password: don't share it, don't send it to anyone
 ## 6. Connect in the dashboard
 1. Open the dashboard, then **Settings → Gmail**.
 2. Paste the Client ID and the Client secret, and press **Save client**.
-3. Press **Connect**. Google asks you to choose your account and to allow the app to **read your email**. Google may
-   warn that the app isn't verified: that's your own app in testing, so choose to continue.
+3. Press **Connect**. Google asks you to choose your account and to allow the app to **read your email**; if Google
+   shows a box to tick for that, tick it (without it the dashboard can't read anything and says so). Google may warn
+   that the app isn't verified: that's your own app in testing, so choose to continue.
 4. You come back to a page saying **Gmail connected**. Press **Continue to Settings → Gmail**: it shows your address
    and the time of the last sync.
 
@@ -57,13 +65,17 @@ are in the **Gmail** section of the main **Settings** page. **Sync now** on Sett
 ## 7. Testing mode: connect again about once a week
 Google ends a testing app's sign-in after 7 days. Settings → Gmail shows when ("Google asks you to connect again after
 7 days, around <date>"). When the sync says **Gmail needs connecting again**, open Settings → Gmail and press
-**Connect again**. Nothing is lost in between: the next sync carries on where the last one stopped.
+**Connect again**. The next sync carries on from the last sync that worked. If the gap was long and Gmail no longer
+has the list of changes since then, the sync searches again from the day before that last good sync, so nothing in
+between is missed (again up to about 5,000 e-mails); e-mails it already read are not read twice.
 
 Taking the project out of testing would need a review by Google; you don't need that for your own use.
 
 ## 8. Disconnect
-- In the dashboard: **Settings → Gmail → Disconnect**. The dashboard asks Google to forget the sign-in and removes it
-  from your keychain. The e-mails it already sorted stay on your cards.
+- In the dashboard: **Settings → Gmail → Disconnect**. The dashboard asks Google to forget the sign-in, removes it
+  from your keychain, and forgets where the last sync stopped, so connecting again (even another account) starts with
+  a fresh look back. The e-mails it already sorted stay on your cards.
+- Pressing **Connect again** while connected also asks Google to forget the earlier sign-in once the new one works.
 - In your Google account: [myaccount.google.com](https://myaccount.google.com) → **Security** → **Your connections to
   third-party apps & services** (or **Third-party access**) → your app → **Delete all connections**. Use this too if
   the dashboard says Google could not be told.
@@ -73,7 +85,10 @@ Taking the project out of testing would need a review by Google; you don't need 
   that your Gmail address is a test user (step 4).
 - **"Gmail needs connecting again"**: the 7-day testing limit (step 7), or access was removed in your Google account.
   Press **Connect again**.
+- **"The read-only permission wasn't granted"**: on Google's page the box to read your email wasn't ticked. Press
+  **Connect** again and tick it.
 - **"This sign-in is no longer valid"**: the Connect page was used twice or waited more than 10 minutes. Press
   **Connect** again.
-- **Unclear e-mails stay on "E-mails to check"**: the local model (Ollama) is off, or a scoring run is using it. They
-  are sorted on a later sync, or you can decide them yourself.
+- **Unclear e-mails stay on "E-mails to check"**: the local model (Ollama) is off, a scoring run is using it, or your
+  scoring model in Settings is a cloud service (your mail is never sent to one). They are sorted on a later sync, or
+  you can decide them yourself.
