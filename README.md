@@ -6,7 +6,10 @@ nothing personal is ever stored in this repository.
 > **Status:** early development. Phase 1 (foundation): private settings, secrets in the OS keychain
 > and an encrypted database. Phase 2: job collection from Simplify's public GitHub lists and the
 > Greenhouse, Lever and Ashby job boards. Phase 3: a jobs dashboard on this computer. Phase 3b: scoring
-> jobs against your resume, on this computer only. Applying comes in later phases.
+> jobs against your resume, on this computer only. Phase 4: tailored resume versions written by an AI model you
+> choose, checked by a review council, within your spending limits. Then a new look: one shared page frame, phone
+> layouts, light and dark. Phase 5: a Tracker board for your applications. Phase 6: read-only Gmail sync that moves
+> Tracker cards, connected with your own Google project. Applying comes in later phases.
 
 ## Requirements
 - [Miniconda](https://docs.anaconda.com/miniconda/) (or any conda)
