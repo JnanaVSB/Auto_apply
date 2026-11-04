@@ -5,7 +5,7 @@ import pytest
 from helpers import add_job, csrf, log_in
 
 from app import config
-from app.web import main
+from app.web import look
 
 PLAIN = '<html lang="en">'
 
@@ -27,7 +27,7 @@ def test_the_look_is_kept_and_every_page_carries_it(client):
     reply = choose(client, "E", "dark")
     assert reply.status_code == 303 and reply.headers["location"] == "/settings?look=changed#look"
     cookie = reply.headers["set-cookie"]
-    assert cookie.startswith(f"{main.LOOK_COOKIE}=E.dark;") and "Max-Age=31536000" in cookie and "Path=/" in cookie
+    assert cookie.startswith(f"{look.LOOK_COOKIE}=E.dark;") and "Max-Age=31536000" in cookie and "Path=/" in cookie
     assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Secure" not in cookie
     for page in ("/", "/ready", "/jobs/1", "/settings", "/nowhere", "/login"):
         assert '<html lang="en" data-palette="E" data-theme="dark">' in client.get(page).text, page
@@ -61,7 +61,7 @@ def test_the_look_needs_the_safety_token(client):
 
 @pytest.mark.parametrize("value", ["", "E", "E.", ".dark", "e.dark", "E.Dark", "E dark", "E.dark.x", '"><b>.dark'])
 def test_a_damaged_cookie_gives_the_defaults(client, value):
-    client.cookies.set(main.LOOK_COOKIE, value)
+    client.cookies.set(look.LOOK_COOKIE, value)
     assert PLAIN in client.get("/").text
 
 

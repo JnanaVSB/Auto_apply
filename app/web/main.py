@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager, closing
 from functools import partial
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import sqlcipher3
 from fastapi import FastAPI, Request
@@ -29,6 +29,7 @@ from app.web import (
     council_settings,
     council_view,
     drafts,
+    look,
     pilot,
     prepare,
     queries,
@@ -56,21 +57,6 @@ templates = Jinja2Templates(directory=HERE / "templates")  # escapes every value
 ANSWERS = ("yes", "maybe", "no", "clear")
 LOW_SCORE = "/?f=1&status=open&scoring=low&scoring=quick&sort=score"  # the Low score tab: the list, so filtered
 SCORE_THESE = 500  # jobs per press of "Score these", so a mis-click cannot queue every job
-VIEWS = ("table", "cards")  # the job lists' two views; Cards until one is chosen
-VIEW_COOKIE = "auto_apply_view"  # named for this app, like the session cookie: cookies on 127.0.0.1 are shared
-LISTS = ("/", "/ready")  # the pages with the Table | Cards switch
-LOOK_COOKIE = "auto_apply_look"  # this browser's colours and mode, "<colours>.<mode>", e.g. "E.dark"
-SCHEMES = {  # the stylesheet's colour schemes (data-palette); the first is the default and needs no attribute
-    "today": "Teal (default)",
-    "A": "A · Olive and walnut",
-    "B": "B · Sage and espresso",
-    "C": "C · Moss and cream",
-    "D": "D · Mix (A, warmer brown titles)",
-    "E": "E · Forest rail and cognac",
-    "F": "F · Espresso rail and olive",
-    "G": "G · Olive-black and brass",
-}
-MODES = {"auto": "Auto (as this device)", "light": "Light", "dark": "Dark"}  # data-theme; the first is the default
 templates.env.globals |= {
     "US_LABELS": queries.US_LABELS,
     "SCORING_LABELS": queries.SCORING_LABELS,
@@ -79,8 +65,8 @@ templates.env.globals |= {
     "SOURCE_LABELS": queries.SOURCE_LABELS,  # the filter form's words, shared with its "Filters" summary
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
-    "SCHEMES": SCHEMES,  # the Look form on Settings
-    "MODES": MODES,
+    "SCHEMES": look.SCHEMES,  # the Look form on Settings
+    "MODES": look.MODES,
 }
 # Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text)
 mimetypes.add_type("font/woff2", ".woff2")
@@ -163,28 +149,6 @@ def create_app(
         minutes = logins.locked_minutes()
         error = f"Too many wrong passwords. Try again in {minutes} minute(s)." if minutes else "Wrong password."
         return _page(request, "login.html", 429 if minutes else 401, error=error)
-
-    @app.post("/view")
-    async def choose_view(request: Request) -> Response:
-        """Table or Cards for the job lists, kept in this browser; back to the same list, shown that way."""
-        choice = request.state.form.get("view")
-        if choice not in VIEWS:
-            raise HTTPException(400, "Choose Table or Cards.")
-        response = RedirectResponse(_list_page(request.state.form.get("back", "")), 303)
-        response.set_cookie(VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True)
-        return response
-
-    @app.post("/look")
-    async def choose_look(request: Request) -> Response:
-        """Colours and mode for every page, kept in this browser; back to the Look section on Settings."""
-        scheme, mode = request.state.form.get("scheme"), request.state.form.get("mode")
-        if scheme not in SCHEMES or mode not in MODES:
-            raise HTTPException(400, "Choose colours and a mode from the lists.")
-        response = RedirectResponse("/settings?look=changed#look", 303)
-        response.set_cookie(
-            LOOK_COOKIE, f"{scheme}.{mode}", max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True
-        )
-        return response
 
     @app.post("/logout")
     async def log_out(request: Request) -> Response:
@@ -389,6 +353,7 @@ def create_app(
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
+    look.add_routes(app)
     return app
 
 
@@ -526,32 +491,6 @@ def _back(address: str) -> str:
     return address if address.startswith("/?") and len(address) <= 4000 else "/"
 
 
-def _list_page(address: str) -> str:
-    """The list page to go back to: only the dashboard's own list pages, else the Jobs list. The query is rebuilt
-    (an old bookmark's view= dropped), so nothing typed into the form reaches the redirect as it was."""
-    try:
-        parts = urlsplit(address)
-    except ValueError:  # not an address at all (e.g. "//[x"): the Jobs list
-        return "/"
-    if parts.scheme or parts.netloc or parts.path not in LISTS or len(address) > 4000:
-        return "/"
-    pairs = [pair for pair in parse_qsl(parts.query, keep_blank_values=True) if pair[0] != "view"]
-    return f"{parts.path}?{urlencode(pairs)}" if pairs else parts.path
-
-
-def _view(request: Request) -> str:
-    """The job lists' view, as this browser keeps it; Cards until one is chosen (also for an unknown or damaged
-    value)."""
-    kept = request.cookies.get(VIEW_COOKIE)
-    return kept if kept in VIEWS else "cards"
-
-
-def _look(request: Request) -> tuple[str, str]:
-    """This browser's colours and mode; an unknown or damaged cookie gives the defaults (teal, as the device)."""
-    scheme, _, mode = request.cookies.get(LOOK_COOKIE, "").partition(".")
-    return (scheme, mode) if scheme in SCHEMES and mode in MODES else ("today", "auto")
-
-
 def _to_job(job_id: int, form: dict[str, str]) -> Response:
     """Back to the job's page after a change, keeping the way back to the list."""
     return RedirectResponse(f"/jobs/{job_id}?back={quote(_back(form.get('back', '')), safe='')}", 303)
@@ -568,8 +507,7 @@ def _page(request: Request, name: str, status: int = 200, **values) -> HTMLRespo
     values["csrf"] = session.csrf if session else None
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
-    values["list_view"] = _view(request)
-    values["look"] = _look(request)
+    values["list_view"], values["look"] = look.of(request)
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 

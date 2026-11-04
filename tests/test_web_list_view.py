@@ -4,7 +4,7 @@ always back to a list page."""
 import pytest
 from helpers import add_job, csrf, log_in
 
-from app.web import main
+from app.web import look, main
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def test_the_switch_keeps_the_view_and_returns_to_the_same_list(client):
     reply = switch(client, "cards", main.LOW_SCORE + "&page=2")
     assert reply.status_code == 303 and reply.headers["location"] == main.LOW_SCORE + "&page=2"
     cookie = reply.headers["set-cookie"]
-    assert cookie.startswith(f"{main.VIEW_COOKIE}=cards;") and "Max-Age=31536000" in cookie and "Path=/" in cookie
+    assert cookie.startswith(f"{look.VIEW_COOKIE}=cards;") and "Max-Age=31536000" in cookie and "Path=/" in cookie
     assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Secure" not in cookie
     assert '<div class="list-cards">' in client.get("/").text
     assert 'value="cards" aria-pressed="true"' in client.get("/ready").text
@@ -46,7 +46,7 @@ def test_without_a_choice_the_list_shows_cards_and_says_so(client):
 
 @pytest.mark.parametrize("value", ["", "grid", "TABLE", "cards2", "table cards"])
 def test_an_unknown_or_damaged_view_shows_cards(client, value):
-    client.cookies.set(main.VIEW_COOKIE, value)
+    client.cookies.set(look.VIEW_COOKIE, value)
     assert '<div class="list-cards">' in client.get("/").text
 
 
