@@ -170,7 +170,7 @@ def create_app(
         choice = request.state.form.get("view")
         if choice not in VIEWS:
             raise HTTPException(400, "Choose Table or Cards.")
-        response = RedirectResponse(_in_view(request.state.form.get("back", ""), choice), 303)
+        response = RedirectResponse(_list_page(request.state.form.get("back", "")), 303)
         response.set_cookie(VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True)
         return response
 
@@ -526,21 +526,24 @@ def _back(address: str) -> str:
     return address if address.startswith("/?") and len(address) <= 4000 else "/"
 
 
-def _in_view(address: str, choice: str) -> str:
-    """A list page shown in `choice`: only the dashboard's own list pages, else the Jobs list. The view goes in the
-    address too, so the page shows it even when the browser keeps no cookies."""
-    parts = urlsplit(address)
+def _list_page(address: str) -> str:
+    """The list page to go back to: only the dashboard's own list pages, else the Jobs list. The query is rebuilt
+    (an old bookmark's view= dropped), so nothing typed into the form reaches the redirect as it was."""
+    try:
+        parts = urlsplit(address)
+    except ValueError:  # not an address at all (e.g. "//[x"): the Jobs list
+        return "/"
     if parts.scheme or parts.netloc or parts.path not in LISTS or len(address) > 4000:
-        parts = urlsplit("/")
+        return "/"
     pairs = [pair for pair in parse_qsl(parts.query, keep_blank_values=True) if pair[0] != "view"]
-    return f"{parts.path}?{urlencode([*pairs, ('view', choice)])}"
+    return f"{parts.path}?{urlencode(pairs)}" if pairs else parts.path
 
 
 def _view(request: Request) -> str:
-    """The job lists' view: as the page address asks, else as this browser keeps it, else Cards (also for an unknown
-    or damaged value)."""
-    asked = (request.query_params.get("view"), request.cookies.get(VIEW_COOKIE))
-    return next((found for found in asked if found in VIEWS), "cards")
+    """The job lists' view, as this browser keeps it; Cards until one is chosen (also for an unknown or damaged
+    value)."""
+    kept = request.cookies.get(VIEW_COOKIE)
+    return kept if kept in VIEWS else "cards"
 
 
 def _look(request: Request) -> tuple[str, str]:
