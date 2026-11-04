@@ -19,7 +19,7 @@ STAGES = {  # board order
     "rejected": "Rejected",
 }
 ROUNDS = {"1": "Round 1", "2": "Round 2", "3": "Round 3", "4": "Round 4", "5": "Round 5", "final": "Final"}
-WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey when nothing changes for a while
+WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey with no change and no e-mail
 LANE_CARDS = 30  # cards a lane shows before "Show all"
 BAD_DATE = "Choose the date you applied: not later than tomorrow, not before 2000."
 STALE = "Already moved in another tab: the board shows where it is now."
@@ -31,7 +31,7 @@ CARDS = """FROM jobs j LEFT JOIN tracker t ON t.job_id = j.id
 # resume version, or one you moved back, unless it is "Not interested".
 SHOWN = "(t.stage != 'ready' OR (j.not_interested = 0 AND (t.job_id IS NOT NULL OR f.job_id IS NOT NULL)))"
 BOARD = f"""SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
-        t.changed_on {CARDS}
+        t.changed_on, t.last_email_on {CARDS}
     WHERE {SHOWN} ORDER BY coalesce(t.changed_on, f.done_on) DESC, j.id DESC"""  # noqa: S608 (fixed text)
 PLACE = f"SELECT coalesce(t.stage, 'ready'), t.round, coalesce({SHOWN}, 0) {CARDS} WHERE j.id = ?"  # noqa: S608
 # One statement, so the check and the write can't be split by another tab's move: a job with no row is in Ready, so a
@@ -147,10 +147,10 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
     """The lanes in board order, each {"stage", "name", "full", "cards", "count", "more", "grey_hidden"}; a lane shows
     its newest LANE_CARDS cards and counts the grey cards that leaves out, or, when it is `show_all`, all of them with
     the grey ones first. `now` is this computer's local time, aware: the day counter counts local dates, and a
-    waiting card goes grey when it hasn't changed for `stale_days`."""
+    waiting card goes grey after `stale_days` with no change and no e-mail."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
-    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on in conn.execute(BOARD):
+    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, emailed in conn.execute(BOARD):
         lanes[stage_].append(
             {
                 "id": job_id,
@@ -160,7 +160,7 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "closed": status != "open",
                 "round": round_,
                 "days": None if applied_on is None else max(0, (today - date.fromisoformat(applied_on)).days),
-                "stale": stage_ in WAITING and datetime.fromisoformat(changed_on) < cutoff,
+                "stale": stage_ in WAITING and datetime.fromisoformat(max(changed_on, emailed or changed_on)) < cutoff,
             }
         )
     shown_lanes = []

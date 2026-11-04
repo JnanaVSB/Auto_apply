@@ -279,3 +279,12 @@ def test_show_all_puts_grey_cards_first_and_the_normal_view_keeps_the_newest_fir
         grey, fresh = place(conn, "applied", days_ago=30), place(conn, "applied", days_ago=1)
     assert ids(conn, "applied") == [fresh, grey]
     assert [card["id"] for card in lane(conn, "applied", show_all="applied")["cards"]] == [grey, fresh]
+
+
+@pytest.mark.parametrize("emailed_days_ago, stale", [(2, False), (25, True)])
+def test_a_recent_e_mail_keeps_a_card_from_greying(conn, emailed_days_ago, stale):
+    emailed = (NOW - timedelta(days=emailed_days_ago)).astimezone(UTC).isoformat(timespec="seconds")
+    with conn:
+        job = place(conn, "applied", days_ago=30)
+        conn.execute("UPDATE tracker SET last_email_on = ? WHERE job_id = ?", (emailed, job))
+    assert lane(conn, "applied")["cards"][0]["stale"] is stale

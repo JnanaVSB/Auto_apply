@@ -2,6 +2,7 @@
 database built once and copied for each test, and the dashboard's clock, fake web and test client."""
 
 import shutil
+import time
 from contextlib import closing
 from pathlib import Path
 
@@ -130,3 +131,13 @@ def client(data_dir, clock, web, monkeypatch):
     app = main.create_app(data_dir, security.Logins(clock=clock), lambda: Fetcher(httpx.MockTransport(web)))
     with TestClient(app, base_url=ADDRESS) as client:
         yield client
+
+
+@pytest.fixture
+def phoenix():
+    """This computer's time zone set to Phoenix (always 7 hours behind UTC), then put back."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("TZ", "America/Phoenix")
+        time.tzset()
+        yield
+    time.tzset()

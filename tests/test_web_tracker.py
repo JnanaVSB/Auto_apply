@@ -2,7 +2,6 @@
 
 import hashlib
 import re
-import time
 from datetime import date
 
 import pytest
@@ -122,16 +121,6 @@ def test_show_all_lists_a_long_lane_whole_and_ignores_an_unknown_lane(client, co
 
 def test_the_job_page_goes_back_to_the_tracker(client, ready):
     assert '<a href="/tracker">Back to the list</a>' in client.get(f"/jobs/{ready}?back=/tracker").text
-
-
-@pytest.fixture
-def phoenix():
-    """This computer's time zone set to Phoenix (always 7 hours behind UTC), then put back."""
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setenv("TZ", "America/Phoenix")
-        time.tzset()
-        yield
-    time.tzset()
 
 
 def test_a_job_never_moved_has_no_tracker_box(client, ready):
