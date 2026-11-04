@@ -6,7 +6,10 @@ from urllib.parse import urlsplit
 
 import sqlcipher3
 
+from app import collect, jobs
 from app.collect import now
+from app.fetch import Fetcher
+from app.sources import posting_of
 
 STAGES = {  # board order
     "ready": "Ready",
@@ -38,6 +41,10 @@ MOVE = """INSERT INTO tracker (job_id, stage, round, applied_on, changed_on)
         applied_on = iif(excluded.stage = 'ready', NULL, coalesce(tracker.applied_on, excluded.applied_on)),
         changed_on = excluded.changed_on
     WHERE tracker.stage = :expected"""
+# The job a link was saved as: its board posting (or the typed link, for another site), else a job saved earlier with
+# that link. The saved address can differ from the typed one (the board's own link, or a job matched by its details).
+FIND = """SELECT coalesce((SELECT job_id FROM job_sources WHERE source = ? AND source_job_id = ?),
+    (SELECT id FROM jobs WHERE apply_url = ?))"""
 ADD_MOVE = """INSERT INTO tracker_moves (job_id, from_stage, to_stage, round, moved_by, moved_on)
     VALUES (?, ?, ?, ?, ?, ?)"""
 
@@ -56,6 +63,29 @@ def move(conn: sqlcipher3.Connection, job_id: int, expected: str, to: str, on: d
             return False
         conn.execute(ADD_MOVE, (job_id, expected, to, round_, moved_by, at))
     return True
+
+
+def add_application(
+    conn: sqlcipher3.Connection, fetcher: Fetcher, link: str, company: str, role: str, applied_on: date, today: date
+) -> tuple[str, int]:
+    """An application made outside the app: the job is saved (once per link) and put in Applied on `applied_on`.
+    A card already past Ready is left where it is. Returns the notice and the job's id; ValueError for bad input."""
+    company, role = company.strip(), role.strip()
+    if len(company) > 200 or len(role) > 200:
+        raise ValueError("Company and role are at most 200 characters each.")
+    if not date(2000, 1, 1) <= applied_on <= today + timedelta(days=1):
+        raise ValueError("Choose the date you applied: not in the future, not before 2000.")
+    collect.add(conn, fetcher, link, details=(company, role))  # CollectError if it can't be saved
+    link = link.strip()
+    posting = posting_of(link)
+    source = (f"{posting[0]}:{posting[1]}", posting[2]) if posting else ("manual", link)
+    job_id = conn.execute(FIND, (*source, jobs.clean_url(link))).fetchone()[0]
+    now_in = stage(conn, job_id)
+    if now_in not in (None, "ready"):
+        return f"Already on the Tracker, in {STAGES[now_in]}; not changed.", job_id
+    if not move(conn, job_id, "ready", "applied", applied_on):
+        return "Already moved in another tab: the board shows where it is now.", job_id
+    return "Added to Applied.", job_id
 
 
 def set_round(conn: sqlcipher3.Connection, job_id: int, round_: str) -> bool:

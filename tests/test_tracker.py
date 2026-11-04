@@ -1,9 +1,11 @@
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta, timezone
 
+import httpx
 import pytest
-from helpers import add_job, one
+from helpers import ACME, ACME_JOB, FakeWeb, add_job, board_job, one
 
-from app import tracker
+from app import fetch, tracker
 
 DAY = date(2026, 11, 4)
 
@@ -168,3 +170,57 @@ def test_the_site_is_the_link_s_host_without_www(conn):
     with conn:
         place(conn, "applied", apply_url="https://www.careers.acme.example/jobs/1")
     assert lane(conn, "applied")["cards"][0]["site"] == "careers.acme.example"
+
+
+LINK = "https://careers.initech.example/jobs/7"
+
+
+def add(conn, link=LINK, company="Initech", role="ML Engineer", applied_on=DAY, fetcher=None):
+    return tracker.add_application(conn, fetcher, link, company, role, applied_on, DAY)
+
+
+def test_an_application_made_elsewhere_is_saved_once_in_applied(conn):
+    notice, job = add(conn)
+    assert notice == "Added to Applied."
+    assert one(conn, "SELECT company, title FROM jobs WHERE id = ?", job) == ("Initech", "ML Engineer")
+    assert card(conn, job) == ("applied", None, "2026-11-04") and moves(conn, job) == 1
+    assert add(conn, applied_on=date(2026, 11, 1)) == ("Already on the Tracker, in Applied; not changed.", job)
+    assert one(conn, "SELECT count(*) FROM jobs")[0] == 1 and card(conn, job)[2] == "2026-11-04"
+    assert moves(conn, job) == 1
+
+
+def test_a_job_in_ready_goes_to_applied_and_one_further_on_stays(conn):
+    with conn:
+        ready = add_job(conn, "Ready", apply_url=LINK)
+        version(conn, ready)
+        interview = place(conn, "interview", round_="2", apply_url="https://careers.initech.example/jobs/8")
+    assert add(conn) == ("Added to Applied.", ready)
+    assert add(conn, link="https://careers.initech.example/jobs/8") == (
+        "Already on the Tracker, in Interview; not changed.", interview
+    )  # fmt: skip
+    assert card(conn, interview) == ("interview", "2", "2026-11-01")
+
+
+def test_a_board_link_is_found_by_its_posting_even_when_saved_with_another_link(conn):
+    with conn:  # the same job found earlier on Simplify, with the company's own link: the board entry joins it
+        earlier = add_job(
+            conn, "ML Intern", ("simplify:list",), apply_url="https://acme.example/careers/123",
+            match_key="acme|mlintern|sanfranciscoca",
+        )  # fmt: skip
+    with closing(fetch.Fetcher(httpx.MockTransport(FakeWeb({ACME: {"jobs": [board_job()]}})))) as fetcher:
+        assert add(conn, link=ACME_JOB, company="", role="", fetcher=fetcher) == ("Added to Applied.", earlier)
+    assert one(conn, "SELECT count(*) FROM jobs")[0] == 1 and card(conn, earlier)[0] == "applied"
+
+
+@pytest.mark.parametrize(
+    "company, applied_on",
+    [("Initech", date(2026, 11, 6)), ("Initech", date(1999, 12, 31)), ("I" * 201, DAY)],
+)
+def test_a_bad_date_or_a_long_name_saves_nothing(conn, company, applied_on):
+    with pytest.raises(ValueError):
+        add(conn, company=company, applied_on=applied_on)
+    assert one(conn, "SELECT count(*) FROM jobs")[0] == 0
+
+
+def test_tomorrow_is_allowed_for_another_time_zone(conn):
+    assert add(conn, applied_on=date(2026, 11, 5))[0] == "Added to Applied."
