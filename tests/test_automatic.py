@@ -206,6 +206,19 @@ def test_the_ready_order_is_newest_first(conn, data_dir, ready_jobs):
     assert ready.newest(conn, CHOSEN.model, 70, resume, 10) == ready_jobs
 
 
+def test_a_job_past_ready_on_the_tracker_is_not_prepared_again(conn, data_dir, ready_jobs):
+    from app.scoring import ready
+
+    resume = from_latex((data_dir / "resume.tex").read_text(encoding="utf-8")).fingerprint
+    applied, back, _ = ready_jobs
+    with conn:
+        conn.executemany(
+            "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, ?, ?, 'now')",
+            [(applied, "applied", "2026-11-04"), (back, "ready", None)],  # back: moved to Ready again
+        )
+    assert ready.newest(conn, CHOSEN.model, 70, resume, 10) == ready_jobs[1:]
+
+
 def test_the_terminal_command_runs_a_pass_a_minute_until_ctrl_c(data_dir, monkeypatch, capsys):
     monkeypatch.setattr(prepare, "load_config", lambda: settings(data_dir))
     monkeypatch.setattr(prepare, "one_pass", lambda config, state: "23:30 0 answers saved")

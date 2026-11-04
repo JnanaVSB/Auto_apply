@@ -27,10 +27,13 @@ def queue(conn: sqlcipher3.Connection, job_id: int, now: str) -> bool:
 NEWEST = f"""WITH chosen (model, threshold, resume) AS (SELECT ?, ?, ?)
     SELECT jobs.id FROM jobs CROSS JOIN chosen LEFT JOIN ai_scores s ON s.job_id = jobs.id AND s.model = chosen.model
     WHERE ({READY}) AND {PREPARABLE}
+    -- a job already past Ready on the Tracker (e.g. applied elsewhere) is never prepared automatically or offered
+    -- to a pilot
+    AND jobs.id NOT IN (SELECT job_id FROM tracker WHERE stage != 'ready')
     ORDER BY coalesce(jobs.date_posted, substr(jobs.first_seen, 1, 10)) DESC, jobs.id DESC LIMIT ?"""  # noqa: S608
 
 
 def newest(conn: sqlcipher3.Connection, model: str, threshold: int, resume: str | None, limit: int) -> list[int]:
-    """The ready jobs, newest first (by the date posted, else the day the app found them): automatic preparation's
-    order (Phase 4c)."""
+    """The ready jobs not yet past Ready on the Tracker, newest first (by the date posted, else the day the app found
+    them): automatic preparation's order (Phase 4c)."""
     return [job_id for (job_id,) in conn.execute(NEWEST, (model, threshold, resume, limit))]
