@@ -34,6 +34,7 @@ from app.web import (
     prepare,
     queries,
     security,
+    tracker,
     writer_settings,
 )
 from app.web.collector import Collector
@@ -354,6 +355,7 @@ def create_app(
     pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
     look.add_routes(app)
+    tracker.add_routes(app, _page, data_dir)
     return app
 
 
@@ -487,8 +489,8 @@ async def _form(request: Request) -> dict[str, str]:
 
 
 def _back(address: str) -> str:
-    """The list view to go back to: only the dashboard's own list addresses, else the first view."""
-    return address if address.startswith("/?") and len(address) <= 4000 else "/"
+    """The list view to go back to: only the dashboard's own list addresses (or the Tracker), else the first view."""
+    return address if (address.startswith("/?") and len(address) <= 4000) or address == "/tracker" else "/"
 
 
 def _to_job(job_id: int, form: dict[str, str]) -> Response:

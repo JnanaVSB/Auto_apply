@@ -470,11 +470,11 @@ main:has(.board) { max-width: none; }
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
   border-radius: var(--radius-pill); background: var(--sunken); color: var(--muted); font-size: 0.75rem;
   line-height: 1.6; font-weight: 700; }
-/* The interview round picker sits above the card's link, so it can be used. */
-.tcard .round { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center;
+/* The card's forms (I applied, the round, Move to) sit above its link, so they can be used. */
+.tcard form { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center;
   gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: 0.8125rem;
   font-weight: 600; }
-.tcard .round select { min-width: 0; padding: 0 var(--space-3); border-radius: var(--radius-pill);
+.tcard select { min-width: 0; padding: 0 var(--space-3); border-radius: var(--radius-pill);
   font-size: 0.9375rem; }
 /* No e-mail for 21 days: dashed and on the page colour, with a word and an icon, not colour alone. */
 .tcard.stale { border: 2px dashed var(--line-strong); background: var(--bg); box-shadow: none; }

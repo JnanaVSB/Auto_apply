@@ -22,6 +22,7 @@ STAGES = {  # board order
 ROUNDS = {"1": "Round 1", "2": "Round 2", "3": "Round 3", "4": "Round 4", "5": "Round 5", "final": "Final"}
 WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey when nothing changes for a while
 LANE_CARDS = 30  # cards a lane shows before "Show all"
+BAD_DATE = "Choose the date you applied: not in the future, not before 2000."
 # Every card, newest change first. A card past Ready always shows, whatever "Not interested", closed or its versions;
 # Ready holds a job with a finished resume version, or one you moved back, unless it is "Not interested".
 BOARD = """SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
@@ -74,7 +75,7 @@ def add_application(
     if len(company) > 200 or len(role) > 200:
         raise ValueError("Company and role are at most 200 characters each.")
     if not date(2000, 1, 1) <= applied_on <= today + timedelta(days=1):
-        raise ValueError("Choose the date you applied: not in the future, not before 2000.")
+        raise ValueError(BAD_DATE)
     collect.add(conn, fetcher, link, details=(company, role))  # CollectError if it can't be saved
     link = link.strip()
     posting = posting_of(link)

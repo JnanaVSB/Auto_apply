@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Tracker{% endblock %}
+{% block content %}
+<h1>Tracker</h1>
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+
+<details class="filters-fold"{% if problem %} open{% endif %}>
+<summary>Add an application</summary>
+<form method="post" action="/tracker/add">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <p>
+    <label>Company <input name="company" maxlength="200" value="{{ typed.company if typed else '' }}"></label>
+    <label>Role <input name="role" maxlength="200" value="{{ typed.role if typed else '' }}"></label>
+    <label>Link <input name="link" type="url" required maxlength="4000" value="{{ typed.link if typed else '' }}"></label>
+    <label>Date applied <input name="applied_on" type="date" required value="{{ typed.applied_on if typed else today.isoformat() }}"></label>
+  </p>
+  <p><button type="submit" class="primary">Add</button></p>
+</form>
+<p class="hint">Applied somewhere the app doesn't list? Paste the job's link. If its posting is gone from a job board, paste
+  the company's careers-page link instead.</p>
+</details>
+
+{% set empty = {"ready": "Jobs with a finished resume version appear here.",
+                "applied": "Press I applied on a Ready card, or add an application above."} %}
+<div class="board">
+  {% for lane in lanes %}
+  {% set outcome = lane.stage in ("offer", "rejected") %}
+  {% if lane.stage == "offer" %}<div class="outcome-gap" aria-hidden="true"></div>{% endif %}
+  <details class="lane" id="lane-{{ lane.stage }}"{% if not outcome %} open{% endif %}>
+    <summary><h2>{{ lane.name }}</h2><span class="count"><span aria-hidden="true">{{ lane.count }}</span><span class="sr-only">{{ lane.count }} job{{ "" if lane.count == 1 else "s" }}</span></span>
+      {%- if outcome %}<span class="kind">Outcome</span>{% endif %}</summary>
+    {% if lane.cards %}
+    <ol class="cards">
+      {% for card in lane.cards %}
+      <li class="tcard{% if card.stale %} stale{% endif %}" id="job-{{ card.id }}" data-stage="{{ lane.stage }}">
+        <h3><a href="/jobs/{{ card.id }}?back=/tracker">{{ card.title }}</a></h3>
+        {% if card.days is not none %}<span class="days"><span aria-hidden="true">{{ card.days }} d</span><span class="sr-only">{{ card.days }} day{{ "" if card.days == 1 else "s" }} since you applied</span></span>{% endif %}
+        <p class="company">{{ card.company }}</p>
+        <p class="meta"><span>{{ card.site }}</span>{% if lane.stage == "ready" and card.closed %}<span class="mark warn">closed</span>{% endif %}</p>
+        {% if lane.stage == "ready" %}
+        <form method="post" action="/tracker/{{ card.id }}/move">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="from" value="ready"><input type="hidden" name="to" value="applied">
+          <button type="submit" class="primary">I applied</button>
+        </form>
+        {% elif lane.stage == "interview" %}
+        <form method="post" action="/tracker/{{ card.id }}/round" class="round">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <label>Round <select name="round">{% for value, name in rounds.items() %}<option value="{{ value }}"{% if value == card.round %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+          <button type="submit">Save</button>
+        </form>
+        {% endif %}
+        {% if card.stale %}<p class="note"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-triangle-alert"/></svg>No change for {{ stale_days }} days. Check it.</p>{% endif %}
+        <form method="post" action="/tracker/{{ card.id }}/move">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="from" value="{{ lane.stage }}">
+          <label>Move to <select name="to">{% for value, name in stages.items() if value != lane.stage %}<option value="{{ value }}">{{ name }}</option>{% endfor %}</select></label>
+          <button type="submit">Move</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="empty">{{ empty.get(lane.stage, "No cards yet.") }}</p>
+    {% endif %}
+    {% if lane.more %}<p><a href="/tracker?all={{ lane.stage }}#lane-{{ lane.stage }}">Show all {{ lane.count }}</a></p>{% endif %}
+  </details>
+  {% endfor %}
+</div>
+{% endblock %}
