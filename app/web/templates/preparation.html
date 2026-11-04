@@ -6,7 +6,7 @@
 {% macro notes_of(found) %}{% if found %}
   <details class="council"><summary>Council notes (round {{ found.round }})</summary>
   {% for member in found.members %}
-  <div class="{{ 'mark' if member.truth }}"><strong>{{ member.name }}</strong>:
+  <div class="{{ 'truth' if member.truth }}"><strong>{{ member.name }}</strong>:
     {% if member.answer %}{{ member.answer.verdict }}{% if member.answer.summary %} · {{ member.answer.summary }}{% endif %}
     <ul>{% for item in member.answer.objections %}<li{% if member.truth and item.severity == "must" %} class="error"{% endif %}>{{ item.id }} ({{ item.severity }}{% if item.where %}, {{ item.where }}{% endif %}): {{ item.problem }} <em>Fix:</em> {{ item.fix }}{% if item.quote %} <em>Your original:</em> “{{ item.quote }}”{% endif %}
       {% for voter, agree, why in found.votes.get(item.id, []) %}<br><span class="muted">{{ voter }} {{ "agrees" if agree else "disagrees" }}: {{ why }}</span>{% endfor %}</li>{% endfor %}</ul>

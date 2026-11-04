@@ -67,6 +67,12 @@ def test_each_filter(conn, four, address, expected):
     assert titles(conn, address) == expected
 
 
+def test_every_sort_and_not_interested_choice_has_its_rule_and_words():
+    for name, rules, words in [("sort", queries.SORTS, queries.SORT_LABELS),
+                               ("hidden", queries.HIDDEN, queries.HIDDEN_LABELS)]:  # fmt: skip
+        assert set(queries.OPTIONS[name]) == rules.keys() == words.keys(), name
+
+
 def test_values_the_dashboard_does_not_know_are_ignored():
     odd = "f=1&level=wizard&posted_from=yesterday&sort=random&page=-3&source=evil.example&hidden=x&status=gone"
     assert queries.Filters.from_address(odd) == queries.Filters(status=())

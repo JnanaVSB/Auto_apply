@@ -4,6 +4,6 @@
   <input type="hidden" name="back" value="{{ back }}">
   {% for value, word, icon in (("table", "Table", "table"), ("cards", "Cards", "layout-grid")) %}
   <button type="submit" name="view" value="{{ value }}" aria-pressed="{{ 'true' if list_view == value else 'false' }}">
-    <svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ icon }}"/></svg>{{ word }}<span class="sr-only now">, shown now</span></button>
+    <svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ icon }}"/></svg>{{ word }}</button>
   {% endfor %}
 </form>

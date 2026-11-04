@@ -1,5 +1,6 @@
 /* auto_apply design kit. Fonts and icons are stored in the app; nothing is loaded from the internet.
-   Colours, spacing and roundness live only in the tokens, so a second skin is a token override. */
+   Colours and corner shapes live in the tokens (the bottom bar and the Table | Cards switch round to their own
+   height); spacing mostly uses the --space steps. So a second skin is mostly a token override. */
 
 /* ---------- Fonts ---------- */
 @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3VF-Upright.ttf.woff2") format("woff2");
@@ -31,7 +32,7 @@
   --shadow-raised: 0 2px 4px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 45%)),
     0 12px 32px light-dark(rgb(27 33 40 / 12%), rgb(0 0 0 / 55%));
 
-  --radius-s: 10px; --radius: 14px; --radius-l: 20px;
+  --radius-s: 10px; --radius: 14px; --radius-l: 20px; --radius-pill: 999px;
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
   --tap: 3rem;           /* 48 px touch targets below 64rem */
   --control: 2.5rem;     /* 40 px controls with a mouse */
@@ -169,8 +170,7 @@ table { font-variant-numeric: tabular-nums; }
   min-height: var(--tap); padding: 0 var(--space-4); border-radius: var(--radius-s); background: var(--surface);
   box-shadow: var(--shadow-raised); }
 .skip:focus { top: var(--space-2); }
-.icon { width: 1.25rem; height: 1.25rem; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75;
-  stroke-linecap: round; stroke-linejoin: round; }
+.icon { width: 1.25rem; height: 1.25rem; flex: none; }  /* the strokes are set in icons.svg */
 .app { display: grid; grid-template-columns: calc(var(--rail) + env(safe-area-inset-left)) minmax(0, 1fr);
   min-height: 100dvh; }
 .content { min-width: 0; padding-right: env(safe-area-inset-right); }
@@ -232,19 +232,21 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .dock { display: none; position: fixed; z-index: 30; left: calc(var(--space-3) + env(safe-area-inset-left));
   right: calc(var(--space-3) + env(safe-area-inset-right));
   bottom: calc(var(--space-3) + env(safe-area-inset-bottom)); }
+/* The phone menu, the Filters fold and the Tracker lanes draw their own marker, not the browser's triangle. */
+:is(.dock, .filters-fold, .lane) > summary { list-style: none; }
+:is(.dock, .filters-fold, .lane) > summary::-webkit-details-marker { display: none; }
 /* With large text the page name wraps between its words first; Menu moves to a second line only when the name's
    longest word can't sit beside it. On one line the bar is still a pill (radius = half of 3.5rem). */
 .dock > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
   min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem; border: 1px solid var(--line);
   border-radius: 1.75rem; background: var(--glass);
   -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
-  box-shadow: var(--shadow-raised); cursor: pointer; list-style: none; }
-.dock > summary::-webkit-details-marker { display: none; }
+  box-shadow: var(--shadow-raised); cursor: pointer; }
 .dock-where { display: grid; flex: 1 1 auto; width: min-content; line-height: 1.25; }
 .dock-where .caption { font-size: 0.75rem; letter-spacing: 0.01em; color: var(--muted); }
 .dock-where strong { font-weight: 650; }
 .dock-button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2.75rem; margin-left: auto;
-  padding: 0 var(--space-4); border-radius: 999px; background: var(--accent); color: var(--on-accent);
+  padding: 0 var(--space-4); border-radius: var(--radius-pill); background: var(--accent); color: var(--on-accent);
   font-weight: 650; }
 .dock[open] .when-closed, .dock:not([open]) .when-open { display: none; }
 .sheet { position: absolute; left: 0; right: 0; bottom: calc(100% + var(--space-2)); max-height: calc(100dvh - 8rem);
@@ -274,8 +276,9 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 /* ---------- Controls ---------- */
 button, .button, input, select, textarea { font: inherit; color: var(--text); }
 button, .button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
-  min-height: var(--control); padding: 0 1.125rem; border: 1px solid var(--line-strong); border-radius: 999px;
-  background: var(--surface); font-weight: 600; line-height: 1.25; text-decoration: none; cursor: pointer;
+  min-height: var(--control); padding: 0 1.125rem; border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill); background: var(--surface); font-weight: 600; line-height: 1.25;
+  text-decoration: none; cursor: pointer;
   transition: background-color 120ms ease-out, transform 100ms ease-out; }
 button:hover, .button:hover { background: var(--sunken); }
 button:active, .button:active { transform: scale(0.97); }
@@ -325,9 +328,9 @@ table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
 }
 .hidden-job, .hidden-job a { color: var(--muted); }
 /* Status labels: a word in a pill; a problem also gets an "!" mark, so colour is never the only sign. */
-.mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: 999px; background: var(--sunken);
-  color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em; font-weight: 600;
-  white-space: nowrap; }
+.mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: var(--radius-pill);
+  background: var(--sunken); color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em;
+  font-weight: 600; white-space: nowrap; }
 .mark.ok { background: var(--ok-soft); color: var(--ok); }
 .mark.warn { background: var(--warn-soft); color: var(--warn); }
 .mark.danger { background: var(--danger-soft); color: var(--danger); }
@@ -336,8 +339,8 @@ table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
   font-size: 0.85em; font-weight: 800; vertical-align: 0.05em; }
 .mark.warn::before { background: var(--warn); }
 .mark.danger::before { background: var(--danger); }
-div.mark { display: block; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); color: var(--text);
-  font-size: inherit; line-height: inherit; letter-spacing: normal; font-weight: inherit; }
+/* The Truth checker's notes in the council notes: a tinted box, not a label. */
+.truth { padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); background: var(--sunken); }
 mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a second sign besides the colour */
 /* Notices */
 .error { color: var(--danger); }
@@ -366,12 +369,14 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .filters-fold { margin-bottom: var(--space-4); }
 .filters-fold > summary { position: relative; min-height: var(--control);
   padding: var(--space-2) 2.75rem var(--space-2) var(--space-4); border: 1px solid var(--line);
-  border-radius: var(--radius); background: var(--surface); cursor: pointer; list-style: none; font-weight: 600; }
-.filters-fold > summary::-webkit-details-marker { display: none; }
-.filters-fold > summary::after { content: ""; position: absolute; top: 50%; right: var(--space-4); width: 0.5rem;
-  height: 0.5rem; margin-top: -0.35rem; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
-  transform: rotate(45deg); }
-.filters-fold[open] > summary::after { margin-top: -0.1rem; transform: rotate(-135deg); }
+  border-radius: var(--radius); background: var(--surface); cursor: pointer; font-weight: 600; }
+/* The fold-out arrow of the Filters fold and (on phones) the Tracker lanes: a turned corner, up when open. */
+:is(.filters-fold, .lane) > summary::after { width: 0.5rem; height: 0.5rem; border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted); transform: rotate(45deg); }
+:is(.filters-fold, .lane)[open] > summary::after { transform: rotate(-135deg); }
+.filters-fold > summary::after { content: ""; position: absolute; top: 50%; right: var(--space-4);
+  margin-top: -0.35rem; }
+.filters-fold[open] > summary::after { margin-top: -0.1rem; }
 .filters-fold .active { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
 .filters-fold .filters { margin: var(--space-2) 0 0; }
 p.company { font-size: 1.1em; margin-top: -0.5rem; }
@@ -399,17 +404,12 @@ main:has(.view-switch) > p:not(.counts) { max-width: 72ch; }  /* the counts line
    round corners around two. */
 .view-switch { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; margin: 0 0 var(--space-4);
   padding: 3px; border-radius: calc(var(--control) / 2 + 3px); background: var(--sunken); }
-.view-switch button { flex: 1 1 auto; border-color: transparent; background: transparent; color: var(--muted); }
+.view-switch button { flex: 1 1 auto; }
+.view-switch button:not([aria-pressed="true"]) { border-color: transparent; background: transparent;
+  color: var(--muted); }
 .view-switch button:hover { color: var(--text); }
-.view-switch [aria-pressed="true"] { border-color: var(--accent);
-  background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-.view-switch .now { display: none; }
-.view-switch [aria-pressed="true"] .now { display: block; }
-/* Which view: Table → "rows"; Cards → "cards". */
-.list-table { container: rows / inline-size; }
-.list-cards { container: cards / inline-size; }
 /* Cards: one card per job from the same row: title and score, company, details, labels and actions. */
-@container cards (width >= 0) {
+.list-cards {
   .jobs { display: block; overflow: visible; }
   .jobs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .jobs tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
@@ -439,17 +439,17 @@ main:has(.view-switch) > p:not(.counts) { max-width: 72ch; }  /* the counts line
 main:has(.board) { max-width: none; }
 .board { display: grid; gap: var(--space-3); align-items: start; overflow-x: auto; padding-bottom: var(--space-2);
   grid-template-columns: repeat(4, minmax(var(--lane-min), 1fr)) 0.25rem repeat(2, minmax(var(--lane-min), 1fr)); }
-.outcome-gap { align-self: stretch; border-radius: 999px; background: var(--line); }
+.outcome-gap { align-self: stretch; border-radius: var(--radius-pill); background: var(--line); }
 .lane { position: relative; min-width: 0; padding: var(--space-2); border-radius: var(--radius-l);
   background: var(--sunken); }  /* relative: its hidden screen-reader words stay inside the scrolling board */
 /* Name (wraps if long) and count on one line; "Outcome" under them. */
 .lane > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
-  gap: 0 var(--space-2); min-height: var(--control); padding: var(--space-1) var(--space-2); list-style: none; }
-.lane > summary::-webkit-details-marker { display: none; }
+  gap: 0 var(--space-2); min-height: var(--control); padding: var(--space-1) var(--space-2); }
 .lane h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--sans); font-size: 0.9375rem;
   line-height: 1.3; letter-spacing: 0; font-weight: 700; color: var(--text); }
 .lane .count { display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 0.375rem;
-  border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 0.8125rem; font-weight: 700; }
+  border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: 0.8125rem;
+  font-weight: 700; }
 .lane .kind { grid-column: 1 / -1; grid-row: 2; color: var(--muted); font-size: 0.8125rem; }
 .cards { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 .tcard { position: relative; display: grid; gap: 0.125rem; padding: var(--space-3); border-radius: var(--radius);
@@ -468,13 +468,14 @@ main:has(.board) { max-width: none; }
   line-height: 1.45; }
 /* Days since you applied, top right (none on Ready). */
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
-  border-radius: 999px; background: var(--sunken); color: var(--muted); font-size: 0.75rem; line-height: 1.6;
-  font-weight: 700; }
+  border-radius: var(--radius-pill); background: var(--sunken); color: var(--muted); font-size: 0.75rem;
+  line-height: 1.6; font-weight: 700; }
 /* The interview round picker sits above the card's link, so it can be used. */
 .tcard .round { position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: center;
   gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: 0.8125rem;
   font-weight: 600; }
-.tcard .round select { min-width: 0; padding: 0 var(--space-3); border-radius: 999px; font-size: 0.9375rem; }
+.tcard .round select { min-width: 0; padding: 0 var(--space-3); border-radius: var(--radius-pill);
+  font-size: 0.9375rem; }
 /* No e-mail for 21 days: dashed and on the page colour, with a word and an icon, not colour alone. */
 .tcard.stale { border: 2px dashed var(--line-strong); background: var(--bg); box-shadow: none; }
 .tcard.stale h3 a, .tcard.stale .company { color: var(--muted); }
@@ -495,10 +496,8 @@ main:has(.board) { max-width: none; }
   .board { grid-template-columns: minmax(0, 1fr); gap: 0.625rem; overflow: visible; }
   .outcome-gap { height: 0.25rem; margin: 0.375rem var(--space-6); }
   .lane > summary { cursor: pointer; }
-  .lane > summary::after { content: ""; grid-column: 3; grid-row: 1; width: 0.5rem; height: 0.5rem;
-    margin: 0 var(--space-1); border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
-    transform: rotate(45deg); transition: transform 160ms ease-out; }
-  .lane[open] > summary::after { transform: rotate(-135deg); }
+  .lane > summary::after { content: ""; grid-column: 3; grid-row: 1; margin: 0 var(--space-1);
+    transition: transform 160ms ease-out; }
 }
 
 /* ---------- Preferences ---------- */
