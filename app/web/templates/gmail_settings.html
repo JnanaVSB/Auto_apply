@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Gmail{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% block content %}
+<h1>Gmail</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+<p>The app reads the e-mails about your applications and moves their cards on the Tracker. It can only read your mail;
+  it can never send, delete or change anything.</p>
+<ol>
+  <li>Create a Desktop client in your own Google Cloud project (the guide: <code>docs/gmail-setup.md</code>).</li>
+  <li>Paste its ID and secret here.</li>
+  <li>Connect.</li>
+</ol>
+
+<h2>Your Google client</h2>
+<p>{{ "Saved in this computer's keychain." if has_client else "Not saved yet." }}</p>
+<form method="post" action="/settings/gmail/client">
+  {{ csrf_field() }}
+  <label>Client ID <input name="client_id" maxlength="200" autocomplete="off" spellcheck="false"></label>
+  <label>Client secret <input name="client_secret" type="password" maxlength="200" autocomplete="off"></label>
+  <p><button type="submit">Save client</button></p>
+</form>
+
+<h2>Connection</h2>
+{% if connected %}
+<p>Connected{% if since %} on {{ since.isoformat() }}; Google asks you to connect again after 7 days (around
+  {{ again.isoformat() }}){% endif %}.</p>
+<form method="post" action="/settings/gmail/disconnect">
+  {{ csrf_field() }}
+  <button type="submit">Disconnect</button>
+</form>
+{% else %}
+<p>Not connected.</p>
+{% endif %}
+<p><a class="button primary" href="/settings/gmail/connect">{{ "Connect again" if connected else "Connect" }}</a></p>
+{% endblock %}

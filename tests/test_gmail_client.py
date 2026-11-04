@@ -197,3 +197,29 @@ def test_no_error_shows_a_token_or_an_e_mail_s_text(replies, waits):
 def test_an_answer_of_an_unknown_shape_stops_with_plain_words(replies, read):
     with gmail(FakeGoogle(replies)) as box, pytest.raises(GmailError, match="unexpected way"):
         read(box)
+
+
+def test_the_one_time_code_is_exchanged_for_the_lasting_sign_in():
+    fake = FakeGoogle({"/token": [{"refresh_token": REFRESH, "access_token": ACCESS}]})
+    assert client.exchange("code", "id", "secret", "http://127.0.0.1:8765/cb", "verifier", httpx.MockTransport(fake))
+    sent = dict(httpx.QueryParams(fake.requests[0].content.decode()))
+    assert sent == {"grant_type": "authorization_code", "code": "code", "client_id": "id", "client_secret": "secret",
+                    "redirect_uri": "http://127.0.0.1:8765/cb", "code_verifier": "verifier"}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "answer, words",
+    [(400, r"refused the sign-in \(400\)"), ({"access_token": ACCESS}, "lasting sign-in"),
+     (httpx.ConnectError("down"), "could not be reached")],
+)  # fmt: skip
+def test_an_exchange_google_refuses_says_so_without_its_answer(answer, words):
+    with pytest.raises(GmailError, match=words) as error:
+        client.exchange(
+            "code",
+            "id",
+            "secret",
+            "http://127.0.0.1:8765/cb",
+            "v",
+            httpx.MockTransport(FakeGoogle({"/token": [answer]})),
+        )
+    assert SNIPPET not in str(error.value) and ACCESS not in str(error.value)

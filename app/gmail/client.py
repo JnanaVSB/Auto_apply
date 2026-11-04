@@ -15,6 +15,7 @@ from app.sources import html_to_text
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105 (an address, not a password)
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 CLIENT_ID, CLIENT_SECRET, REFRESH = "gmail-client-id", "gmail-client-secret", "gmail-refresh-token"  # keychain names
@@ -172,6 +173,30 @@ class Gmail:
             if found is None:
                 raise GmailError(UNEXPECTED)
             return found
+
+
+def exchange(
+    code: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+    verifier: str,
+    transport: httpx.BaseTransport | None = None,
+) -> str:
+    """The lasting sign-in (refresh token) for the one-time code Google sent back after you approved."""
+    data = {"grant_type": "authorization_code", "code": code, "client_id": client_id, "client_secret": client_secret,
+            "redirect_uri": redirect_uri, "code_verifier": verifier}  # fmt: skip
+    try:
+        with httpx.Client(transport=transport, timeout=30) as client:
+            reply = client.post(TOKEN_URL, data=data)
+    except httpx.HTTPError:
+        raise GmailError("Google could not be reached (no internet?); press Connect again.") from None
+    if reply.status_code != 200:
+        raise GmailError(f"Google refused the sign-in ({reply.status_code}); press Connect again.")
+    token = (_json(reply) or {}).get("refresh_token")
+    if not isinstance(token, str) or not token:
+        raise GmailError("Google didn't return a lasting sign-in; press Connect again.")
+    return token
 
 
 def revoke(token: str, transport: httpx.BaseTransport | None = None) -> bool:

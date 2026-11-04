@@ -29,6 +29,7 @@ from app.web import (
     council_settings,
     council_view,
     drafts,
+    gmail_settings,
     look,
     pilot,
     prepare,
@@ -352,6 +353,7 @@ def create_app(
     prepare.add_routes(app, _page, data_dir, lambda: _scoring())  # looked up at each call, as the routes above do
     writer_settings.add_routes(app, _page)
     council_settings.add_routes(app, _page)
+    gmail_settings.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
@@ -457,7 +459,9 @@ async def _checked(request: Request, call_next) -> Response:
         raise HTTPException(403, EXPIRED)
     request.state.session = None
     path = request.url.path
-    if path != "/login" and not path.startswith("/static/"):  # everything else needs a login
+    # Everything else needs a login. Google sends you back to the Gmail callback without the login cookie (it is
+    # SameSite=Strict); the one-time state is the check there.
+    if path not in ("/login", gmail_settings.CALLBACK) and not path.startswith("/static/"):
         request.state.session = request.app.state.logins.session(request.cookies.get(security.COOKIE))
         if request.state.session is None:
             return _to_login(request)
