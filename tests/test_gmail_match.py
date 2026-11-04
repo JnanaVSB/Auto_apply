@@ -79,3 +79,7 @@ def test_the_cards_are_the_jobs_the_board_shows(conn):
 
 def test_a_role_sharing_a_word_with_another_is_told_apart_by_its_other_words():
     assert match([ACME_ML, ACME_ROBOTS], "", "acme.example", "Acme: your ML Intern application", None) == [1]
+
+
+def test_every_legal_ending_is_dropped_so_the_company_s_domain_matches():
+    assert match([{"id": 8, "company": "Acme Co Inc", "title": "ML Intern"}], "", "acme.example", "Hi", None) == [8]

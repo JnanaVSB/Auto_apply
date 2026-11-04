@@ -281,10 +281,35 @@ def test_show_all_puts_grey_cards_first_and_the_normal_view_keeps_the_newest_fir
     assert [card["id"] for card in lane(conn, "applied", show_all="applied")["cards"]] == [grey, fresh]
 
 
+EMAIL = """INSERT INTO emails (message_id, thread_id, received_on, sender_domain, label, labelled_by, job_id)
+    VALUES (?, 't', ?, 'acme.example', 'other', 'rules', ?)"""
+
+
+def emailed(conn, message_id, job, days_ago):
+    conn.execute(
+        EMAIL, (message_id, (NOW - timedelta(days=days_ago)).astimezone(UTC).isoformat(timespec="seconds"), job)
+    )
+
+
 @pytest.mark.parametrize("emailed_days_ago, stale", [(2, False), (25, True)])
 def test_a_recent_e_mail_keeps_a_card_from_greying(conn, emailed_days_ago, stale):
-    emailed = (NOW - timedelta(days=emailed_days_ago)).astimezone(UTC).isoformat(timespec="seconds")
     with conn:
         job = place(conn, "applied", days_ago=30)
-        conn.execute("UPDATE tracker SET last_email_on = ? WHERE job_id = ?", (emailed, job))
+        emailed(conn, "older", job, 40)
+        emailed(conn, "newest", job, emailed_days_ago)
     assert lane(conn, "applied")["cards"][0]["stale"] is stale
+
+
+def test_re_linking_an_e_mail_moves_the_latest_e_mail_with_it(conn):
+    from app.gmail import apply
+
+    with conn:
+        acme, globex = place(conn, "applied", days_ago=30), place(conn, "applied", days_ago=30)
+        emailed(conn, "m1", acme, 2)
+    assert [card["email"] is not None for card in lane(conn, "applied")["cards"]] == [False, True]
+    with conn:
+        conn.execute("UPDATE emails SET to_check = 1, subject = 's' WHERE message_id = 'm1'")
+    apply.decide(conn, "m1", globex, "other")
+    cards = {card["id"]: card for card in lane(conn, "applied")["cards"]}
+    assert cards[acme]["email"] is None and cards[acme]["stale"]
+    assert cards[globex]["email"] is not None and not cards[globex]["stale"]

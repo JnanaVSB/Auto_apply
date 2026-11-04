@@ -137,7 +137,6 @@ def test_the_company_writing_with_no_phrase_is_unclear_for_the_local_model(conn,
         f"[{acme}]",
     )  # on the list until decided
     assert tracker.stage(conn, acme) == "applied"
-    assert one(conn, "SELECT last_email_on FROM tracker WHERE job_id = ?", acme)[0] == "2026-11-04T10:00:00+00:00"
 
 
 def test_two_jobs_the_e_mail_could_be_are_kept_to_check_with_both(conn, acme):
@@ -384,7 +383,6 @@ def test_mail_with_no_job_signal_leaves_nothing_whatever_its_words(conn, acme, s
     tracker.move(conn, acme, "ready", "applied", NOW.date())
     sync.run(conn, FakeGmail(email("m1", sender, subject, snippet)), 60, NOW)
     assert row(conn, "m1") is None
-    assert one(conn, "SELECT last_email_on FROM tracker WHERE job_id = ?", acme)[0] is None
 
 
 def test_job_mail_from_a_company_with_two_cards_waits_for_you_with_both(conn, acme):

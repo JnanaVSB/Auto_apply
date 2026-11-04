@@ -14,7 +14,7 @@
 <p class="hint">E-mails the sync couldn't place on a card by itself. Say which card each is about and what it is, or
   dismiss it. Its subject is forgotten either way; the e-mail stays in your Gmail.</p>
 {% for email in emails %}
-<section class="email">
+<section>
   <h2>{{ email.subject or "(no subject)" }}</h2>
   <p class="muted">{{ email.when }} · {{ email.domain }} · {{ email.label | capitalize }}</p>
   {% for card in email.candidates %}

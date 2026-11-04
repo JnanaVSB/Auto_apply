@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import add_job, one
+from helpers import add_job
 from test_tracker import DAY, card, moves, place, version
 
 from app import tracker
@@ -19,10 +19,6 @@ def ready(conn):
         job = add_job(conn, "Robotics Intern")
         version(conn, job)
     return job
-
-
-def last_email(conn, job):
-    return one(conn, "SELECT last_email_on FROM tracker WHERE job_id = ?", job)[0]
 
 
 def test_a_confirmation_moves_a_ready_card_to_applied_on_the_e_mail_s_local_date(conn, ready, phoenix):
@@ -56,11 +52,10 @@ def test_a_rejection_moves_a_waiting_card_to_rejected(conn, start):
 
 
 @pytest.mark.parametrize("label", ["other", "unclear"])
-def test_an_e_mail_that_moves_nothing_still_keeps_the_card_from_greying(conn, label):
+def test_other_and_unclear_move_nothing(conn, label):
     with conn:
         job = place(conn, "applied")
     assert not update(conn, job, label, EARLY) and tracker.stage(conn, job) == "applied"
-    assert last_email(conn, job) == "2026-11-04T03:00:00+00:00"
 
 
 def test_a_move_of_yours_after_the_e_mail_wins(conn, ready):
@@ -68,11 +63,3 @@ def test_a_move_of_yours_after_the_e_mail_wins(conn, ready):
     assert not update(conn, ready, "interview", EARLY) and tracker.stage(conn, ready) == "applied"
     assert update(conn, ready, "interview", datetime.now(UTC) + timedelta(minutes=1))
     assert tracker.stage(conn, ready) == "interview" and moves(conn, ready) == 2
-
-
-def test_the_latest_e_mail_is_kept_whatever_order_they_are_read_in(conn):
-    with conn:
-        job = place(conn, "applied")
-    update(conn, job, "other", EARLY)
-    update(conn, job, "other", EARLY - timedelta(days=3))
-    assert last_email(conn, job) == "2026-11-04T03:00:00+00:00"

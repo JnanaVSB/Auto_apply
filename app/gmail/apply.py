@@ -1,8 +1,8 @@
-"""What a matched e-mail does to its card: moves it forward (never back, never over a move of yours) and keeps it from
-greying out."""
+"""What a matched e-mail does to its card (forward only, never over a move of yours), and the e-mails waiting for you
+on E-mails to check. A matched e-mail's row also keeps its card from greying out (tracker.board reads the newest)."""
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 import sqlcipher3
 
@@ -18,7 +18,6 @@ TARGET = {  # where each label sends a card; "other" and "unclear" move nothing
 # Gmail only moves a card along this line, or to Rejected from any stage before Offer; never back, never out of Offer
 # or Rejected.
 FORWARD = ("ready", "applied", "assessment", "interview", "offer")
-LATEST = "UPDATE tracker SET last_email_on = max(coalesce(last_email_on, ?), ?) WHERE job_id = ?"
 YOURS = "SELECT max(moved_on) FROM tracker_moves WHERE job_id = ? AND moved_by = 'you'"
 DECIDED = """UPDATE emails SET job_id = ?, label = ?, labelled_by = 'you', moved = ?, to_check = 0, subject = NULL,
     candidates = '[]' WHERE message_id = ?"""
@@ -28,10 +27,7 @@ TO_CHECK = """SELECT message_id, received_on, sender_domain, subject, label, can
 
 
 def update(conn: sqlcipher3.Connection, job_id: int, label: str, received_on: datetime) -> bool:
-    """Note the e-mail on the card and move the card if its label says so (`received_on`: aware); whether it moved."""
-    at = received_on.astimezone(UTC).isoformat(timespec="seconds")  # like changed_on, so the two compare as text
-    with conn:  # only a card on the Tracker has a row; an untouched Ready card has nothing to note
-        conn.execute(LATEST, (at, at, job_id))
+    """Move the card if the e-mail's label says so (`received_on`: aware); whether it moved."""
     target, current = TARGET.get(label), tracker.stage(conn, job_id) or "ready"
     forward = target in FORWARD and current in FORWARD and FORWARD.index(target) > FORWARD.index(current)
     if not (forward or (target == "rejected" and current in FORWARD[:-1])):

@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 from app.gmail import apply, classify, match
 
 PAGE = "/tracker/emails"
-MESSAGE_ID = re.compile(r"[0-9a-zA-Z_-]{1,64}")  # Gmail's ids are hex
+MESSAGE_ID = re.compile(r"[0-9a-zA-Z_-]{1,64}")  # Gmail's ids (hex today); anything else is refused
 DONE = {  # ?done=…: fixed words only
     "linked": (
         "Linked to its card. The card stays where it is: an e-mail moves a card only forward, and never past a move "

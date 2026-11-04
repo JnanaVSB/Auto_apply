@@ -370,12 +370,8 @@ async def _schedule(app: FastAPI) -> None:
     """The schedule's check, once a minute while the dashboard is open."""
     while True:
         await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
-        for runner in (
-            app.state.collector,
-            app.state.scorer,
-            app.state.preparer,
-            app.state.mailer,
-        ):  # collections first
+        # collections first
+        for runner in (app.state.collector, app.state.scorer, app.state.preparer, app.state.mailer):
             try:
                 runner.tick(app.state.conn)
             except Exception as error:  # e.g. the database busy for a moment: try again next minute

@@ -13,7 +13,7 @@ from app.gmail import apply, classify, match, model
 from app.gmail.client import Gmail, GmailError, Gone, HistoryTooOld
 
 # Gmail's own search only narrows what is read ({…} means "any of"); the rules decide what each e-mail is. Your own
-# mail, drafts, spam, bin and chats are never read.
+# mail, drafts, spam, bin and chats are never searched; from the change list they are skipped by label (SKIPPED).
 QUERY = (
     "{since} -in:sent -in:drafts -in:spam -in:trash -in:chats {{"
     + " ".join(f"from:{system}" for system in classify.JOB_SYSTEMS)
@@ -114,7 +114,7 @@ def _one(conn: sqlcipher3.Connection, message: dict, cards: list[dict]) -> tuple
         label = "unclear"  # "thank you for applying" on a card already past Applied often opens a no
     if label == "other":
         return False, False
-    check = label == "unclear" if job is not None else label != "other"  # unclear stays on the list until decided
+    check = job is None or label == "unclear"  # no card, or not sure: on the list until decided
     if job is not None:
         moved = apply.update(conn, job, label, datetime.fromisoformat(message["received_on"]))
     with conn:  # saved after its card: a crash in between only reads it again, and a card never moves back

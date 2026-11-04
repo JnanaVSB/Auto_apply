@@ -21,10 +21,10 @@ API = "https://gmail.googleapis.com/gmail/v1/users/me"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 CLIENT_ID, CLIENT_SECRET, REFRESH = "gmail-client-id", "gmail-client-secret", "gmail-refresh-token"  # keychain names
 WAITS = (2, 4, 8)  # seconds between tries when Google is busy (429 or 5xx); then the next sync tries again
-MAX_WAIT = 60  # the most a Retry-After is waited
 MAX_PAGES = 50  # pages per search or change list; beyond it the next pass reads on (the change list's position stops
 # at the last change read)
 BUSY = "Gmail is busy; the next sync tries again."
+UNREACHABLE = "Gmail could not be reached (no internet?); the next sync tries again."
 BODY_LIMIT = 4000  # characters of an e-mail's text the local model may read
 UNEXPECTED = "Gmail answered in an unexpected way; nothing was changed."
 _sleep = time.sleep  # tests replace it
@@ -153,10 +153,10 @@ class Gmail:
         return pages, True
 
     def _wait(self, reply: httpx.Response, tried: int) -> None:
-        """Google is busy: wait its Retry-After (seconds, at most MAX_WAIT) or the next of WAITS, out of this pass's
-        budget; past the tries or the budget, "busy" (the next sync tries again)."""
+        """Google is busy: wait its Retry-After (seconds) or the next of WAITS, out of this pass's budget; past the
+        tries or the budget, "busy" (the next sync tries again)."""
         after = reply.headers.get("retry-after", "")
-        wait = min(int(after), MAX_WAIT) if after.isdigit() else WAITS[min(tried, len(WAITS) - 1)]
+        wait = int(after) if after.isdigit() else WAITS[min(tried, len(WAITS) - 1)]
         if tried >= len(WAITS) or wait > self._budget:
             raise GmailError(BUSY)
         self._budget -= wait
@@ -170,7 +170,7 @@ class Gmail:
             try:
                 reply = self._client.post(TOKEN_URL, data=self._sign_in)
             except httpx.HTTPError:
-                raise GmailError("Gmail could not be reached (no internet?); the next sync tries again.") from None
+                raise GmailError(UNREACHABLE) from None
             if reply.status_code != 429 and reply.status_code < 500:
                 break
             self._wait(reply, tried)
@@ -193,7 +193,7 @@ class Gmail:
                     API + path, params=params, headers={"Authorization": f"Bearer {self._token()}"}
                 )
             except httpx.HTTPError:
-                raise GmailError("Gmail could not be reached (no internet?); the next sync tries again.") from None
+                raise GmailError(UNREACHABLE) from None
             if reply.status_code == 401 and not refreshed:  # the access token ran out early: one new one
                 self._access, refreshed = "", True
                 continue

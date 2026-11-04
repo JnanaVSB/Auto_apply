@@ -26,9 +26,11 @@ def words(text: str) -> list[str]:
 
 
 def company_key(company: str) -> list[str]:
-    """The company's words without a legal ending ("Acme Inc." is "acme")."""
+    """The company's words without its legal endings ("Acme Co Inc" is "acme")."""
     found = words(company)
-    return found[:-1] if len(found) > 1 and found[-1] in LEGAL else found
+    while len(found) > 1 and found[-1] in LEGAL:
+        found.pop()
+    return found
 
 
 def match(cards: list[dict], name: str, domain: str, subject: str, thread_job: int | None) -> list[int]:

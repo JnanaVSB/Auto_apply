@@ -31,7 +31,7 @@ CARDS = """FROM jobs j LEFT JOIN tracker t ON t.job_id = j.id
 # resume version, or one you moved back, unless it is "Not interested".
 SHOWN = "(t.stage != 'ready' OR (j.not_interested = 0 AND (t.job_id IS NOT NULL OR f.job_id IS NOT NULL)))"
 BOARD = f"""SELECT j.id, j.company, j.title, j.apply_url, j.status, coalesce(t.stage, 'ready'), t.round, t.applied_on,
-        t.changed_on, t.last_email_on, e.received_on, e.label {CARDS}
+        t.changed_on, e.received_on, e.label {CARDS}
     LEFT JOIN emails e ON e.message_id = (SELECT message_id FROM emails WHERE job_id = j.id ORDER BY received_on DESC
         LIMIT 1)
     WHERE {SHOWN} ORDER BY coalesce(t.changed_on, f.done_on) DESC, j.id DESC"""  # noqa: S608 (fixed text)
@@ -153,7 +153,7 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
     rows = conn.execute(BOARD)
-    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, emailed, *latest in rows:
+    for job_id, company, title, url, status, stage_, round_, applied_on, changed_on, received, label in rows:
         lanes[stage_].append(
             {
                 "id": job_id,
@@ -163,8 +163,8 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "closed": status != "open",
                 "round": round_,
                 "days": None if applied_on is None else max(0, (today - date.fromisoformat(applied_on)).days),
-                "email": _email(*latest),
-                "stale": stage_ in WAITING and datetime.fromisoformat(max(changed_on, emailed or changed_on)) < cutoff,
+                "email": _email(received, label),
+                "stale": stage_ in WAITING and datetime.fromisoformat(max(changed_on, received or changed_on)) < cutoff,
             }
         )
     shown_lanes = []

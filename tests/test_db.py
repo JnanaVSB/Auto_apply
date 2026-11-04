@@ -862,7 +862,7 @@ def test_version_17_adds_the_gmail_tables_and_keeps_the_tracker(tmp_path, monkey
         "VALUES ({}, 't1', 'now', 'example.com', {}, {}, {}, {})"
     )
     with closing(db.connect(path)) as conn:
-        assert conn.execute("SELECT stage, last_email_on FROM tracker").fetchall() == [("applied", None)]
+        assert conn.execute("SELECT stage FROM tracker").fetchall() == [("applied",)]
         with conn:
             conn.execute(email.format("'m1'", "'rejection'", "'rules'", 0, "NULL"))
             conn.execute(email.format("'m2'", "'unclear'", "'local model'", 1, "'Your application'"))

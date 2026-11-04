@@ -559,8 +559,8 @@ UPGRADES = (
     );
     CREATE INDEX tracker_moves_job ON tracker_moves (job_id, id);
     """,
-    # 17: Phase 6, Gmail sync. One row per e-mail looked at (never its body; its subject only while you check it), where
-    # the next sync starts, and each card's latest matched e-mail for greying out.
+    # 17: Phase 6, Gmail sync. One row per job e-mail kept (never its body; its subject only while you check it; a
+    # card's newest matched one also keeps it from greying out), and where the next sync starts.
     """
     CREATE TABLE emails (  -- one row per Gmail message ever looked at; never the body
         message_id TEXT PRIMARY KEY,  -- Gmail's id: read once
@@ -584,7 +584,6 @@ UPGRADES = (
         connected_on TEXT,  -- when you last connected (testing mode: Google asks again after 7 days)
         last_sync_on TEXT, last_result TEXT  -- plain words, never e-mail text or a token
     );
-    ALTER TABLE tracker ADD COLUMN last_email_on TEXT;  -- the latest matched e-mail (UTC, ISO), for greying out
     """,
 )
 SCHEMA_VERSION = len(UPGRADES)
