@@ -217,12 +217,15 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .dock { display: none; position: fixed; z-index: 30; left: calc(var(--space-3) + env(safe-area-inset-left));
   right: calc(var(--space-3) + env(safe-area-inset-right));
   bottom: calc(var(--space-3) + env(safe-area-inset-bottom)); }
-.dock > summary { display: flex; align-items: center; gap: var(--space-3); min-height: 3.5rem;
-  padding: 0 var(--space-2) 0 1.25rem; border: 1px solid var(--line); border-radius: 999px; background: var(--glass);
+/* With large text the page name wraps between its words first; Menu moves to a second line only when the name's
+   longest word can't sit beside it. On one line the bar is still a pill (radius = half of 3.5rem). */
+.dock > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+  min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem; border: 1px solid var(--line);
+  border-radius: 1.75rem; background: var(--glass);
   -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
   box-shadow: var(--shadow-raised); cursor: pointer; list-style: none; }
 .dock > summary::-webkit-details-marker { display: none; }
-.dock-where { display: grid; line-height: 1.25; }
+.dock-where { display: grid; flex: 1 1 auto; width: min-content; line-height: 1.25; }
 .dock-where .caption { font-size: 0.75rem; letter-spacing: 0.01em; color: var(--muted); }
 .dock-where strong { font-weight: 650; }
 .dock-button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2.75rem; margin-left: auto;
@@ -375,10 +378,12 @@ td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); mar
 /* The list pages use the window's width beside the rail; their running text keeps a reading length. */
 main:has(.view-switch) { max-width: none; }
 main:has(.view-switch) > p:not(.counts) { max-width: 72ch; }  /* the counts line reads as one row of links */
-/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, Cards. */
-.view-switch { display: inline-flex; gap: 2px; margin: 0 0 var(--space-4); padding: 3px; border-radius: 999px;
-  background: var(--sunken); }
-.view-switch button { border-color: transparent; background: transparent; color: var(--muted); }
+/* The Table | Cards switch: the chosen view looks chosen (tint, outline, bold); with no choice yet, Cards. With
+   large text on a phone the two buttons stack, each as wide as the switch; the radius is a pill on one line and
+   round corners around two. */
+.view-switch { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; margin: 0 0 var(--space-4);
+  padding: 3px; border-radius: calc(var(--control) / 2 + 3px); background: var(--sunken); }
+.view-switch button { flex: 1 1 auto; border-color: transparent; background: transparent; color: var(--muted); }
 .view-switch button:hover { color: var(--text); }
 .view-switch [aria-pressed="true"], .view-switch.auto .to-cards { border-color: var(--accent);
   background: var(--accent-soft); color: var(--accent); font-weight: 700; }
