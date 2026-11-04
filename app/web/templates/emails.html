@@ -18,14 +18,14 @@
   <h2>{{ email.subject or "(no subject)" }}</h2>
   <p class="muted">{{ email.when }} · {{ email.domain }} · {{ email.label | capitalize }}</p>
   {% for card in email.candidates %}
-  <form method="post" action="/tracker/emails/{{ email.id }}/link">
+  <form method="post" action="/tracker/emails/{{ email.id }}/link" class="stacked">
     {{ csrf_field() }}
     <input type="hidden" name="job" value="{{ card.id }}">
     {{ label_select(email.label) }}
     <button type="submit" class="primary">This is {{ card.company }} · {{ card.title }}</button>
   </form>
   {% endfor %}
-  <form method="post" action="/tracker/emails/{{ email.id }}/link">
+  <form method="post" action="/tracker/emails/{{ email.id }}/link" class="stacked">
     {{ csrf_field() }}
     <label>{{ "Another job" if email.candidates else "Which job" }} <select name="job" required>
       <option value="" selected disabled>Choose…</option>

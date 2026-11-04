@@ -14,7 +14,10 @@ from app.gmail import apply, classify, match
 PAGE = "/tracker/emails"
 MESSAGE_ID = re.compile(r"[0-9a-zA-Z_-]{1,64}")  # Gmail's ids are hex
 DONE = {  # ?done=…: fixed words only
-    "linked": "Linked to its card.",
+    "linked": (
+        "Linked to its card. The card stays where it is: an e-mail moves a card only forward, and never past a move "
+        "you made later."
+    ),
     "moved": "Linked, and its card moved.",
     "dismissed": "Dismissed: it stays off the list.",
 }

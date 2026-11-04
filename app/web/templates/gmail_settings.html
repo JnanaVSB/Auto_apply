@@ -16,7 +16,7 @@
 
 <h2>Your Google client</h2>
 <p>{{ "Saved in this computer's keychain." if has_client else "Not saved yet." }}</p>
-<form method="post" action="/settings/gmail/client">
+<form method="post" action="/settings/gmail/client" class="stacked">
   {{ csrf_field() }}
   <label>Client ID <input name="client_id" maxlength="200" autocomplete="off" spellcheck="false"></label>
   <label>Client secret <input name="client_secret" type="password" maxlength="200" autocomplete="off"></label>

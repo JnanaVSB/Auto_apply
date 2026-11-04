@@ -61,6 +61,7 @@ def test_an_e_mail_can_be_linked_to_another_card_on_the_board(client, conn, jobs
     email(conn, "abc123", label="unclear", candidates=f"[{jobs[0]}]")
     reply = post(client, "/tracker/emails/abc123/link", job=str(jobs[1]), label="other")
     assert reply.headers["location"] == "/tracker/emails?done=linked"
+    assert "The card stays where it is" in client.get(reply.headers["location"]).text
     assert one(conn, "SELECT job_id, to_check FROM emails")[0:2] == (jobs[1], 0)
 
 
