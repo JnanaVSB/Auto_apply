@@ -274,6 +274,8 @@ The first start after updating upgrades the database once. A copy of the old one
 
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.
+- Gmail is optional and read-only: it never sends or changes mail, and an e-mail's text stays on this computer.
+  To connect your own, see [docs/gmail-setup.md](docs/gmail-setup.md).
 - Secrets live only in your OS keychain; the database is encrypted with SQLCipher.
 - Collecting jobs sends nothing about you: only public read requests, identified as
   "auto_apply personal job search". Job descriptions are stored as plain text.
