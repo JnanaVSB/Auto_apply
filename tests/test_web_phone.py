@@ -717,6 +717,7 @@ def test_the_laptop_shows_a_full_lane_whole_whatever_the_page_with_the_setting_o
 
 PICKER = "/tracker/emails/abc123/picker"
 JOB_SELECT = '<select name="job" required>'
+LOADING = '<p class="hint">Loading the job list… If nothing comes, reload this page.</p>'
 HTMX = {"HX-Request": "true"}
 
 
@@ -750,7 +751,9 @@ def test_the_phone_gets_the_list_without_the_job_lists(phone, conn):
     text = phone.get("/tracker/emails", headers=cookie).text
     assert JOB_SELECT not in text and "Robotics Intern</option>" not in text
     assert text.count('hx-trigger="toggle once"') == 20
-    assert '<details hx-get="/tracker/emails/message7/picker" hx-trigger="toggle once" hx-swap="beforeend">' in text
+    opens = 'hx-get="/tracker/emails/message7/picker" hx-trigger="toggle once" hx-target="find p" hx-swap="outerHTML"'
+    assert f"<details {opens}>" in text
+    assert text.count(LOADING) == 20  # a failed fetch leaves these words
     nothing_inline(text)
 
 
@@ -806,7 +809,7 @@ def test_the_laptop_keeps_the_job_list_in_the_page_with_the_setting_on_or_empty(
     log_in(either)
     text = either.get("/tracker/emails").text
     assert "Globex · Data Scientist</option>" in text
-    assert "/picker" not in text and "toggle once" not in text
+    assert "/picker" not in text and "toggle once" not in text and LOADING not in text
     assert (
         '  <form method="post" action="/tracker/emails/abc123/link" class="stacked">\n'
         f'    <input type="hidden" name="csrf_token" value="{csrf(either)}">\n'

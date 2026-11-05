@@ -189,12 +189,16 @@ def board(
     shown_lanes = []
     for stage_, name in STAGES.items():
         cards = lanes[stage_]
-        full = show_all == stage_  # the whole lane, its grey cards (the ones to check) first
-        shown, next_page = sorted(cards, key=lambda card: not card["stale"]) if full else cards[:LANE_CARDS], None
+        full = show_all == stage_
+        shown, next_page = cards[:LANE_CARDS], None
+        if full:  # the whole lane, its grey cards (the ones to check) first
+            shown = sorted(cards, key=lambda card: not card["stale"])
         if full and page_size:
             last = max(1, math.ceil(len(cards) / page_size))  # past the end shows the last page, never an empty lane
             at = min(page, last)
-            shown, next_page = shown[(at - 1) * page_size : at * page_size], at + 1 if at < last else None
+            shown = shown[(at - 1) * page_size : at * page_size]
+            if at < last:
+                next_page = at + 1
         shown_lanes.append(
             {
                 "stage": stage_,

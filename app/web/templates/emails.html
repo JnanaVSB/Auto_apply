@@ -20,8 +20,9 @@
   </form>
   {% endfor %}
   {% if remote -%}
-  <details hx-get="/tracker/emails/{{ email.id }}/picker" hx-trigger="toggle once" hx-swap="beforeend">
+  <details hx-get="/tracker/emails/{{ email.id }}/picker" hx-trigger="toggle once" hx-target="find p" hx-swap="outerHTML">
     <summary>{{ "Another job" if email.candidates else "Which job" }}</summary>
+    <p class="hint">Loading the job list… If nothing comes, reload this page.</p>
   </details>
   {%- else -%}
   {% include "email_picker.html" %}

@@ -48,7 +48,12 @@ def test_the_manifest_says_exactly_what_was_decided(client):
         "display": "standalone",
         "background_color": "#f3f5f7",
         "theme_color": "#ffffff",
-        "share_target": {"action": "/add", "method": "GET", "params": {"url": "link", "text": "text"}},
+        "share_target": {
+            "action": "/add",
+            "method": "GET",
+            "enctype": "application/x-www-form-urlencoded",
+            "params": {"url": "link", "text": "text"},
+        },
     }
     assert "http" not in text  # no address of any computer
 
