@@ -26,6 +26,13 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             return _view(request, page, 400, problem=problem, typed=typed)
         return RedirectResponse(PAGE, 303)
 
+    @app.post(PAGE + "/log-out-all")
+    async def log_out_all(request: Request) -> Response:
+        request.app.state.logins.log_out_all()
+        response = RedirectResponse("/login", 303)
+        response.delete_cookie(security.cookie_name(request.state.remote), path="/", secure=request.state.remote)
+        return response
+
 
 def _view(
     request: Request,
@@ -41,4 +48,7 @@ def _view(
     except ConfigError as error:  # a settings file that breaks the rules is shown as a problem, never edited
         problem = problem or str(error)
     box = saved if typed is None else typed
-    return page(request, "phone_settings.html", status, saved=saved, box=box, restart=restart, problem=problem)
+    running = bool(request.app.state.phone_host)  # a phone can be logged in: the button shows
+    return page(
+        request, "phone_settings.html", status, saved=saved, box=box, restart=restart, problem=problem, running=running
+    )

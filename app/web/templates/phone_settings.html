@@ -20,4 +20,11 @@
 </form>
 <p class="hint">Applies the next time you start the dashboard.</p>
 {% endif %}
+{% if running %}
+<form method="post" action="/settings/phone/log-out-all">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <button type="submit">Log out all devices</button>
+</form>
+<p class="hint">If you lose your phone, first remove it in Tailscale, then press this. You'll log in again here too.</p>
+{% endif %}
 {% endblock %}

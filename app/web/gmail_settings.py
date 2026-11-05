@@ -21,6 +21,7 @@ from app import collect
 from app.gmail import sync
 from app.gmail.client import AUTH_URL, CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE, Gmail, GmailError, exchange, revoke
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
+from app.web import security
 
 PAGE = "/settings/gmail"
 CALLBACK = PAGE + "/callback"
@@ -37,6 +38,7 @@ DONE = {  # ?done=…: fixed words only
         "security page."
     ),
 }
+ON_THE_LAPTOP = "Connect Gmail on the laptop: Google sends you back to the laptop's own address."
 STALE = "This sign-in is no longer valid (used, replaced or older than 10 minutes); press Connect again."
 CONNECTED = "UPDATE gmail_sync SET connected_on = ? WHERE id = 1"
 _now = time.monotonic  # tests replace it
@@ -67,6 +69,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.get(PAGE + "/connect")
     async def connect(request: Request) -> Response:
         """A link, not a form: the safety rules let a form go only to this dashboard, and this answer goes to Google."""
+        security.laptop_only(request, ON_THE_LAPTOP)
         try:
             client_id = get_secret(CLIENT_ID) if get_secret(CLIENT_SECRET) else None
         except KeychainError as error:
@@ -91,6 +94,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.get(CALLBACK)
     async def google_answer(request: Request) -> Response:
         """Google sends you back here (without the login cookie); the one-time state is the check."""
+        security.laptop_only(request, ON_THE_LAPTOP)
         pending, params = request.app.state.gmail_pending, request.query_params
         if pending is None or not hmac.compare_digest(pending["state"].encode(), params.get("state", "").encode()):
             return page(request, "gmail_done.html", 400, sentence=STALE)  # a stray answer leaves your Connect waiting

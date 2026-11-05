@@ -5,18 +5,22 @@ import re
 import stat
 from contextlib import ExitStack
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from helpers import ADDRESS, PASSWORD, csrf, log_in
 from starlette.exceptions import HTTPException
+from test_gmail_client import FakeGoogle
 
 from app import config
 from app.config import Config, load_config
 from app.fetch import Fetcher
+from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
+from app.keychain import get_secret, set_secret
 from app.web import __main__ as web_command
-from app.web import main, preparer, security
+from app.web import gmail_settings, main, preparer, security
 
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
@@ -39,6 +43,10 @@ NOT_TAILNET = (
 EXPIRED = "This page has expired; reload it and try again."
 RESTART = "Saved. Restart the dashboard to use it."
 SETTINGS = "/settings/phone"
+CONNECT = "/settings/gmail/connect"
+GMAIL_ON_THE_LAPTOP = "Connect Gmail on the laptop: Google sends you back to the laptop's own address."
+LASTING = "made-up-lasting-sign-in"
+LOG_OUT_ALL = "/settings/phone/log-out-all"
 REFUSED_ROUTES = [
     {"Host": HOST} | FUNNEL,
     {"Host": HOST} | IDENTITY | FORWARDED | FUNNEL,
@@ -519,3 +527,138 @@ def test_the_phones_login_page_says_the_reset_is_on_the_laptop(phone):
     for page in (phone.get("/login"), log_in_with(phone, "wrong guess", ORIGIN)):
         assert f"Forgot it? Reset it on the laptop: stop the dashboard and run {reset}" in page.text
         assert "Forgot it? Stop the dashboard" not in page.text
+
+
+def fake_google(client):
+    set_secret(CLIENT_ID, "123-made-up.apps.googleusercontent.com")
+    set_secret(CLIENT_SECRET, "made-up-secret")
+    answers = {"/token": [{"refresh_token": LASTING, "access_token": "a", "scope": SCOPE}]}
+    client.app.state.gmail_transport = httpx.MockTransport(FakeGoogle(answers))
+
+
+def press_connect(client):
+    """Press Connect on the laptop; the one-time state Google would be sent."""
+    reply = client.get(CONNECT, follow_redirects=False)
+    assert urlsplit(reply.headers["location"]).netloc == "accounts.google.com"
+    return parse_qs(urlsplit(reply.headers["location"]).query)["state"][0]
+
+
+def test_connect_is_refused_on_the_phone_before_anything_is_kept(phone):
+    fake_google(phone)
+    cookie, _ = phone_login(phone)
+    response = phone.get(CONNECT, headers=cookie, follow_redirects=False)
+    assert (response.status_code, GMAIL_ON_THE_LAPTOP in words(response)) == (403, True)
+    assert "location" not in response.headers and "127.0.0.1" not in response.text
+    assert phone.app.state.gmail_pending is None
+
+
+def test_googles_answer_on_the_phone_is_refused_and_leaves_the_laptops_connect_waiting(laptop, phone):
+    fake_google(laptop)
+    log_in(laptop)
+    state = press_connect(laptop)
+    laptop.cookies.clear()
+    answer = {"state": state, "code": "made-up-one-time-code"}
+    refused = phone.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (refused.status_code, GMAIL_ON_THE_LAPTOP in words(refused)) == (403, True)
+    assert laptop.app.state.gmail_pending["state"] == state and get_secret(REFRESH) is None
+    done = laptop.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (done.status_code, "Gmail connected." in done.text, get_secret(REFRESH)) == (200, True, LASTING)
+
+
+def test_gmail_settings_on_the_phone_say_where_to_connect_and_keep_the_rest(phone):
+    set_secret(REFRESH, LASTING)  # connected
+    cookie, session = phone_login(phone)
+    page = phone.get("/settings/gmail", headers=cookie)
+    assert (page.status_code, "Connect Gmail on the laptop" in page.text) == (200, True)
+    assert f'href="{CONNECT}"' not in page.text
+    for form in (
+        "/settings/gmail/sync",
+        "/settings/gmail/disconnect",
+        "/settings/gmail/period",
+        "/settings/gmail/client",
+    ):
+        assert f'action="{form}"' in page.text
+    data = {"csrf_token": session.csrf}
+    assert (
+        phone.post("/settings/gmail/sync", data=data, headers=cookie | ORIGIN, follow_redirects=False).status_code
+        == 303
+    )
+
+
+def test_connect_on_the_laptop_is_as_today_with_the_setting_on_or_empty(either):
+    fake_google(either)
+    log_in(either)
+    page = either.get("/settings/gmail")
+    assert f'href="{CONNECT}"' in page.text and "Connect Gmail on the laptop" not in page.text
+    state = press_connect(either)
+    assert either.app.state.gmail_pending["redirect"] == f"{ADDRESS}{gmail_settings.CALLBACK}"
+    either.cookies.clear()  # Google's redirect comes without the login cookie
+    answer = {"state": state, "code": "made-up-one-time-code"}
+    done = either.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (done.status_code, get_secret(REFRESH)) == (200, LASTING)
+
+
+def test_log_out_all_on_the_phone_ends_the_laptop_too_and_clears_the_phones_cookie(laptop, phone):
+    log_in(laptop)
+    cookie, session = phone_login(phone)
+    data = {"csrf_token": session.csrf}
+    response = phone.post(LOG_OUT_ALL, data=data, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    assert re.fullmatch(
+        r'__Host-auto_apply_session=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax; Secure',
+        response.headers["Set-Cookie"],
+    )
+    assert not phone.app.state.logins.sessions
+    assert laptop.get("/", follow_redirects=False).headers["location"] == "/login"
+
+
+def test_log_out_all_on_the_laptop_ends_the_phone_too_and_clears_todays_cookie(laptop, phone):
+    cookie, _ = phone_login(phone)
+    log_in(laptop)
+    response = laptop.post(LOG_OUT_ALL, data={"csrf_token": csrf(laptop)}, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    assert re.fullmatch(
+        rf'{security.COOKIE}=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax', response.headers["Set-Cookie"]
+    )
+    assert phone.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_log_out_all_needs_a_login_the_token_and_a_post(laptop, phone):
+    cookie, session = phone_login(phone)
+    assert laptop.post(LOG_OUT_ALL, follow_redirects=False).headers["location"] == "/login"
+    no_token = phone.post(LOG_OUT_ALL, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (no_token.status_code, EXPIRED in words(no_token)) == (403, True)
+    another_site = {"csrf_token": session.csrf}
+    sent = cookie | {"Origin": "https://attacker.example"}
+    assert phone.post(LOG_OUT_ALL, data=another_site, headers=sent, follow_redirects=False).status_code == 403
+    assert phone.get(LOG_OUT_ALL, headers=cookie).status_code == 405
+    assert len(phone.app.state.logins.sessions) == 1
+
+
+def test_pressing_log_out_all_twice_is_harmless(phone):
+    cookie, session = phone_login(phone)
+    data = {"csrf_token": session.csrf}
+    for _ in range(2):
+        response = phone.post(LOG_OUT_ALL, data=data, headers=cookie | ORIGIN, follow_redirects=False)
+        assert (response.status_code, response.headers["location"]) == (303, "/login")
+
+
+@pytest.mark.parametrize(
+    ("running", "saved", "shown"), [(PHONE, PHONE, True), (PHONE, "", True), ("", PHONE, False), ("", "", False)]
+)
+def test_the_log_out_all_button_shows_while_a_phone_can_be_logged_in(serve, settings, running, saved, shown):
+    write(settings, saved)
+    dashboard = serve(running)
+    log_in(dashboard)
+    assert (f'action="{LOG_OUT_ALL}"' in dashboard.get(SETTINGS).text) is shown
+    assert "log-out-all" not in dashboard.get("/settings").text
+
+
+def test_the_phone_has_the_log_out_all_button_with_its_hint(phone, settings):
+    write(settings, PHONE)
+    cookie, _ = phone_login(phone)
+    text = words(phone.get(SETTINGS, headers=cookie))
+    assert f'action="{LOG_OUT_ALL}"' in text
+    assert (
+        "If you lose your phone, first remove it in Tailscale, then press this. You'll log in again here too." in text
+    )
