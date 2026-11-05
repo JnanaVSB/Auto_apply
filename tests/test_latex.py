@@ -110,15 +110,15 @@ def test_a_cut_never_splits_an_escape(character, before):
 def test_nothing_in_a_report_s_text_can_be_a_command(attack):
     plain = latex.report("Title", [("Heading", "Line")])
     assert commands(latex.report(attack, [(attack, f"{attack}\n{attack} words")])) <= commands(plain) | {
-        r"\textbackslash", r"\textasciicircum", r"\textasciitilde",
+        r"\textbackslash", r"\textasciicircum", r"\textasciitilde", r"\textquotesingle", r"\textquotedbl",
+        r"\textasciigrave",
     }  # fmt: skip
     assert latex.report(attack, []).count(r"\end{document}") == 1
 
 
 @pytest.mark.parametrize("delimiters", ["<< x >>", "<% x %>", "<# x #>"])
 def test_the_template_s_own_marks_in_a_text_print_as_text(delimiters):
-    source = latex.report("T", [("", f"see {delimiters} here")])
-    assert "".join(latex.escape(delimiters).split()) in "".join(source.split())
+    assert "".join(latex.escape(delimiters).split()) in plain(latex.report("T", [("", f"see {delimiters} here")]))
 
 
 def test_text_marked_as_safe_elsewhere_is_escaped_here_all_the_same():
@@ -213,3 +213,48 @@ def test_a_report_needs_nothing_the_cover_letter_doesnt_load():
     packages = [set(re.findall(r"\\usepackage(?:\[.*?\])?\{(.*?)\}", (folder / name).read_text(encoding="utf-8")))
                 for name in ("report.tex", "cover-letter.tex")]  # fmt: skip
     assert packages[0] <= packages[1]
+
+
+EXACT = (
+    '"', "'", "`", "--", "---", "----", "``", "''", ",,", "<<", ">>", "?`", "!`", '""', "'''", "```", ",,,", "<<<",
+    ">>>",
+)  # fmt: skip
+EXACT_WORDS = (
+    "--version", "it's", "`code`", "a<<b>>c", "1,,2", 'say "hi"', '\\"{x}', '{"a": "b"}', "-" * 100, "a--", "--a",
+    "“curly” ‘quotes’ – en — em", "rock 'n' roll", "x" * 39 + "--" + "y" * 39,
+)  # fmt: skip
+
+
+def plain(source):
+    """What a report's body says once its marks are read back, with its source lines taken out."""
+    words = "".join(body(source).split()).replace(r"\allowbreak{}%", "")
+    back = {r"\textquotedbl{}": '"', r"\textquotesingle{}": "'", r"\textasciigrave{}": "`", r"\textbackslash{}": "\\"}
+    for mark, text in (*back.items(), ("{}", ""), (r"\{", "{"), (r"\}", "}")):
+        words = words.replace(mark, text)
+    return words
+
+
+@pytest.mark.parametrize("marks", EXACT)
+def test_no_marks_are_left_for_latex_to_turn_into_another_character(marks):
+    source = latex.report(f"a{marks}b{marks}", [(f"{marks}c", f"{marks}\nd{marks}e")])
+    assert not re.findall(r"""["'`]|--|,,|<<|>>""", body(source))
+
+
+@pytest.mark.parametrize("text", [*EXACT, *EXACT_WORDS])
+def test_marks_in_a_report_read_back_as_typed(text):
+    assert "".join(text.split()) in plain(latex.report("T", [("", text)]))
+
+
+def test_a_word_cut_between_two_hyphens_stays_two_hyphens():
+    assert "x" * 39 + "-" + BREAK + "-y" in latex.report("T", [("", "x" * 39 + "--y")])
+
+
+def test_escapes_and_marks_side_by_side_stay_apart():
+    assert r"\textbackslash{}\textquotedbl{}\{\textquotedbl{}" in latex.report("T", [("", '\\"{"')])
+
+
+def test_the_resume_and_the_letter_are_printed_as_before():
+    text = 'it\'s -- "good" `x` <<y>> ,,z'
+    assert latex.escape(text) == text
+    letter = latex.cover_letter(CONTACT, "ML", "Acme", "5 Nov", [text])
+    assert text in letter and r"\textquote" not in letter and r"\textasciigrave" not in letter

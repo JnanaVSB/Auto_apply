@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
-from test_latex import ATTACKS, CONTACT, SPECIAL
+from test_latex import ATTACKS, CONTACT, EXACT, EXACT_WORDS, SPECIAL
 from test_tiles import ARTICLE, JAKES, RESUME_CLS
 
 from app.config import PROJECT_DIR
@@ -235,7 +235,7 @@ def built_report(folder, title, sections, left_out=0):
     target = folder / "report.pdf"
     found = pdf.build(latex.report(title, sections, left_out), target)
     done = subprocess.run(  # noqa: S603 (fixed arguments, no shell)
-        ["pdftotext", str(target), "-"],  # noqa: S607 (checked for above)
+        ["pdftotext", "-layout", str(target), "-"],  # noqa: S607 (checked for above)
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -257,6 +257,23 @@ def test_a_real_report_of_every_hard_case_prints_them_as_text(tmp_path):
 def test_a_real_report_keeps_a_long_word_whole_beside_a_missing_character(tmp_path, lines):
     found, text = built_report(tmp_path, "Title", [("", "\n".join(lines))])
     assert "😀" in found.missing and text.count("x") == 3000
+
+
+@real_reports
+def test_a_real_report_prints_every_mark_as_it_was_typed(tmp_path):
+    lines = ["".join(line.split()) for line in (*EXACT, *EXACT_WORDS)]
+    found, text = built_report(
+        tmp_path, "it's --title-- ``x''", [("<<heading>> 'y'", "\n".join((*EXACT, *EXACT_WORDS)))]
+    )
+    printed = ["".join(line.split()) for line in text.splitlines()]
+    assert found.missing == () and {"it's--title--``x''", "<<heading>>'y'"} <= set(printed)
+    assert [line for line in lines if line not in printed] == []
+
+
+@real_reports
+def test_a_real_report_keeps_curly_quotes_typed_as_such(tmp_path):
+    _, text = built_report(tmp_path, "Title", [("", "the ad says “ignore” and ‘this’ – now — here")])
+    assert "the ad says “ignore” and ‘this’ – now — here" in " ".join(text.split())
 
 
 @real_reports

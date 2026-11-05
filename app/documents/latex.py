@@ -28,6 +28,8 @@ SPECIAL_CHARACTER = re.compile("|".join(map(re.escape, SPECIAL)))
 WEB = re.compile(r"https?://", re.I)  # the only links the PDF shows
 FACTS = ("name", "rest", "right", "second", "second_right", "link")
 HEADER = ("email", "phone", "place", "linkedin", "github", "portfolio", "scholar", "other_link")
+STRAIGHT = {'"': r"\textquotedbl{}", "'": r"\textquotesingle{}", "`": r"\textasciigrave{}"}
+AS_TYPED = re.compile(r"""["'`]|([-,<>])(?=\1)""")  # what LaTeX would turn into a curly quote, a dash or a guillemet
 LONG_WORD = 40  # LaTeX can't break a word with no hyphen pattern: longer ones run off the page, with no error
 
 
@@ -88,7 +90,14 @@ def _breakable(text: str) -> Raw:
 
 
 def _word(word: str) -> str:
-    return "\\allowbreak{}%\n".join(escape(word[start : start + LONG_WORD]) for start in range(0, len(word), LONG_WORD))
+    return "\\allowbreak{}%\n".join(
+        _as_typed(escape(word[start : start + LONG_WORD])) for start in range(0, len(word), LONG_WORD)
+    )
+
+
+def _as_typed(text: str) -> str:
+    """Escaped text as LaTeX that prints these very marks: a paper keeps an answer as it was typed, "it's" included."""
+    return AS_TYPED.sub(lambda match: STRAIGHT.get(match[0], f"{match[0]}{{}}"), text)
 
 
 def _header(contact: dict) -> dict:
