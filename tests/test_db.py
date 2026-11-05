@@ -15,6 +15,7 @@ from app.config import Config
 from app.keychain import KeychainError, get_secret, set_secret
 
 NEW_PASSWORD = "fake-master-password-2"  # noqa: S105 (fake value, tests only)
+EXPORT_TABLES = ("export_runs", "exported")
 
 
 @pytest.fixture
@@ -878,6 +879,77 @@ def test_version_17_adds_the_gmail_tables_and_keeps_the_tracker(tmp_path, monkey
                 conn.execute(bad)
     with _open_as_is(path / f"{db.DB_FILE}.bak-v16") as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+
+
+def _everything(conn) -> tuple[list, dict]:
+    """Every table, index and trigger as defined, and every table's rows, but for the tables the export added."""
+    found = conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+    found = [row for row in found if row[2] not in EXPORT_TABLES]  # an index of theirs too
+    tables = [row[1] for row in found if row[0] == "table" and not row[1].startswith("sqlite_")]
+    return found, {name: conn.execute(f'SELECT * FROM "{name}"').fetchall() for name in tables}  # noqa: S608
+
+
+def _export_tables(conn) -> list:
+    names = ", ".join(f"'{name}'" for name in EXPORT_TABLES)
+    return conn.execute(f"SELECT name, sql FROM sqlite_master WHERE name IN ({names}) ORDER BY name").fetchall()  # noqa: S608
+
+
+def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_19:
+        version_19.setattr(db, "UPGRADES", db.UPGRADES[:19])
+        version_19.setattr(db, "SCHEMA_VERSION", 19)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+                conn.execute("INSERT INTO tracker VALUES (1, 'applied', NULL, '2026-10-17', 'then')")
+                conn.execute("INSERT INTO tracker_moves VALUES (1, 1, 'ready', 'applied', NULL, 'you', 'then')")
+                conn.execute("INSERT INTO submissions VALUES (1, 1, '2026-10-17', 'then', 'by hand', "
+                             "'https://acme.example/1', '[]', '[]')")  # fmt: skip
+            before = _everything(conn)
+    with monkeypatch.context() as version_20:
+        version_20.setattr(db, "UPGRADES", db.UPGRADES[:20])
+        version_20.setattr(db, "SCHEMA_VERSION", 20)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 20
+            assert _everything(conn) == before
+            upgraded = _export_tables(conn)
+            assert conn.execute("SELECT count(*) FROM exported").fetchone()[0] == 0
+            assert conn.execute("SELECT count(*) FROM export_runs").fetchone()[0] == 0
+    assert [name for name, _ in upgraded] == sorted(EXPORT_TABLES)
+    db.setup(tmp_path / "new", PASSWORD, replace_key=True)
+    with closing(db.connect(tmp_path / "new")) as conn:
+        assert _export_tables(conn) == upgraded  # a new database gets the very same tables
+
+
+def test_the_export_tables_hold_what_they_should_and_nothing_else(conn):
+    with conn:
+        conn.execute("INSERT INTO export_runs (id, tried_on) VALUES (1, 'now')")
+        conn.execute("INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')")
+    for refused in (
+        "INSERT INTO export_runs (id) VALUES (2)",  # one row only
+        "INSERT INTO export_runs (id) VALUES (0)",
+        "INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer_2', 'now')",  # one folder per job
+        "INSERT INTO exported VALUES (8, '2026-10-17/Acme_ML-Engineer', 'now')",  # one job per folder
+        "INSERT INTO exported VALUES (8, NULL, 'now')",
+        "INSERT INTO exported VALUES (8, 'folder', NULL)",
+    ):
+        with pytest.raises(sqlcipher3.IntegrityError):
+            conn.execute(refused)
+    assert conn.execute("SELECT id, tried_on, good_on, last_result FROM export_runs").fetchall() == [
+        (1, "now", None, None)
+    ]
+
+
+def test_a_database_already_up_to_date_opens_with_no_change(data_dir):
+    with closing(db.connect(data_dir)) as conn, conn:
+        conn.execute("INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')")
+    before = (data_dir / db.DB_FILE).read_bytes()
+    with closing(db.connect(data_dir)) as conn:
+        assert conn.execute("SELECT folder FROM exported").fetchall() == [("2026-10-17/Acme_ML-Engineer",)]
+    assert (data_dir / db.DB_FILE).read_bytes() == before
+    assert {path.name for path in data_dir.iterdir()} == {db.DB_FILE, db.RECOVERY_FILE}  # no backup made
 
 
 def test_version_19_adds_the_wording_of_each_answer_and_keeps_your_words(tmp_path, monkeypatch):

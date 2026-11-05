@@ -1,6 +1,9 @@
 """One press of Prepare, step by step, against a fake Writer: what is saved, what is counted, and every way it stops."""
 
+import ast
 import json
+import subprocess
+import sys
 from dataclasses import replace
 
 import pytest
@@ -10,7 +13,7 @@ from test_tiles import RESUME_CLS
 from test_writer import LAB, PROFILE, answer, bullet
 
 from app import llm, questionnaire
-from app.config import AIRole, AISettings, Config, SpendingSettings
+from app.config import PROJECT_DIR, AIRole, AISettings, Config, SpendingSettings
 from app.council import flow, letter, runner, runs, writer
 from app.documents import tile_sets
 from app.documents.tiles import Tile
@@ -329,3 +332,24 @@ def test_a_cover_letter_is_its_own_kind_drawn_from_the_resumes_entries(conn, dat
     tile_sets.confirm(conn, changed, from_latex(RESUME_CLS).fingerprint)  # the resume is now from older entries: all
     prepare(conn, config(data_dir), job, kind=runs.LETTER)
     assert "E6 | publication" in calls[3]["user"]
+
+
+@pytest.mark.parametrize("first", ["app.council.runs", "app.council.reviewers", "app.web.drafts", "app.submit.record"])
+def test_each_of_these_can_be_the_first_import(first):
+    """In a new Python, as the order of imports decides whether two modules needing each other load at all."""
+    done = subprocess.run(  # noqa: S603 (fixed arguments, no shell)
+        [sys.executable, "-c", f"import {first}"], cwd=PROJECT_DIR, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+
+
+def test_the_council_never_imports_from_the_web_code():
+    for path in (PROJECT_DIR / "app" / "council").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [found.name for found in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [f"{node.module}.{found.name}" for found in node.names]
+            else:
+                continue
+            assert not [name for name in names if name.startswith("app.web")], path.name

@@ -14,12 +14,10 @@ from starlette.exceptions import HTTPException
 
 from app import questionnaire
 from app.config import Config, ConfigError, SpendingSettings, load_config
-from app.council import estimate, flow, reviewers, runs, spending, writer
+from app.council import estimate, flow, runs, spending, writer
 from app.documents import pdf, privacy
 from app.resume import ResumeError
 from app.web import queries
-
-STEPS = "SELECT round, member, turn, status, answer, mode, retry_after FROM steps WHERE preparation_id = ?"
 
 DOUBT = {flow.CLOSED: "closed", flow.SKIPPED: "skipped"}  # a version stopped for this can continue anyway
 SHOWN = {"day": 60, "week": 26, "month": 24, "year": None}  # how many of each the Usage page lists; None: all
@@ -185,40 +183,12 @@ def status(conn: sqlcipher3.Connection, version: dict | None, rounds: int) -> st
         return {1: "council agreed", 0: "no agreement: see the job"}.get(version["agreed"], "Writer only (no council)")
     if (version["problem"] or "").startswith(("Paused", "Waiting")):
         return version["problem"].split(" (")[0]
-    held = [(row[5], row[6]) for row in conn.execute(STEPS, (version["id"],)) if row[3] in ("sent", "waiting")]
+    held = [(row[5], row[6]) for row in conn.execute(runs.STEPS, (version["id"],)) if row[3] in ("sent", "waiting")]
     if any(mode == "batch" for mode, _ in held):
         return "waiting for Anthropic"
     if after := max((after for _, after in held if after), default=None):
         return f"waiting: busy, again at {datetime.fromisoformat(after).astimezone():%H:%M}"
     return f"council round {version['round']} of {rounds}" if members else "Writer writing"
-
-
-def notes(conn: sqlcipher3.Connection, version: dict | None) -> dict | None:
-    """A version's council notes from its last round: each member's verdict and objections with the votes on them
-    (the Truth checker first), the Writer's replies, what it left unanswered and what the app renumbered."""
-    if version is None or not (council := runs.council(version["council"]))["members"]:
-        return None
-    rows = conn.execute(STEPS, (version["id"],)).fetchall()
-    last = max((row[0] for row in rows), default=1)
-    names = {member: reviewers.name(member, council["names"]) for member in council["members"]}
-    members = []
-    for member in sorted(council["members"], key=lambda name: name != "truth"):
-        found = max((row for row in rows if row[0] == last and row[1] == member), key=lambda row: row[2], default=None)
-        answer = json.loads(found[4]) if found and found[3] == "done" else None
-        state = "waiting" if found is None or found[3] in ("sent", "waiting") else found[3]
-        members.append({"name": names[member], "truth": member == "truth", "answer": answer, "state": state})
-    votes: dict[str, list] = {}
-    for found in members:
-        for vote in (found["answer"] or {}).get("votes", []):
-            votes.setdefault(vote["objection"], []).append((found["name"], vote["agree"], vote["why"]))
-    writer = next((json.loads(row[4]) for row in rows if row[0] == last and row[1] == "writer" and row[3] == "done"
-                   and row[4]),
-                  {})  # fmt: skip
-    draft = writer.get("draft", {})
-    renumbered = [(found["name"], found["answer"]["renumbered"]) for found in members
-                  if (found["answer"] or {}).get("renumbered")]  # fmt: skip
-    return {"round": last, "members": members, "votes": votes, "replies": draft.get("responses", []),
-            "missed": draft.get("missed", []), "renumbered": renumbered}  # fmt: skip
 
 
 def council(conn: sqlcipher3.Connection, job_id: int) -> dict:
@@ -235,8 +205,8 @@ def council(conn: sqlcipher3.Connection, job_id: int) -> dict:
         objected = [labels.get(tuple(key), "an entry") for key in draft.get("objected", [])]
         no_truth = draft.get("no_truth", False)  # the Truth checker gave no valid answer: these are unchecked
     return {
-        "council_notes": notes(conn, latest),
-        "letter_notes": notes(conn, letter), "objected": objected, "normal_cost": _normal(conn, config, latest),
+        "council_notes": runs.notes(conn, latest),
+        "letter_notes": runs.notes(conn, letter), "objected": objected, "normal_cost": _normal(conn, config, latest),
         "no_truth": no_truth, "doubt": DOUBT.get(latest and latest["problem"]),
     }  # fmt: skip
 

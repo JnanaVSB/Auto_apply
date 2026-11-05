@@ -14,7 +14,7 @@ import sqlcipher3
 
 from app import llm, questionnaire
 from app.config import Config
-from app.council import writer
+from app.council import reviewers, writer
 from app.documents import latex, pdf, privacy, tile_sets, uploads, writer_sources
 from app.resume import read_latex
 
@@ -26,6 +26,7 @@ NEWEST = """SELECT id, version, status, problem, sources, draft, flags, feedback
     agreed, wording, mode FROM preparations
     WHERE job_id = ? AND kind = ? {} ORDER BY version DESC LIMIT 1"""
 LATEST, LAST_DONE, NUMBERED = NEWEST.format(""), NEWEST.format("AND status = 'done'"), NEWEST.format("AND version = ?")
+STEPS = "SELECT round, member, turn, status, answer, mode, retry_after FROM steps WHERE preparation_id = ?"
 # NULL + a cost stays NULL: a step whose price isn't known stays "not counted"
 ENDED = """UPDATE steps SET status = ?, input_tokens = input_tokens + ?, cached_tokens = cached_tokens + ?,
     output_tokens = output_tokens + ?, cost = cost + ?, reserved = 0, answer = ?, error = ?, done_on = ? WHERE id = ?"""
@@ -103,6 +104,34 @@ def alone(version: dict) -> bool:
     """Whether a version is the Writer alone ("Resume only", or one left from Part 4b): it has no next round, so words
     sent while it is written would never reach the Writer."""
     return not council(version["council"])["members"]
+
+
+def notes(conn: sqlcipher3.Connection, version: dict | None) -> dict | None:
+    """A version's council notes from its last round: each member's verdict and objections with the votes on them
+    (the Truth checker first), the Writer's replies, what it left unanswered and what the app renumbered."""
+    if version is None or not (recorded := council(version["council"]))["members"]:
+        return None
+    rows = conn.execute(STEPS, (version["id"],)).fetchall()
+    last = max((row[0] for row in rows), default=1)
+    names = {member: reviewers.name(member, recorded["names"]) for member in recorded["members"]}
+    members = []
+    for member in sorted(recorded["members"], key=lambda name: name != "truth"):
+        found = max((row for row in rows if row[0] == last and row[1] == member), key=lambda row: row[2], default=None)
+        answer = json.loads(found[4]) if found and found[3] == "done" else None
+        state = "waiting" if found is None or found[3] in ("sent", "waiting") else found[3]
+        members.append({"name": names[member], "truth": member == "truth", "answer": answer, "state": state})
+    votes: dict[str, list] = {}
+    for found in members:
+        for vote in (found["answer"] or {}).get("votes", []):
+            votes.setdefault(vote["objection"], []).append((found["name"], vote["agree"], vote["why"]))
+    writer = next((json.loads(row[4]) for row in rows if row[0] == last and row[1] == "writer" and row[3] == "done"
+                   and row[4]),
+                  {})  # fmt: skip
+    draft = writer.get("draft", {})
+    renumbered = [(found["name"], found["answer"]["renumbered"]) for found in members
+                  if (found["answer"] or {}).get("renumbered")]  # fmt: skip
+    return {"round": last, "members": members, "votes": votes, "replies": draft.get("responses", []),
+            "missed": draft.get("missed", []), "renumbered": renumbered}  # fmt: skip
 
 
 def writable(version: dict | None, current: list[dict]) -> bool:

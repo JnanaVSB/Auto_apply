@@ -4,10 +4,11 @@ import stat
 from contextlib import closing
 
 import pytest
+import yaml
 from helpers import LIST, csrf, log_in
 
 from app import config, db
-from app.config import load_config
+from app.config import ExportSettings, load_config
 from app.web import actions
 
 ORIGINAL = """# my own comment
@@ -88,6 +89,38 @@ def test_saving_the_form_keeps_the_scoring_and_ai_settings_it_does_not_show(clie
     assert config.ai.evaluator.model == "qwen3.6:35b-a3b" and config.documents.one_page is False
     assert (config.spending.daily, config.spending.monthly) == (5, 80)
     assert (config.council.rounds, config.council.daily_jobs) == (4, 7)
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        '/home/sam/my exports #1: "old" 导出\n',  # a space, #, a colon, quotes, Chinese and a last line break
+        "C:\\Users\\Sam\\Export # 1",
+        "~/exports",
+        "- not a list",
+        "'quoted'",
+        "null",
+        "2026-11-05",
+        "0o7",
+        " spaces round it ",
+        "/line\u2028break\n\n",
+    ],
+)
+def test_saving_the_form_keeps_the_export_settings_exactly(client, settings_file, folder):
+    with settings_file.open("a", encoding="utf-8") as file:
+        file.write(yaml.safe_dump({"export": {"folder": folder, "every_days": 7}}, allow_unicode=True))
+    for _ in range(2):  # the second save reads what the first one wrote
+        assert "Saved." in save(client, collect_every_hours="6").text
+    assert load_config(settings_file).export == ExportSettings(folder=folder, every_days=7)
+
+
+@pytest.mark.parametrize("section", ["", "export:\n", "export: {}\n"])
+def test_saving_the_form_adds_no_empty_export_section(client, settings_file, section):
+    with settings_file.open("a", encoding="utf-8") as file:
+        file.write(section)
+    assert "Saved." in save(client, collect_every_hours="6").text
+    assert "export" not in yaml.safe_load(settings_file.read_text(encoding="utf-8"))
+    assert load_config(settings_file).export == ExportSettings()
 
 
 @pytest.mark.parametrize(

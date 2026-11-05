@@ -3,6 +3,7 @@ what is left for you, with a made-up person, job and forms."""
 
 import re
 from datetime import date
+from pathlib import Path
 
 import httpx
 import pytest
@@ -711,6 +712,54 @@ def test_a_card_moved_back_after_the_record_is_said_above_it(client, conn, job):
     press(client, job, "submitted", on="2026-11-04")
     tracker.move(conn, job, "applied", "ready", date(2026, 11, 5))
     assert "Your card was moved back on " in client.get(f"/jobs/{job}/form").text
+
+
+def test_a_moved_back_line_is_said_in_full_with_its_local_day(client, conn, job):
+    press(client, job, "submitted", on="2026-11-04")
+    tracker.move(conn, job, "applied", "ready", date(2026, 11, 5))
+    day = form_part._day(tracker.history(conn, job)[0]["moved_on"])
+    assert (
+        f'<p class="error">Your card was moved back on {day}, after this record.</p>'
+        in client.get(f"/jobs/{job}/form").text
+    )
+
+
+def test_a_card_moved_back_before_the_record_says_nothing(client, conn, job):
+    tracker.move(conn, job, "ready", "applied", date(2026, 11, 1))
+    tracker.move(conn, job, "applied", "ready", date(2026, 11, 2))
+    with conn:
+        conn.execute("UPDATE tracker_moves SET moved_on = '2026-11-02T10:00:00+00:00'")
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert "<h3>What the app prepared (you applied by hand)</h3>" in text and "moved back" not in text
+
+
+def test_a_by_hand_record_says_so_above_its_answers(client, conn, job):
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert "<h3>What the app prepared (you applied by hand)</h3>" in text
+    assert '<p class="muted">The site may hold different answers if you changed them there.</p>' in text
+
+
+def test_a_browser_record_says_what_was_sent_and_nothing_about_the_site_differing(client, conn, job):
+    with conn:
+        conn.execute("INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) VALUES (?, "
+                     "'2026-11-04', 'then', 'browser', 'https://example.com/apply', '[]', '[]')", (job,))  # fmt: skip
+    text = client.get(f"/jobs/{job}/form").text
+    assert "<h3>What was sent</h3>" in text and "Applied 2026-11-04" in text
+    assert "What the app prepared" not in text and "may hold different" not in text
+
+
+def test_with_no_record_the_part_says_none_of_a_records_sentences(client, job):
+    text = client.get(f"/jobs/{job}/form").text
+    for words in ("What was sent", "What the app prepared", "may hold different", "moved back"):
+        assert words not in text
+
+
+def test_a_records_sentences_live_in_one_place_only():
+    template = (Path(form_part.__file__).parent / "templates" / "form.html").read_text(encoding="utf-8")
+    for words in ("What was sent", "What the app prepared", "may hold different", "moved back on", "after this record"):
+        assert words not in template
+    for sentence in (*record.HEADING.values(), record.MAY_DIFFER, *record.MOVED_BACK.split("{}")):
+        assert sentence not in template
 
 
 def test_a_records_upload_shows_its_version_once(client, conn, data_dir):

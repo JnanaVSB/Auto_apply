@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
-from app.config import PROJECT_DIR, AIRole, AISettings, ConfigError, CustomMember, load_config
+from app.config import PROJECT_DIR, AIRole, AISettings, ConfigError, CustomMember, ExportSettings, load_config
 
 FAKE_VALUE = "fake-private-value-123"
 
@@ -139,6 +140,43 @@ def test_without_them_the_phone_book_is_monthly_at_one_request_per_second(tmp_pa
     config = load_config(write(tmp_path, "data_dir: data\n"))
     assert (config.phonebook_every_days, config.requests_per_second, config.tracker_stale_days) == (30, 1, 21)
     assert (config.gmail_lookback_days, config.gmail_every_minutes) == (60, 30)
+
+
+@pytest.mark.parametrize("days", [0, 1, 365])
+def test_the_export_schedule_takes_0_to_365_days(tmp_path, days):
+    config = load_config(write(tmp_path, f"data_dir: data\nexport:\n  every_days: {days}\n"))
+    assert config.export.every_days == days
+
+
+@pytest.mark.parametrize("value", ["-1", "366", "1.5", "7.0", '"7"', "true", "null", "[7]", ".inf", "1e2"])
+def test_the_export_schedule_refuses_anything_else_and_names_the_setting(tmp_path, value):
+    with pytest.raises(ConfigError, match=r"export\.every_days"):
+        load_config(write(tmp_path, f"data_dir: data\nexport:\n  every_days: {value}\n"))
+
+
+def test_an_unknown_export_setting_is_refused_without_showing_its_value(tmp_path):
+    with pytest.raises(ConfigError, match=r"export\.fodler: Extra inputs") as refused:
+        load_config(write(tmp_path, f"data_dir: data\nexport:\n  fodler: {FAKE_VALUE}\n"))
+    assert FAKE_VALUE not in str(refused.value)
+
+
+def test_without_an_export_section_nothing_is_chosen_and_the_schedule_is_off(tmp_path):
+    assert load_config(write(tmp_path, "data_dir: data\n")).export == ExportSettings(folder="", every_days=0)
+    assert load_config(PROJECT_DIR / "config.example.yaml").export == ExportSettings()  # as shipped: off, no folder
+
+
+@pytest.mark.parametrize("folder", ["/", "..", "relative/path", f"{PROJECT_DIR}/data"])
+def test_a_bad_export_folder_never_stops_the_whole_app(tmp_path, folder):
+    """The folder is only a string here: the export's own check refuses it, and the rest of the app carries on."""
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({"data_dir": "data", "export": {"folder": folder}}), encoding="utf-8")
+    assert load_config(path).export.folder == folder
+
+
+@pytest.mark.parametrize("value", ["123", "null", "[a]", "{a: b}"])
+def test_an_export_folder_that_isnt_text_is_refused(tmp_path, value):
+    with pytest.raises(ConfigError, match=r"export\.folder"):
+        load_config(write(tmp_path, f"data_dir: data\nexport:\n  folder: {value}\n"))
 
 
 def test_scoring_settings_have_defaults_and_limits(tmp_path):

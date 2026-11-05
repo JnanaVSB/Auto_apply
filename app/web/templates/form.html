@@ -35,10 +35,10 @@
   {% endif %}
 
   {% if record %}
-  <h3>{{ "What was sent" if record.how == "browser" else "What the app prepared (you applied by hand)" }}</h3>
-  {% if record.how != "browser" %}<p class="muted">The site may hold different answers if you changed them there.</p>{% endif %}
+  <h3>{{ heading }}</h3>
+  {% if record.how != "browser" %}<p class="muted">{{ may_differ }}</p>{% endif %}
   <p>Applied {{ record.submitted_on }} at <code class="address">{{ record.address }}</code></p>
-  {% if moved_back %}<p class="error">Your card was moved back on {{ moved_back }}, after this record.</p>{% endif %}
+  {% if moved_back %}<p class="error">{{ moved_back }}</p>{% endif %}
   <table class="jobs">
     <thead><tr><th>Question</th><th>Answer</th><th>From</th></tr></thead>
     <tbody>

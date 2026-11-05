@@ -353,5 +353,6 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
         name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
     }
     ai |= {"evaluator": evaluator} if evaluator else {}
-    kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending", "council")}  # on other pages
+    # on other pages
+    kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending", "council", "export")}
     return settings | {name: section for name, section in {"scoring": scoring, "ai": ai, **kept}.items() if section}

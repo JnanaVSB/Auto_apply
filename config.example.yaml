@@ -90,3 +90,9 @@ council:
   end: "08:00"
   any_time: false  # true: new jobs start at any time
   daily_jobs: 20  # new jobs a day (1 to 200); your own presses count too, but are never held back
+
+# Export: your applications as plain, unencrypted files in a folder you choose on Settings → Export. Nothing is exported
+# until you ask.
+export:
+  folder: ""  # full path; empty until you choose one on Settings → Export
+  every_days: 0  # 0 = off, 1 to 365

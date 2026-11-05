@@ -235,6 +235,13 @@ class DocumentSettings(BaseModel):
     one_page: bool = True  # the resume must fit on one page; a longer PDF is marked "over one page"
 
 
+class ExportSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    folder: str = ""  # full path; empty until you choose one. Only text here: the export checks it before each run
+    every_days: Annotated[int, Field(ge=0, le=365, strict=True)] = 0  # dashboard schedule; 0 = off
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -253,6 +260,7 @@ class Config(BaseModel):
     documents: DocumentSettings = DocumentSettings()
     spending: SpendingSettings = SpendingSettings()
     council: CouncilSettings = CouncilSettings()
+    export: ExportSettings = ExportSettings()
 
     @field_validator("gmail_every_minutes")
     @classmethod

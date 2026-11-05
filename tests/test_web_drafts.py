@@ -475,6 +475,49 @@ def test_the_box_shows_the_councils_notes_truth_checker_first(client, conn, job)
     assert "No reply from the Writer: TC-1 (must)" in text and "the app renumbered: TC-1 → agree" in text
 
 
+def test_the_notes_read_only_the_last_round_and_each_members_newest_turn(conn, job):
+    found = council_version(conn, job, agreed=0, round_=2)
+    older = {"id": "TC-1", "where": "E1", "severity": "must", "problem": "Round one's.", "fix": "", "quote": ""}
+    newer = older | {"id": "TC-2", "problem": "Round two's."}
+    with conn:
+        conn.execute("UPDATE preparations SET council = ? WHERE id = ?", (json.dumps({
+            "members": {name: {} for name in ("hiring", "truth", "editor", "x1")}, "names": {"x1": "Recruiter"}}),
+            found))  # fmt: skip
+        conn.execute(ANSWER, (found, 1, "truth", 0, "direct", "done", review([older]), None))
+        conn.execute(ANSWER, (found, 1, "writer", 0, "direct", "done", json.dumps({"draft": {
+            "responses": [{"objection": "TC-1", "action": "fixed", "why": "Old."}]}}), None))  # fmt: skip
+        conn.execute(ANSWER, (found, 2, "truth", 0, "direct", "done", review([older]), None))
+        conn.execute(ANSWER, (found, 2, "truth", 1, "direct", "done", review([newer], votes=[
+            {"objection": "HM-1", "agree": False, "why": "No."}]), None))  # fmt: skip
+        conn.execute(ANSWER, (found, 2, "hiring", 0, "direct", "failed", None, None))
+        conn.execute(ANSWER, (found, 2, "x1", 0, "batch", "sent", None, None))
+    notes = drafts.runs.notes(conn, drafts.runs.latest(conn, job))
+    assert notes["round"] == 2 and notes["replies"] == [] and notes["missed"] == [] and notes["renumbered"] == []
+    assert notes["votes"] == {"HM-1": [("Truth checker", False, "No.")]}
+    assert [(member["name"], member["truth"], member["state"]) for member in notes["members"]] == [
+        ("Truth checker", True, "done"), ("Hiring manager", False, "failed"), ("Writing editor", False, "waiting"),
+        ("Recruiter", False, "waiting"),
+    ]  # fmt: skip
+    assert notes["members"][0]["answer"]["objections"] == [newer]
+    assert notes["members"][1]["answer"] is None
+
+
+def test_a_version_by_the_writer_alone_has_no_notes(client, conn, job):
+    version(conn, job)
+    assert drafts.runs.notes(conn, drafts.runs.latest(conn, job)) is None and drafts.runs.notes(conn, None) is None
+    assert "<strong>Truth checker</strong>" not in client.get(f"/jobs/{job}/preparation").text
+
+
+def test_a_letters_notes_come_from_its_own_version(conn, job):
+    letter_version(conn, job)
+    letter = drafts.runs.latest(conn, job, drafts.runs.LETTER)["id"]
+    with conn:
+        conn.execute("UPDATE preparations SET council = ? WHERE id = ?", (COUNCIL, letter))
+        conn.execute(ANSWER, (letter, 1, "truth", 0, "direct", "done", review(), None))
+    found = drafts.council(conn, job)
+    assert found["council_notes"] is None and found["letter_notes"]["members"][0]["name"] == "Truth checker"
+
+
 def test_no_agreement_shows_the_objected_entries_and_the_wording_switch(client, conn, job, monkeypatch):
     found = council_version(conn, job, agreed=0, draft=DRAFT | {"objected": [["profile", "exp-1"]]})
     with conn:
