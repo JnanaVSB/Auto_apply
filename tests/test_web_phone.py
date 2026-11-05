@@ -2,14 +2,18 @@
 
 import html
 import re
+import stat
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from helpers import ADDRESS, PASSWORD, csrf, log_in
+from starlette.exceptions import HTTPException
 
-from app.config import Config
+from app import config
+from app.config import Config, load_config
 from app.fetch import Fetcher
 from app.web import __main__ as web_command
 from app.web import main, preparer, security
@@ -33,6 +37,8 @@ NOT_TAILNET = (
     "Open this from a phone signed in to your Tailscale. On the laptop itself, use the address shown in the terminal."
 )
 EXPIRED = "This page has expired; reload it and try again."
+RESTART = "Saved. Restart the dashboard to use it."
+SETTINGS = "/settings/phone"
 REFUSED_ROUTES = [
     {"Host": HOST} | FUNNEL,
     {"Host": HOST} | IDENTITY | FORWARDED | FUNNEL,
@@ -337,3 +343,170 @@ def test_the_laptops_logout_cookie_is_as_today(either):
     assert re.fullmatch(
         rf'{security.COOKIE}=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax', response.headers["Set-Cookie"]
     )
+
+
+@pytest.fixture
+def settings(tmp_path, data_dir, monkeypatch):
+    """A temporary settings file with no phone address; `write` puts one in. Never the real data/config.yaml."""
+    path = tmp_path / "config.yaml"
+    path.write_text(f"data_dir: {data_dir}\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_PATH", path)  # the whole app reads this file
+    return path
+
+
+def write(settings, address):
+    settings.write_text(f'{settings.read_text(encoding="utf-8")}phone_address: "{address}"\n', encoding="utf-8")
+
+
+def save(client, typed):
+    data = {"phone_address": typed, "csrf_token": csrf(client)}
+    return client.post(SETTINGS, data=data, follow_redirects=False)
+
+
+def box(response):
+    """What the address box holds, as the page's own text."""
+    return re.search(r'<input name="phone_address"[^>]* value="([^"]*)"', response.text)[1]
+
+
+def test_the_phone_page_needs_a_login_and_a_save_needs_the_token(laptop, phone, settings):
+    before = settings.read_bytes()
+    for client in (laptop, phone):
+        assert client.get(SETTINGS, follow_redirects=False).headers["location"] == "/login"
+    data = {"phone_address": PHONE}
+    assert laptop.post(SETTINGS, data=data, follow_redirects=False).headers["location"] == "/login"
+    log_in(laptop)
+    refused = laptop.post(SETTINGS, data=data, follow_redirects=False)
+    assert (refused.status_code, EXPIRED in words(refused)) == (403, True)
+    assert settings.read_bytes() == before
+
+
+def test_the_laptop_saves_the_address_for_good_and_a_reload_sends_nothing_again(serve, settings):
+    laptop = serve("")
+    log_in(laptop)
+    page = laptop.get(SETTINGS)
+    assert (page.status_code, box(page)) == (200, "")
+    assert "docs/phone-setup.md" in page.text and PHONE in page.text  # the guide, and the made-up example
+    response = save(laptop, PHONE)
+    assert (response.status_code, response.headers["location"]) == (303, SETTINGS)
+    assert load_config().phone_address == PHONE
+    assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+    assert box(laptop.get(SETTINGS)) == PHONE
+
+
+@pytest.mark.parametrize("typed", [PHONE.upper(), f"{PHONE}/", f"  {PHONE}  ", f"\t{PHONE.upper()}/\n"])
+def test_an_address_pasted_from_a_browser_is_cleaned(laptop, settings, typed):
+    log_in(laptop)
+    assert save(laptop, typed).status_code == 303
+    assert box(laptop.get(SETTINGS)) == PHONE
+
+
+@pytest.mark.parametrize(
+    "typed", ['"><script>alert(1)</script>', "http://laptop.tail0000.ts.net", "https://evil.example", "x\ny", "a\x00b"]
+)
+def test_a_wrong_address_is_refused_and_the_old_one_stays(laptop, settings, typed):
+    write(settings, PHONE)
+    before = settings.read_bytes()
+    log_in(laptop)
+    response = save(laptop, typed)
+    assert (response.status_code, "must look like" in response.text) == (400, True)
+    assert settings.read_bytes() == before
+    assert html.unescape(box(response)) == typed.strip()
+    assert "<script>alert" not in response.text
+    assert response.text.count(html.escape(typed)) <= 1  # in the box, never in the reason
+
+
+def test_saving_it_empty_turns_it_off(laptop, settings):
+    write(settings, PHONE)
+    log_in(laptop)
+    assert save(laptop, "   ").status_code == 303
+    assert load_config().phone_address == ""
+    assert box(laptop.get(SETTINGS)) == ""
+
+
+@pytest.mark.parametrize(
+    ("running", "saved", "shown"),
+    [
+        ("", PHONE, True),
+        (PHONE, "", True),
+        (PHONE, f"{PHONE}:8443", True),
+        (PHONE, PHONE, False),
+        (PHONE, f"{PHONE.upper()}/", False),
+        ("", "", False),
+    ],
+)
+def test_the_restart_note_shows_only_when_the_saved_address_is_not_the_running_one(
+    serve, settings, running, saved, shown
+):
+    write(settings, saved)
+    dashboard = serve(running)
+    log_in(dashboard)
+    assert (RESTART in dashboard.get(SETTINGS).text) is shown
+
+
+def test_a_new_address_does_nothing_until_a_restart(serve, settings):
+    dashboard = serve("")
+    log_in(dashboard)
+    assert save(dashboard, PHONE).status_code == 303
+    assert dashboard.app.state.phone_host == ""
+    response = dashboard.get("/login", headers={"Host": HOST} | IDENTITY)
+    assert (response.status_code, UNKNOWN_PHONE in words(response)) == (400, True)
+
+
+def test_the_phone_sees_the_address_but_cannot_change_it(phone, settings):
+    write(settings, PHONE)
+    before = settings.read_bytes()
+    cookie, session = phone_login(phone)
+    page = phone.get(SETTINGS, headers=cookie)
+    assert (page.status_code, PHONE in page.text, "Change it on the laptop" in page.text) == (200, True, True)
+    assert 'name="phone_address"' not in page.text and f'action="{SETTINGS}"' not in page.text
+    for typed in ("", "https://other.tail0000.ts.net"):
+        data = {"phone_address": typed, "csrf_token": session.csrf}
+        response = phone.post(SETTINGS, data=data, headers=cookie | ORIGIN, follow_redirects=False)
+        assert (response.status_code, "Change the phone address on the laptop." in words(response)) == (403, True)
+    assert settings.read_bytes() == before
+
+
+def test_laptop_only_refuses_only_on_the_phone_address():
+    assert security.laptop_only(SimpleNamespace(state=SimpleNamespace(remote=False)), "Not here.") is None
+    with pytest.raises(HTTPException) as refusal:
+        security.laptop_only(SimpleNamespace(state=SimpleNamespace(remote=True)), "Not here.")
+    assert (refusal.value.status_code, refusal.value.detail) == (403, "Not here.")
+
+
+@pytest.mark.parametrize("broken", ["data_dir: [\n", "surprise: 1\n"])
+def test_a_broken_settings_file_is_a_plain_problem_on_the_page(laptop, settings, broken):
+    settings.write_text(broken, encoding="utf-8")
+    log_in(laptop)
+    page = laptop.get(SETTINGS)
+    assert (page.status_code, 'class="error"' in page.text) == (200, True)
+    assert "Something went wrong" not in page.text and RESTART not in page.text
+    assert save(laptop, PHONE).status_code == 400
+    assert settings.read_text(encoding="utf-8") == broken
+
+
+def test_a_wrong_address_typed_into_the_file_is_shown_and_can_be_put_right(laptop, settings):
+    write(settings, "http://laptop.tail0000.ts.net")
+    log_in(laptop)
+    page = laptop.get(SETTINGS)
+    assert (page.status_code, "must look like" in page.text, box(page)) == (200, True, "")
+    assert save(laptop, PHONE).status_code == 303
+    assert load_config().phone_address == PHONE
+
+
+def test_settings_has_one_link_to_the_phone_page_on_both_addresses(laptop, phone, settings):
+    cookie, _ = phone_login(phone)
+    log_in(laptop)
+    for page in (laptop.get("/settings"), phone.get("/settings", headers=cookie)):
+        assert page.text.count(f'href="{SETTINGS}"') == 1
+
+
+def test_the_login_page_says_where_to_reset_a_forgotten_password(either):
+    reset = "<code>python -m app.web reset-password</code>."
+    assert f'<p class="hint">Forgot it? Stop the dashboard and run {reset}</p>' in either.get("/login").text
+
+
+def test_the_phones_login_page_says_the_reset_is_on_the_laptop(phone):
+    reset = "<code>python -m app.web reset-password</code>."
+    for page in (phone.get("/login"), log_in_with(phone, "wrong guess", ORIGIN)):
+        assert f"Forgot it? Reset it on the laptop: stop the dashboard and run {reset}" in page.text
+        assert "Forgot it? Stop the dashboard" not in page.text

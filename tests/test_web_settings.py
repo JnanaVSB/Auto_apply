@@ -37,6 +37,19 @@ def client(client, settings_file):
     return client
 
 
+def test_saving_settings_keeps_the_phone_address_and_never_sets_it(client, settings_file):
+    settings_file.write_text(
+        f"{settings_file.read_text(encoding='utf-8')}phone_address: https://laptop.tail0000.ts.net\n", encoding="utf-8"
+    )
+    assert client.post("/settings", data=form(phone_address="") | {"csrf_token": csrf(client)}).status_code == 200
+    assert load_config().phone_address == "https://laptop.tail0000.ts.net"
+
+
+def test_saving_settings_adds_no_phone_address(client, settings_file):
+    assert client.post("/settings", data=form() | {"csrf_token": csrf(client)}).status_code == 200
+    assert "phone_address" not in settings_file.read_text(encoding="utf-8")
+
+
 def form(**changes):
     values = {
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",

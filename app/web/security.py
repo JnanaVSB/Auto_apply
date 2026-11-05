@@ -9,6 +9,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+
 SCRYPT = {"n": 2**15, "r": 8, "p": 1}  # about 32 MB and 0.1 s per check, so guessing is slow
 SCRYPT_MAXMEM = 64 * 2**20
 IDLE_SECONDS = 30 * 60
@@ -103,6 +106,12 @@ class Logins:
 
 def cookie_name(remote: bool) -> str:
     return PHONE_COOKIE if remote else COOKIE
+
+
+def laptop_only(request: Request, refusal: str) -> None:
+    """Refused on the phone address: for what must be done on the laptop itself."""
+    if request.state.remote:
+        raise HTTPException(403, refusal)
 
 
 def token_matches(sent: str | None, session: Session) -> bool:

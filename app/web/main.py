@@ -32,6 +32,7 @@ from app.web import (
     emails,
     gmail_settings,
     look,
+    phone_settings,
     pilot,
     prepare,
     queries,
@@ -378,6 +379,7 @@ def create_app(
     writer_settings.add_routes(app, _page)
     council_settings.add_routes(app, _page)
     gmail_settings.add_routes(app, _page)
+    phone_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)

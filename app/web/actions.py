@@ -354,4 +354,6 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
     }
     ai |= {"evaluator": evaluator} if evaluator else {}
     kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending", "council")}  # on other pages
+    if "phone_address" in old:  # on its own page
+        settings["phone_address"] = old["phone_address"]
     return settings | {name: section for name, section in {"scoring": scoring, "ai": ai, **kept}.items() if section}
