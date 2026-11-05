@@ -1,0 +1,65 @@
+{# The job box's Application form part: loaded by the job page, and sent back by Read the form / Read again. #}
+<section class="found" id="form-part">
+  <h2>Application form</h2>
+  {% if found %}
+  <p class="muted">Read {{ read_on }} from {{ read_from }}. Nothing is sent to the site from here.</p>
+  {% if found.problem %}<p class="error">{{ found.problem }}</p>{% endif %}
+  {% elif elsewhere %}
+  <p class="muted">{{ elsewhere }}</p>
+  {% elif waiting %}
+  <p class="muted">{{ waiting }}</p>
+  {% endif %}
+  {% if failed %}<p class="error" role="alert">{{ failed }}</p>{% endif %}
+  {% if note %}<p class="muted" role="status">{{ note }}</p>{% endif %}
+  {% if readable %}
+  <form method="post" action="/jobs/{{ job_id }}/form/read" hx-post="/jobs/{{ job_id }}/form/read" hx-target="#form-part" hx-swap="outerHTML" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit">{{ "Read again" if found else "Read the form" }}</button>
+  </form>
+  {% endif %}
+
+  {% if found %}
+  {% for warning in found.warnings %}<p class="error">{{ warning }}</p>{% endfor %}
+
+  {% if found.open %}
+  <h3>Decision required ({{ found.open }})</h3>
+  <ul class="reasons">
+    {% for line, _ in shown if line.status == "decide" %}
+    <li><span class="mark warn">{{ decisions[line.decision] }}</span> {{ line.field.label }}{% if line.note %} <span class="muted">({{ line.note }})</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% set left = shown | selectattr("0.status", "equalto", "left") | list %}
+  {% if left %}
+  <h3>Left for you</h3>
+  <ul class="reasons">
+    {% for line, _ in left %}
+    <li><span class="mark warn">{{ line.note }}</span> {{ line.field.label }}{% if line.field.help %}<br><span class="muted">{{ line.field.help }}</span>{% endif %}
+      <br><span class="muted">You tick this yourself in the window.</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>What would be filled in</h3>
+  <table class="jobs">
+    <thead><tr><th>Question</th><th>Answer</th><th>From</th></tr></thead>
+    <tbody>
+    {% for line, value in shown %}
+    <tr>
+      <td>{{ line.field.label }}{% if line.field.required %} <span class="mark">required</span>{% endif %}
+        {% if line.field.kind == "unknown" %} <span class="mark warn">a kind of box the app can't fill</span>{% endif %}</td>
+      <td>{% if line.status == "fill" %}{{ value }}
+        {% elif line.status == "empty" %}<span class="muted">left empty</span>
+        {% elif line.status == "write" %}<span class="muted">to be written (Write answers comes next)</span>
+        {% elif line.status == "left" %}<span class="muted">you tick this yourself</span>
+        {% else %}<span class="error">{{ decisions[line.decision] }}</span>{% endif %}
+        {% if line.note %}<br><span class="muted">{{ line.note }}</span>{% endif %}</td>
+      <td class="muted">{{ line.source if line.field.kind != "file" else "" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if hidden %}<p class="muted">{{ hidden }} hidden box{{ "es" if hidden != 1 }}, never filled.</p>{% endif %}
+  {% endif %}
+</section>

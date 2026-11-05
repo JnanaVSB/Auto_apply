@@ -36,6 +36,7 @@ from app.web import (
     prepare,
     queries,
     security,
+    submit,
     tracker,
     writer_settings,
 )
@@ -361,6 +362,7 @@ def create_app(
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
+    submit.add_routes(app, _page, data_dir)
     look.add_routes(app)
     tracker.add_routes(app, _page, data_dir)
     return app

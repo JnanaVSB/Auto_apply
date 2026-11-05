@@ -20,7 +20,7 @@ from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import CONTROL, ResumeError, from_latex, read_latex
 from app.scoring import ready
-from app.web import actions, drafts, queries
+from app.web import actions, drafts, queries, submit
 
 CHOICES = {  # the questionnaire's drop-down choices
     "STATUSES": questionnaire.STATUSES, "GENDERS": questionnaire.GENDERS, "RACES": questionnaire.RACES,
@@ -167,10 +167,11 @@ def add_routes(
         uses = {job_id: writer_sources.names(offered, chosen[job_id]) for job_id in ids}
         missing = {job_id: writer_sources.unconfirmed(offered, chosen[job_id]) for job_id in ids}
         states = {job_id: drafts.state(conn, data_dir, job_id) for job_id in ids}
+        forms = {job_id: found.open for job_id in ids if (found := submit.preview(conn, data_dir, job_id))}
         skipped = request.query_params.get("skipped", "")
         return page(
             request, "ready.html", listing=listing, view=view, states=states, uses=uses, missing=missing,
-            labels=runs.LABELS,
+            labels=runs.LABELS, forms=forms,
             skipped=int(skipped) if queries.PAGE_NUMBER.fullmatch(skipped) else None,
             problem=PROBLEMS.get(request.query_params.get("problem", "")),
         )  # fmt: skip

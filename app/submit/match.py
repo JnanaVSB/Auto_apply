@@ -15,7 +15,7 @@ from app.documents import pdf
 from app.questionnaire import DISABILITY, MAX_PAIRS, MONTH, NO_ANSWER, RACES, SECTIONS, VETERAN, QuestionnaireError
 from app.submit import Field, Form
 
-STATUSES = ("fill", "empty", "hidden", "write", "decide")
+STATUSES = ("fill", "empty", "hidden", "write", "decide", "left")  # left: you tick it yourself in the window
 DECISIONS = {  # the "Decision required" reasons, as the preview words them
     "unknown": "Unknown question", "non_pdf": "Non-PDF upload", "choose_file": "A file you need to choose",
     "consent": "A promise or consent", "cover_letter": "Cover letter required",
@@ -290,7 +290,9 @@ class _Matcher:
             return None
         about = f"{clean(field.key)} {words}"
         kind, name = next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(about)), ("", "consent"))
-        choice = self.consents.get(kind, "ask") if kind and kind not in ALWAYS_ASK else "ask"  # "": no known kind
+        if kind in ALWAYS_ASK:  # an AI-use promise or an arbitration agreement: you tick it yourself, never the app
+            return Line(field, "left", note=name)
+        choice = self.consents.get(kind, "ask") if kind else "ask"  # "": no known kind
         if choice == "decline" and not field.required:
             return Line(field, "empty", note=name)
         if choice == "accept" and (value := self._tick(field)):

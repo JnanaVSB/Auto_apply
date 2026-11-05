@@ -337,8 +337,8 @@ def test_a_remembered_consent_is_given_and_otherwise_asked(asked, kind):
         ("I agree to resolve any dispute through arbitration", "arbitration", "arbitration"),
     ],
 )
-def test_ai_use_and_arbitration_are_always_yours_to_decide(label, kind, name):
-    assert said(line(field(label, "consent", True), consents={kind: "accept"})) == ("decide", "consent", name)
+def test_ai_use_and_arbitration_are_always_left_for_you_to_tick(label, kind, name):
+    assert said(line(field(label, "consent", True), consents={kind: "accept"})) == ("left", "", name)
 
 
 def test_a_declined_consent_is_left_empty_unless_the_form_requires_it():
@@ -363,7 +363,7 @@ def test_a_saved_answer_never_answers_ai_use_or_arbitration(kind):
     ]:
         asked = field(label, kind, choices=YES_NO if kind == "single" else ())
         saved = ANSWERS | {"more": [{"question": label, "answer": "Yes"}]}
-        assert said(line(asked, saved)) == ("decide", "consent", name)
+        assert said(line(asked, saved)) == ("left", "", name)
 
 
 def test_a_saved_answer_may_answer_a_consent_of_no_known_kind():
