@@ -313,5 +313,7 @@ def test_the_manifest_is_allowed_and_everything_else_stays_shut(client):
     refused = client.get("/login", headers={"Host": "attacker.example:8765"})
     log_in(client)
     for response in (client.get("/"), client.get("/static/app.css"), client.get("/nowhere"), refused):
-        policy = response.headers["Content-Security-Policy"].split("; ")
-        assert "manifest-src 'self'" in policy and "default-src 'none'" in policy
+        assert response.headers["Content-Security-Policy"] == (  # written out: any other change to it must fail here
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
+            "connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        )
