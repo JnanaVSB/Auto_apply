@@ -18,7 +18,7 @@ import yaml
 
 from app import collect, db, jobs
 from app import config as settings_file
-from app.config import AISettings, Config, ConfigError, ScoringSettings, load_config
+from app.config import AISettings, Config, ConfigError, ScoringSettings, SourceSettings, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import BOARD_NAME, SourceError, greenhouse
@@ -281,6 +281,9 @@ def settings_form() -> dict[str, str]:
         "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
     } | {name: str(raw.get(name, Config.model_fields[name].default)) for name in NUMBERS}  # defaults from Config
     form["gmail_read_all"] = "on" if raw.get("gmail_read_all", False) else "off"
+    form["hacker_news"] = (
+        "on" if sources.get("hacker_news", SourceSettings.model_fields["hacker_news"].default) else "off"
+    )
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
     scoring, defaults = raw.get("scoring") or {}, ScoringSettings()
@@ -341,6 +344,7 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
             ],
             "extra_boards": _lines(form.get("extra_boards", "")),
             "phonebook_lists": _lines(form.get("phonebook_lists", "")),
+            "hacker_news": form.get("hacker_news") == "on",
         },
         **{name: _whole(form.get(name, "")) for name in NUMBERS},
         "gmail_read_all": form.get("gmail_read_all") == "on",

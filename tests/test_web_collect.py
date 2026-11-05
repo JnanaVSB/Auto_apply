@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ACME, ADDRESS, LIST, FakeWeb, board_job, csrf, entry, log_in, one, settings
+from helpers import ACME, ADDRESS, LIST, NO_HN_COMMENTS, FakeWeb, board_job, csrf, entry, log_in, one, settings
 
 from app import collect, fetch, phonebook
 from app.fetch import Fetcher
@@ -28,7 +28,7 @@ def config(data_dir):
 
 @pytest.fixture
 def web():
-    return FakeWeb({LIST: [entry()], ACME: {"jobs": [board_job()]}})
+    return FakeWeb({LIST: [entry()], ACME: {"jobs": [board_job()]}} | NO_HN_COMMENTS)
 
 
 @pytest.fixture
@@ -207,6 +207,8 @@ def test_refresh_phone_book_runs_beside_the_dashboard_and_shows_its_summary(clie
     assert worker.lines[-1].startswith("Checked 3 names: 1 added")  # acme, then the same name on Lever and Ashby
     page = client.get("/collect").text
     assert "<td>partial</td>" in page  # Common Crawl is not in the fake web: tried again tomorrow
+    assert "to confirm on the Boards page" in page  # the history table shows the summary's last line: it holds both
+    assert "Boards from Hacker News so far: 0; 0 of your matching jobs came from them" in page
     assert one(conn, "SELECT result FROM phonebook WHERE board = 'greenhouse:acme'") == ("added",)
 
 

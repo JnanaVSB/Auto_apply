@@ -26,6 +26,9 @@ sources:
     - https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/.github/scripts/listings.json
     - https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/.github/scripts/listings.json
     - https://raw.githubusercontent.com/poteto/hiring-without-whiteboards/main/README.md
+  # The phone book also reads the company boards linked from Hacker News' monthly "Who is hiring?" threads.
+  # Only board names are kept, never what people wrote. false = off.
+  hacker_news: true
 
 # While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
 collect_every_hours: 0

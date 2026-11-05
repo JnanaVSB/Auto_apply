@@ -97,6 +97,12 @@ def test_the_example_settings_are_valid():
     config = load_config(PROJECT_DIR / "config.example.yaml")
     assert config.roles.keywords
     assert [listing.level for listing in config.sources.simplify_lists] == ["intern", "new grad"]
+    assert config.sources.hacker_news is True
+
+
+def test_hacker_news_is_true_or_false_and_nothing_else(tmp_path):
+    with pytest.raises(ConfigError, match="hacker_news"):
+        load_config(write(tmp_path, 'data_dir: data\nsources:\n  hacker_news: "false"\n'))
 
 
 @pytest.mark.parametrize(("value", "ok"), [("0", True), ("168", True), ("-1", False), ("169", False),
