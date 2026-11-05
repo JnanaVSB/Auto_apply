@@ -1,0 +1,8 @@
+{# What the forms on E-mails to check share; imported with context, as they need `csrf` and `labels`. #}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro label_select(chosen) %}
+  <label>It is <select name="label" required>
+    {% if chosen == "unclear" %}<option value="" selected disabled>Choose…</option>{% endif %}
+    {% for value in labels %}<option value="{{ value }}"{% if value == chosen %} selected{% endif %}>{{ value | capitalize }}</option>{% endfor %}
+  </select></label>
+{% endmacro %}

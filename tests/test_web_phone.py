@@ -10,11 +10,14 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADDRESS, PASSWORD, csrf, log_in
+from helpers import ADDRESS, PASSWORD, add_job, csrf, log_in
 from starlette.exceptions import HTTPException
 from test_gmail_client import FakeGoogle
+from test_tracker import version
+from test_web_emails import email
+from test_web_tracker import APPLIED_CARD
 
-from app import config
+from app import collect, config, tracker
 from app.config import Config, load_config
 from app.fetch import Fetcher
 from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
@@ -662,3 +665,152 @@ def test_the_phone_has_the_log_out_all_button_with_its_hint(phone, settings):
     assert (
         "If you lose your phone, first remove it in Tailscale, then press this. You'll log in again here too." in text
     )
+
+
+def applied_cards(conn, count):
+    with conn:
+        for _ in range(count):
+            job = add_job(conn, "Robotics Intern")
+            conn.execute(
+                "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, 'applied', '2026-11-01', ?)",
+                (job, collect.now()),
+            )
+
+
+def test_the_phone_pages_a_full_lane_with_a_link_to_the_next_100(phone, conn):
+    applied_cards(conn, 230)
+    cookie, _ = phone_login(phone)
+    first, second, third = (
+        phone.get(f"/tracker?all=applied&page={number}", headers=cookie).text for number in (1, 2, 3)
+    )
+    assert [len(APPLIED_CARD.findall(text)) for text in (first, second, third)] == [100, 100, 30]
+    assert '<a href="/tracker?all=applied&amp;page=2#lane-applied">Show the next 100</a>' in first
+    assert '<a href="/tracker?all=applied&amp;page=3#lane-applied">Show the next 100</a>' in second
+    assert "Show the next" not in third
+    assert not set(APPLIED_CARD.findall(first)) & set(APPLIED_CARD.findall(second))
+
+
+@pytest.mark.parametrize(
+    ("number", "cards"),
+    [("abc", 100), ("-1", 100), ("0", 100), ("²", 100), ("9" * 10, 100), ("999999999", 30), ("", 100)],
+)
+def test_a_wrong_page_number_on_the_phone_never_breaks_the_lane(phone, conn, number, cards):
+    applied_cards(conn, 130)
+    cookie, _ = phone_login(phone)
+    response = phone.get("/tracker", params={"all": "applied", "page": number}, headers=cookie)
+    assert (response.status_code, len(APPLIED_CARD.findall(response.text))) == (200, cards)
+
+
+def test_the_phone_s_normal_board_is_as_before(phone, conn):
+    applied_cards(conn, 130)
+    cookie, _ = phone_login(phone)
+    text = phone.get("/tracker?page=2", headers=cookie).text
+    assert len(APPLIED_CARD.findall(text)) == 30 and "Show all 130" in text and "Show the next" not in text
+
+
+def test_the_laptop_shows_a_full_lane_whole_whatever_the_page_with_the_setting_on_or_empty(either, conn):
+    applied_cards(conn, 130)
+    log_in(either)
+    text = either.get("/tracker?all=applied&page=2").text
+    assert len(APPLIED_CARD.findall(text)) == 130 and "Show the next" not in text
+
+
+PICKER = "/tracker/emails/abc123/picker"
+JOB_SELECT = '<select name="job" required>'
+HTMX = {"HX-Request": "true"}
+
+
+def many_cards(conn, count):
+    with conn:
+        for number in range(count):
+            job = add_job(conn, "Robotics Intern", company=f"Company {number}")
+            version(conn, job)
+
+
+def two_cards(conn):
+    with conn:
+        found = [
+            add_job(conn, title, company=company)
+            for company, title in (("Acme", "ML Intern"), ("Globex", "Data Scientist"))
+        ]
+        for job in found:
+            version(conn, job)
+    return found
+
+
+def nothing_inline(text):
+    assert not re.search(r"<script(?![^>]* src=)|<style| style=| on[a-z]+=", text)
+
+
+def test_the_phone_gets_the_list_without_the_job_lists(phone, conn):
+    many_cards(conn, 400)
+    for number in range(20):
+        email(conn, f"message{number}")
+    cookie, _ = phone_login(phone)
+    text = phone.get("/tracker/emails", headers=cookie).text
+    assert JOB_SELECT not in text and "Robotics Intern</option>" not in text
+    assert text.count('hx-trigger="toggle once"') == 20
+    assert '<details hx-get="/tracker/emails/message7/picker" hx-trigger="toggle once" hx-swap="beforeend">' in text
+    nothing_inline(text)
+
+
+def test_the_phone_s_picker_brings_the_job_list_of_that_e_mail(phone, conn):
+    many_cards(conn, 3)
+    email(conn, "abc123")
+    cookie, _ = phone_login(phone)
+    response = phone.get(PICKER, headers=cookie | HTMX)
+    assert (response.status_code, response.headers["Cache-Control"]) == (200, "no-store")
+    text = response.text
+    assert text.lstrip().startswith("<form") and "<html" not in text
+    assert 'action="/tracker/emails/abc123/link"' in text and "Which job" in text
+    assert JOB_SELECT in text and text.count("Robotics Intern</option>") == 3
+    nothing_inline(text)
+
+
+def test_the_picker_says_another_job_when_likely_cards_are_shown(phone, conn):
+    jobs = two_cards(conn)
+    email(conn, "abc123", candidates=f"[{jobs[0]}]")
+    cookie, _ = phone_login(phone)
+    page = phone.get("/tracker/emails", headers=cookie).text
+    assert "<summary>Another job</summary>" in page and "This is Acme · ML Intern" in page
+    assert "Another job" in phone.get(PICKER, headers=cookie).text
+
+
+def test_the_picker_answers_only_for_an_e_mail_waiting_on_the_list(phone, conn):
+    email(conn, "abc123", to_check=0)
+    cookie, _ = phone_login(phone)
+    for address in (PICKER, "/tracker/emails/nothing/picker", "/tracker/emails/not%20an%20id/picker"):
+        assert phone.get(address, headers=cookie).status_code == 404
+
+
+def test_the_picker_needs_a_login_like_every_page(phone, conn):
+    email(conn, "abc123")
+    assert phone.get(PICKER, follow_redirects=False).headers["location"] == "/login"
+    answer = phone.get(PICKER, headers=HTMX, follow_redirects=False)
+    assert (answer.status_code, answer.headers["HX-Redirect"]) == (204, "/login")
+
+
+def test_the_form_from_the_picker_links_the_e_mail_on_the_phone(phone, conn):
+    jobs = two_cards(conn)
+    email(conn, "abc123")
+    cookie, _ = phone_login(phone)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', phone.get(PICKER, headers=cookie).text)[1]
+    form = {"job": str(jobs[0]), "label": "interview", "csrf_token": token}
+    reply = phone.post("/tracker/emails/abc123/link", data=form, headers=cookie | ORIGIN, follow_redirects=False)
+    assert reply.headers["location"] == "/tracker/emails?done=moved" and tracker.stage(conn, jobs[0]) == "interview"
+
+
+def test_the_laptop_keeps_the_job_list_in_the_page_with_the_setting_on_or_empty(either, conn):
+    two_cards(conn)
+    email(conn, "abc123")
+    log_in(either)
+    text = either.get("/tracker/emails").text
+    assert "Globex · Data Scientist</option>" in text
+    assert "/picker" not in text and "toggle once" not in text
+    assert (
+        '  <form method="post" action="/tracker/emails/abc123/link" class="stacked">\n'
+        f'    <input type="hidden" name="csrf_token" value="{csrf(either)}">\n'
+        '    <label>Which job <select name="job" required>\n'
+        '      <option value="" selected disabled>Choose…</option>\n'
+    ) in text
+    nothing_inline(text)

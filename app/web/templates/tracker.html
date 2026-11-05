@@ -66,6 +66,9 @@
       {% endfor %}
     </ol>
     {% if lane.more %}<p><a href="/tracker?all={{ lane.stage }}#lane-{{ lane.stage }}">Show all {{ lane.count }}</a></p>{% endif %}
+    {%- if lane.next_page %}
+    <p><a href="/tracker?all={{ lane.stage }}&amp;page={{ lane.next_page }}#lane-{{ lane.stage }}">Show the next 100</a></p>
+    {%- endif %}
   </details>
   {% endfor %}
 </div>

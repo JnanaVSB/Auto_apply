@@ -1,0 +1,11 @@
+{# The "Which job" form: in the page on the laptop, fetched when opened on the phone. -#}
+{% from "email_fields.html" import csrf_field, label_select with context -%}
+<form method="post" action="/tracker/emails/{{ email.id }}/link" class="stacked">
+    {{ csrf_field() }}
+    <label>{{ "Another job" if email.candidates else "Which job" }} <select name="job" required>
+      <option value="" selected disabled>Choose…</option>
+      {% for card in cards %}<option value="{{ card.id }}">{{ card.company }} · {{ card.title }}</option>{% endfor %}
+    </select></label>
+    {{ label_select(email.label) }}
+    <button type="submit">Link</button>
+  </form>
