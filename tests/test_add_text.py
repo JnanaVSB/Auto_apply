@@ -13,7 +13,7 @@ from app.council import letter, reviewers, writer
 from app.documents.privacy import Shield
 from app.scoring import stage_b
 from app.sources import Job
-from app.web import main
+from app.web import actions, main
 
 pytestmark = pytest.mark.usefixtures("no_waiting")  # downloads never really wait
 
@@ -136,15 +136,21 @@ def test_the_same_text_again_changes_nothing(conn):
     assert changed(conn) == [0, 0, 0]
 
 
-@pytest.mark.parametrize(
-    "sources", [["simplify:Summer2027-Internships"], ["greenhouse:acme"], ["manual", "lever:acme"]]
-)
-def test_text_from_a_list_or_board_is_never_replaced_and_you_are_told(conn, sources):
+@pytest.mark.parametrize("sources", [["greenhouse:acme"], ["manual", "lever:acme"]])
+def test_text_from_a_board_is_never_replaced_and_you_are_told(conn, sources):
     with conn:
         add_job(conn, "ML Engineer", sources=sources, apply_url=LINK, description="From its source.")
     message = add(conn, "My own words.")
     assert description(conn) == "From its source."
-    assert "text was not changed" in message
+    assert message.endswith("Its text comes from its board or feed, so the text was not changed.")
+
+
+def test_a_paste_on_a_simplify_job_can_be_corrected(conn):
+    with conn:
+        add_job(conn, "ML Engineer", sources=["simplify:Summer2027-Internships"], apply_url=LINK)
+    assert add(conn, "First paste.").startswith("Text saved: ")
+    assert add(conn, "Corrected paste.").startswith("Text saved: ")
+    assert description(conn) == "Corrected paste."
 
 
 def test_a_saved_job_from_a_list_with_no_text_is_filled(conn):
@@ -178,7 +184,9 @@ def test_the_terminal_command_is_as_it_was(conn):
     assert description(conn) is None
 
 
-@pytest.mark.parametrize("link", ["https://[x", "http://[broken/path", "https://"])
+@pytest.mark.parametrize(
+    "link", ["https://[x", "http://[broken/path", "https://", "https://a..b/x", "ftp://a.example/x"]
+)
 def test_a_broken_link_is_said_not_a_crash(conn, link):
     with pytest.raises(CollectError, match="not a web link"):
         add(conn, "Text.", link=link)
@@ -277,6 +285,24 @@ def test_the_hint_is_a_sentence_of_its_own(page):
 def test_the_result_comes_before_the_form_so_a_refusal_shows_at_once(page):
     text = page(**form(job_text="x" * 20_001)).text
     assert text.index("at most 20,000 characters") < text.index('<form method="post" action="/add/job"')
+
+
+def test_a_closed_site_link_that_joined_another_saved_job_asks_for_nothing(page, conn):
+    with conn:
+        add_job(conn, "ML Engineer", company="Initech", match_key="initech|mlengineer|", locations="[]",
+                description="From its board.")  # fmt: skip
+    assert HINT not in page(**form(link="https://www.linkedin.com/jobs/view/1")).text
+
+
+def test_a_busy_database_keeps_the_form_and_the_text(page, conn):
+    conn.execute("BEGIN IMMEDIATE")  # a collection is saving
+    try:
+        response = page(**form(job_text="Every word of my paste."))
+    finally:
+        conn.rollback()
+    assert response.status_code == 200
+    assert actions.BUSY in response.text
+    assert ">Every word of my paste.</textarea>" in response.text
 
 
 def test_no_hint_when_text_is_given_or_saved_or_on_another_site(page):

@@ -25,6 +25,10 @@ ACCENT = re.compile(r"\\(?:['`^\"~=.]|[cvuHkr](?![A-Za-z])\s*)\{?([A-Za-z])\}?")
 LETTER = re.compile(r"\\(?:(l|o|ss|L|O|SS)|(a)a|(A)A)(?![A-Za-z])(?:\{\}|\s*)")  # \o -> o, \aa -> a: one word
 COMMAND = re.compile(rf"\\[A-Za-z@]+\*?(?:{OPTION})?")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # null and other invisible characters (keeps tabs, new lines)
+# ‹ and ›, in a job ad: "has <2 years" stays readable, and no tag gets out
+LOOK_ALIKES = str.maketrans("<>", "‹›")
+    "<>", "\u2039\u203a"
+)  # ‹ and ›, in a job ad: "has <2 years" stays readable, no tag gets out
 SPACES = re.compile(r"[ \t]+")
 
 

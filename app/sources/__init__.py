@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from app.resume import CONTROL
 
@@ -20,7 +20,9 @@ BOARD_HOSTS = {
 BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")  # also keeps the name safe to put into an API address
 JOB_ID = re.compile(r"[A-Za-z0-9-]+")
 # LinkedIn, Handshake, and Indeed with its country sites (indeed.co.uk, indeed.com.au, ...), with any subdomain
-CLOSED_SITE = re.compile(r"(.+\.)?(linkedin\.com|joinhandshake\.com|indeed\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2}))")
+CLOSED_SITE = re.compile(
+    r"(.+\.)?(linkedin\.(com|cn)|lnkd\.in|joinhandshake\.(com|co\.uk)|indeed\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2}))"
+)
 WORKPLACES = {"remote": "remote", "hybrid": "hybrid", "onsite": "on-site"}
 
 
@@ -84,18 +86,26 @@ def workplace(value: Any) -> str | None:
     return WORKPLACES.get(re.sub(r"[^a-z]", "", value.lower())) if isinstance(value, str) else None
 
 
+def host_of(url: str) -> str | None:
+    """The site an address reaches, read as a browser reads it ("" when it names none, None when it can't be read):
+    a backslash is a slash, and percent signs, full-width letters and other full stops still spell the same name."""
+    try:
+        host = urlsplit(url.strip().replace("\\", "/")).hostname or ""
+        return unquote(host).encode("idna").decode().rstrip(".")  # "simplify.jobs." reaches the same site
+    except (ValueError, UnicodeError):
+        return None
+
+
 def is_simplify_site(url: str) -> bool:
-    """True for any address on simplify.jobs, which the app must never open itself (its terms forbid it)."""
-    host = (urlsplit(url.strip()).hostname or "").rstrip(".")  # "simplify.jobs." reaches the same site
-    return host == "simplify.jobs" or host.endswith(".simplify.jobs")
+    """True for any address on simplify.jobs, which the app must never open itself (its terms forbid it), and for one
+    that can't be read."""
+    host = host_of(url)
+    return host is None or host == "simplify.jobs" or host.endswith(".simplify.jobs")
 
 
 def closed_site(url: str) -> bool:
     """True for a site the app never reads: you open it yourself. An address that can't be read counts as one."""
-    try:
-        host = (urlsplit(url.strip()).hostname or "").rstrip(".")
-    except ValueError:
-        return True
+    host = host_of(url)
     return not host or CLOSED_SITE.fullmatch(host) is not None
 
 

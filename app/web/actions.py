@@ -31,6 +31,7 @@ CANT_SAVE = (ConfigError, KeychainError, db.DatabaseError, collect.CollectError)
 CANT_READ = (FetchError, SourceError)  # "The job's board could not be read (…)."
 HAS_TEXT = "SELECT 1 FROM jobs WHERE id = ? AND description IS NOT NULL"
 NEEDS_TEXT = "The app never reads this site: paste the job's text here so it can be scored."
+BUSY = "The database is busy (a collection is saving). Try again in a moment."
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 # Whole numbers on the settings form
@@ -92,13 +93,17 @@ def add_job(
         with ADDING, closing(db.connect(data_dir)) as conn:
             message = collect.add(conn, fetcher, link, details=(company, title), text=text)
             job_id = queries.job_id_by_link(conn, link)
-            if closed_site(link) and not conn.execute(HAS_TEXT, (job_id,)).fetchone():
+            if job_id and closed_site(link) and not conn.execute(HAS_TEXT, (job_id,)).fetchone():
                 message = f"{message}. {NEEDS_TEXT}"
             return message, job_id
     except CANT_SAVE as error:
         return str(error), None
     except CANT_READ as error:
         return f"The job's board could not be read ({error}).", None
+    except sqlcipher3.OperationalError as error:
+        if "locked" not in str(error):
+            raise
+        return BUSY, None  # said on the form, so what was typed stays
 
 
 def board_names(company: str) -> list[str]:

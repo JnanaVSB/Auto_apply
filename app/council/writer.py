@@ -14,7 +14,7 @@ from typing import NamedTuple
 from app.config import PROJECT_DIR
 from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check, restore
 from app.documents.tiles import Tile
-from app.resume import CONTROL
+from app.resume import CONTROL, LOOK_ALIKES
 
 SKILL_FILE = PROJECT_DIR / "skills" / "writer.md"
 DATA_RULE = """The job ad is between <job> and </job>, and the candidate's entries between <entries> and \
@@ -96,7 +96,6 @@ FACT_LABELS = {
 MARKER = re.compile(  # marker look-alikes in any text sent, yours or another model's
     r"<\s*(/?)\s*(job|entries|previous|feedback|council|draft|flags|debate|asked|discussion)\s*>", re.I
 )
-LOOK_ALIKES = str.maketrans("<>", "‹›")  # in the job ad: ‹ and ›
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 DASHES = re.compile(r"[‐-―-]+")
 LONG_DASH = re.compile(r"[‒–—―]|--")  # an AI's habit: never in your resume or letter (owner)

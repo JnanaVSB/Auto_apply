@@ -12,7 +12,7 @@ import sqlcipher3
 
 from app import llm
 from app.config import AIRole, ScoringSettings
-from app.resume import CONTROL
+from app.resume import CONTROL, LOOK_ALIKES
 from app.scoring.stage_a import Check
 
 INSTRUCTIONS = """You judge how well a job ad fits a candidate, for the candidate's own job search.
@@ -30,10 +30,8 @@ SHAPE = {
     "required": ["score", "reasons"],
     "additionalProperties": False,
 }
-MARKER = re.compile(r"<\s*(/?)\s*job\s*>", re.IGNORECASE)  # look-alikes of the markers, inside an ad
 MAX_REASONS, MAX_REASON = 3, 200
 NOT_ALLOWED = re.compile(r"https?:|www\.", re.IGNORECASE)  # links
-LOOK_ALIKES = str.maketrans("<>", "\u2039\u203a")  # ‹ and ›: "has <2 years" stays readable, never page code
 COPIED = 20  # a whole reason this long found word for word in the ad was copied from it
 ODD_SCORE = 85
 BY_HAND = ": check this job by hand"
@@ -57,7 +55,7 @@ class Score(NamedTuple):
 
 def message(resume: str, title: str, description: str | None) -> tuple[str, str]:
     """The text sent after the instructions, and the ad as the model sees it (markers inside it neutralised)."""
-    ad = MARKER.sub(lambda marker: f"[{marker[1]}job]", f"{title}\n{description or ''}".strip())
+    ad = f"{title}\n{description or ''}".strip().translate(LOOK_ALIKES)
     return f"Candidate's resume:\n{resume}\n\n<job>\n{ad}\n</job>", ad
 
 

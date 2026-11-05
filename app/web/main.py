@@ -63,7 +63,6 @@ FORM_LIMITS = {
 }
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
-BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
 SCHEDULE_CHECK_SECONDS = 60
@@ -128,7 +127,7 @@ def create_app(
             response = _error(request, refusal.status_code, refusal.detail)
         except Exception as error:  # never a crash report in the browser, nor job data in the terminal
             if isinstance(error, sqlcipher3.OperationalError) and "locked" in str(error):
-                response = _error(request, 503, BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
+                response = _error(request, 503, actions.BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
             else:
                 log.error("Unexpected error: %s", type(error).__name__)
                 response = _error(

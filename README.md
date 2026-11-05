@@ -284,7 +284,7 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 - If a posting links to the company's own Greenhouse, Lever or Ashby page, add that link on **Add**. The app reads the
   rest from the board.
 - Otherwise add the posting's link with the company and job title, and paste the ad's text into **Job text**, so the
-  job can be scored and prepared. You can paste it later too: add the same link again with the text.
+  job can be scored and prepared. You can paste it later too: add the link saved on the job again, with the text.
 - Apply on the site yourself.
 
 ## Privacy and security

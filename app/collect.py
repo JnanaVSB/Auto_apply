@@ -22,7 +22,7 @@ from app import db, jobs
 from app.config import Config, ConfigError, RoleSettings, SimplifyList, load_config
 from app.fetch import BLOCKED_HINT, COLLECT_HOSTS, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import Job, SourceError, is_simplify_site, plain_text, posting_of, simplify
+from app.sources import Job, SourceError, host_of, is_simplify_site, plain_text, posting_of, simplify
 from app.sources.boards import BOARDS
 
 LOCK_FILE = "collect-lock.db"  # held by a collection, or by a refresh except while it is paused
@@ -50,7 +50,8 @@ LINK_BOARD = """INSERT INTO sources (name, found_by) VALUES (?, 'simplify') ON C
     DO UPDATE SET misses = 0, retired_on = NULL WHERE retired_on IS NOT NULL AND ? > retired_on"""
 LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
 SAVED_BY_LINK = "SELECT id, company, title, description FROM jobs WHERE apply_url = ?"
-NOT_ADDED_BY_YOU = "SELECT 1 FROM job_sources WHERE job_id = ? AND source != 'manual'"
+# Simplify's lists never give a job's text, so only a board or a feed can have written it
+HAS_SOURCE_TEXT = "SELECT 1 FROM job_sources WHERE job_id = ? AND source != 'manual' AND source NOT LIKE 'simplify:%'"
 MAX_PASTED = 20_000  # characters of a job's text
 COUNT_MISS = """INSERT INTO sources (name, misses, found_by) VALUES (?, 1, 'you') ON CONFLICT (name)
     DO UPDATE SET misses = misses + 1 RETURNING misses"""  # only one of your extra_boards is new here
@@ -448,12 +449,7 @@ def add(
     `text` is the job's text pasted by the user, for such a link; a board's own text is better.
     """
     link = link.strip()
-    try:
-        parts = urlsplit(link)
-        readable = parts.scheme in ("http", "https") and parts.hostname
-    except ValueError:  # e.g. https://[x
-        readable = False
-    if not readable:
+    if not host_of(link) or not link.lower().startswith(("https://", "http://")):
         raise CollectError("That is not a web link; it must start with https://")
     if is_simplify_site(link):
         raise CollectError(
@@ -492,12 +488,12 @@ def add(
 
 
 def _add_text(conn: sqlcipher3.Connection, row: tuple, pasted: str) -> str:
-    """Pasted text for a saved job: it fills an empty job or replaces what you pasted, never a board's or a list's."""
+    """Pasted text for a saved job: it fills an empty job or replaces what you pasted, never a board's or a feed's."""
     job_id, company, title, description = row
     if not pasted or pasted == description:
         return f"Already saved: {company}, {title}"
-    if description and conn.execute(NOT_ADDED_BY_YOU, (job_id,)).fetchone():
-        return f"Already saved: {company}, {title}. Its text comes from its board or list, so the text was not changed."
+    if description and conn.execute(HAS_SOURCE_TEXT, (job_id,)).fetchone():
+        return f"Already saved: {company}, {title}. Its text comes from its board or feed, so the text was not changed."
     with conn:  # the job goes back through scoring, by the job_text_changed trigger
         conn.execute("UPDATE jobs SET description = ? WHERE id = ?", (pasted, job_id))
     return f"Text saved: {company}, {title}"
