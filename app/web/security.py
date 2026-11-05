@@ -19,7 +19,8 @@ COOKIE = "auto_apply_session"  # not the common "session": cookies are shared by
 SAFETY_HEADERS = {
     # only the dashboard's own files; no inline scripts, nothing from the internet, never inside another site's page
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
-    "font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "font-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+    "base-uri 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     # job sites are not told where you came from; "no-referrer" would also hide where a form came from, which the
