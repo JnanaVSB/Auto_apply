@@ -19,6 +19,7 @@ BOARD_HOSTS = {
 }
 BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")  # also keeps the name safe to put into an API address
 JOB_ID = re.compile(r"[A-Za-z0-9-]+")
+SURROGATE = re.compile("[\ud800-\udfff]")  # half a character: valid in JSON, but it can't be saved
 SAFE_HOST = re.compile(r"[a-z0-9._:-]*")  # what a host can hold once read; a browser refuses anything else
 # LinkedIn, Handshake, and Indeed with its country sites (indeed.co.uk, indeed.com.au, ...), with any subdomain
 CLOSED_SITE = re.compile(
@@ -53,6 +54,16 @@ class Job:
     date_posted: str | None = None  # YYYY-MM-DD
     listed: bool = True  # False when the source marks the job inactive
 
+    def __post_init__(self) -> None:
+        for name, value in vars(self).items():
+            setattr(self, name, _whole_characters(value))
+
+
+def _whole_characters(value: Any) -> Any:
+    if isinstance(value, str):
+        return SURROGATE.sub("", value)
+    return type(value)(map(_whole_characters, value)) if isinstance(value, list | tuple) else value
+
 
 def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[Job], int]:
     """Turn each entry into a job; return the jobs and how many broken entries were skipped.
@@ -65,7 +76,7 @@ def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[
     for entry in entries:
         try:
             job = to_job(entry)
-        except (AttributeError, KeyError, TypeError, ValueError):
+        except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError):
             skipped += 1
             continue
         if job is not None:
@@ -77,7 +88,7 @@ def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[
 
 def required_text(entry: dict, key: str) -> str:
     value = entry[key]
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not SURROGATE.sub("", value).strip():
         raise ValueError(f"{key} is empty")
     return value.strip()
 

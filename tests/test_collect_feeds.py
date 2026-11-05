@@ -1,5 +1,6 @@
 """Feeds in a collection: reading, closing, switching off. A fake web and a throwaway database, made-up jobs only."""
 
+import json
 from contextlib import closing
 from datetime import date
 
@@ -206,6 +207,57 @@ def test_a_fault_while_saving_a_feed_leaves_nothing_half_saved(conn, data_dir, m
         run(conn, data_dir, feed(listing()))
     assert one(conn, "SELECT count(*) FROM jobs") == (0,)
     assert one(conn, "SELECT count(*) FROM job_sources") == (0,)
+
+
+def test_a_reply_with_unusable_entries_closes_nothing_and_says_so(conn, data_dir):
+    three = [listing(f"https://remoteok.com/remote-jobs/{n}", f"ML Role {n}") for n in "abc"]
+    run(conn, data_dir, feed(*three))
+    lines, _ = run(conn, data_dir, feed(three[0], {"company": "No title"}, {"position": "No company"}))
+    assert ("Remote OK: 1 matching (0 new, 0 updated, 0 no longer available), 2 unusable entries skipped, "
+            "so nothing was closed") in lines  # fmt: skip
+    assert conn.execute("SELECT DISTINCT status FROM jobs").fetchall() == [("open",)]
+
+
+def test_one_unusable_entry_is_said_in_good_english(conn, data_dir):
+    lines, _ = run(conn, data_dir, feed(listing(), {"company": "No title"}))
+    assert "1 unusable entry skipped, so nothing was closed" in [line for line in lines if "Remote OK" in line][0]
+
+
+SURROGATE = "\ud800"
+
+
+def hostile(data):
+    """A reply holding a lone surrogate: valid JSON, but no text that can be saved."""
+    return httpx.Response(200, text=json.dumps(data))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"company": f"Acme{SURROGATE}"},
+        {"position": f"ML Engineer{SURROGATE}"},
+        {"location": f"Austin{SURROGATE}, TX"},
+        {"url": f"{LINK}{SURROGATE}"},
+    ],
+)
+def test_a_lone_surrogate_on_a_feed_stops_nothing(conn, data_dir, changes):
+    lines, _ = run(conn, data_dir, {remoteok.API: hostile([NOTICE, listing() | changes])})
+    assert "No sources failed." in lines
+    assert not [value for row in conn.execute("SELECT * FROM jobs") for value in row if SURROGATE in str(value)]
+
+
+def test_a_lone_surrogate_on_a_board_stops_nothing(conn, data_dir):
+    board = [BOARD_JOB | {"text": f"ML Engineer{SURROGATE}", "categories": {"location": f"Austin{SURROGATE}, TX"}}]
+    lines, _ = run(conn, data_dir, {LEVER: hostile(board)}, OFF, extra_boards=["lever:acme"])
+    assert "No sources failed." in lines
+    assert one(conn, "SELECT title FROM jobs") == ("ML Engineer",)
+
+
+def test_show_finds_a_job_by_its_feed_listing_after_a_board_took_over_the_link(conn, data_dir):
+    run(conn, data_dir, feed(listing()))
+    run(conn, data_dir, feed(listing()) | {LEVER: [BOARD_JOB]}, extra_boards=["lever:acme"])
+    assert one(conn, "SELECT apply_url FROM jobs") == ("https://jobs.lever.co/acme/l-1",)
+    assert "  - Remote OK: listed" in collect.show(conn, LINK).splitlines()
 
 
 def test_show_and_messages_name_the_feed(conn, data_dir):

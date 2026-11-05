@@ -100,7 +100,8 @@ python -m app.collect show "<job link>"
 ### Job feeds
 A feed is a job list read as one file, not a company board: [Remote OK](https://remoteok.com)'s public feed of its
 newest jobs is the first, on unless you switch it off in Settings. A job on a feed and on a company board is one job,
-matched by company and title, and the board decides: its details, its link, and whether the job is open. A job only on
+matched by company and title, and the board decides: its details, its link, and whether the job is open. A new posting
+joins only an open job you haven't hidden and aren't applying to; otherwise it shows as its own job. A job only on
 feeds is decided by them. Switching a feed off marks the jobs only it lists "feed turned off" at the next collection,
 and switching it on again reopens what it still lists; a job on your Tracker is left as it is. A job you add yourself
 is never merged into a job that is only on a feed. Each job from Remote OK links back to its listing on the job page.

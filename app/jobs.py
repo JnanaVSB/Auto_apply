@@ -63,23 +63,33 @@ SAVE_ENTRY = """INSERT INTO job_sources (source, source_job_id, job_id, listed, 
         ELSE job_sources.unlisted_on END"""  # the day it stopped being listed is kept on later runs
 UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
     unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
-# Only another source's job: one source's separate postings with the same title stay separate. A job you add stays
-# yours beside a job only on feeds, whose places are often empty just as yours are.
-SAME_PLACES = """SELECT id FROM jobs j WHERE match_key = ?
-    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?) AND (? != 'manual'
-        OR EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%'))"""
-# The oldest job with a company and title, whatever its places (see _same_name): for a feed, one it doesn't list yet;
-# for anything else, one on feeds and nothing else. By a range on match_key, so the index finds it.
-FEED_JOINS = """SELECT id FROM jobs WHERE match_key >= ? AND match_key < ?
-    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY id LIMIT 1"""
-JOINS_A_FEED = """SELECT id FROM jobs j WHERE match_key >= ? AND match_key < ?
-    AND NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%') ORDER BY id LIMIT 1"""
-ONLY_ON_FEEDS = "SELECT NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = ? AND source NOT LIKE 'feed:%')"
+# Not on the Tracker: no card, nothing sent, no finished resume (which is what puts a job in the Ready lane).
+NOT_ON_TRACKER = """NOT EXISTS (SELECT 1 FROM tracker WHERE job_id = {job})
+    AND NOT EXISTS (SELECT 1 FROM submissions WHERE job_id = {job})
+    AND NOT EXISTS (SELECT 1 FROM preparations WHERE job_id = {job} AND kind = 'resume' AND status = 'done')"""
+# A job a new posting may join without hiding it or rewriting a job with a record: open, wanted, not on the Tracker.
+FREE = f"j.status = 'open' AND j.not_interested = 0 AND {NOT_ON_TRACKER.format(job='j.id')}"
+ON_FEEDS_ONLY = "NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%')"
+NOT_ADDED_BY_YOU = "NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source = 'manual')"
+# Only another source's job: one source's separate postings with the same title stay separate. A job you add and a
+# job on feeds stay apart, whichever came first: both often have no places, and two visible jobs beat a hidden join.
+# A feed joins only a free job here too.
+SAME_PLACES = f"""SELECT id FROM jobs j INDEXED BY jobs_match_key WHERE match_key = :key
+    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = :source)
+    AND (:source != 'manual' OR NOT {ON_FEEDS_ONLY})
+    AND (:source NOT LIKE 'feed:%' OR ({FREE} AND {NOT_ADDED_BY_YOU}))"""  # noqa: S608 (fixed text)
+# The oldest free job with a company and title, whatever its places (see _same_name): for a feed, one it doesn't list
+# yet and you didn't add; for anything else, one on feeds and nothing else. By a range on match_key, on that index by
+# name: left to itself, SQLite would read every open job for each posting.
+FEED_JOINS = f"""SELECT id FROM jobs j INDEXED BY jobs_match_key WHERE match_key >= ? AND match_key < ?
+    AND {FREE} AND {NOT_ADDED_BY_YOU}
+    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY id LIMIT 1"""  # noqa: S608 (fixed text)
+JOINS_A_FEED = f"""SELECT id FROM jobs j INDEXED BY jobs_match_key WHERE match_key >= ? AND match_key < ?
+    AND {FREE} AND {ON_FEEDS_ONLY} ORDER BY id LIMIT 1"""  # noqa: S608 (fixed text)
+TAKES_THE_LINK = f"SELECT 1 FROM jobs j WHERE id = ? AND {FREE} AND {ON_FEEDS_ONLY}"  # noqa: S608 (fixed text)
 # A feed's listed entries, but for jobs on the Tracker: switching a feed off must not turn a card closed.
-OFF_THE_TRACKER = """SELECT source_job_id FROM job_sources s WHERE source = ? AND listed = 1
-    AND NOT EXISTS (SELECT 1 FROM tracker WHERE job_id = s.job_id)
-    AND NOT EXISTS (SELECT 1 FROM submissions WHERE job_id = s.job_id)
-    AND NOT EXISTS (SELECT 1 FROM preparations WHERE job_id = s.job_id AND kind = 'resume' AND status = 'done')"""
+OFF_THE_TRACKER = f"""SELECT source_job_id FROM job_sources s WHERE source = ? AND listed = 1
+    AND {NOT_ON_TRACKER.format(job="s.job_id")}"""  # noqa: S608 (fixed text)
 # Every source entry of the jobs `source` has. 'closed' is never set or changed here; it is left for a later phase.
 ENTRIES = """SELECT j.id, j.status, j.status_reason, s.listed, s.unlisted_on, s.unlisted_reason,
         s.source NOT LIKE 'simplify:%' AND s.source NOT LIKE 'feed:%',
@@ -265,9 +275,10 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
         "date_posted": job.date_posted,
     }
     new = job_id is None
-    if not new and _leads(job, url) and conn.execute(ONLY_ON_FEEDS, (job_id,)).fetchone()[0]:
-        # the application form is read from the company's own link, so a feed's link gives way
-        conn.execute("UPDATE jobs SET apply_url = ? WHERE id = ?", (url, job_id))
+    if not new and _leads(job, url) and conn.execute(TAKES_THE_LINK, (job_id,)).fetchone():
+        # the application form is read from the company's own link, so a feed's link gives way; its key goes with it,
+        # or a later source naming the same places would not find this job
+        conn.execute("UPDATE jobs SET apply_url = ?, match_key = ? WHERE id = ?", (url, match_key(job), job_id))
     if new:
         if not (job.listed and (chosen or wanted(job, roles))):
             return
@@ -328,7 +339,7 @@ def _find(conn: sqlcipher3.Connection, job: Job, url: str) -> int | None:
     for sql, values in (
         ("SELECT job_id FROM job_sources WHERE source = ? AND source_job_id = ?", (job.source, job.source_job_id)),
         ("SELECT id FROM jobs WHERE apply_url = ?", (url,)),
-        (SAME_PLACES, (match_key(job), job.source, job.source)),
+        (SAME_PLACES, {"key": match_key(job), "source": job.source}),
     ):
         row = conn.execute(sql, values).fetchone()
         if row:

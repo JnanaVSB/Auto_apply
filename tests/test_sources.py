@@ -5,14 +5,17 @@ import pytest
 
 from app.fetch import ALLOWED_HOSTS, Fetcher, FetchError
 from app.sources import (
+    Job,
     board_of,
     closed_site,
     day_from_timestamp,
     host_of,
     html_to_text,
     is_simplify_site,
+    parse_each,
     plain_text,
     posting_of,
+    required_text,
 )
 
 
@@ -273,3 +276,29 @@ def test_the_app_itself_refuses_the_closed_sites(url):
     with closing(Fetcher(httpx.MockTransport(lambda request: httpx.Response(200)))) as fetcher:
         with pytest.raises(FetchError, match="address not allowed"):
             fetcher.get_text(url)
+
+
+def test_a_job_drops_lone_surrogates_from_every_text():
+    bad = "x\ud800y"
+    job = Job(source=bad, source_job_id=bad, company=bad, title=bad, url=bad, locations=[bad],
+              place_checks=[(bad, bad)], terms=[bad], description=bad, salary=bad)  # fmt: skip
+    assert (job.company, job.locations, job.place_checks, job.terms) == ("xy", ["xy"], [("xy", "xy")], ["xy"])
+    assert (job.title, job.url, job.description, job.salary, job.source_job_id) == ("xy",) * 5
+
+
+def test_a_job_keeps_what_is_not_text():
+    job = Job(source="s", source_job_id="1", company="c", title="t", url="u", locations=[], listed=False)
+    assert (job.listed, job.description, job.locations) == (False, None, [])
+
+
+def test_an_entry_too_big_to_read_is_a_broken_entry():
+    def to_job(entry):
+        return float(entry)
+
+    assert parse_each([10**400, 1], to_job) == ([1.0], 1)
+
+
+@pytest.mark.parametrize("value", ["\ud800", " \ud800 ", "\ud800\udfff"])
+def test_text_of_nothing_but_broken_characters_counts_as_empty(value):
+    with pytest.raises(ValueError, match="company is empty"):
+        required_text({"company": value}, "company")

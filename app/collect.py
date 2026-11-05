@@ -113,7 +113,8 @@ def _unavailable(counts: jobs.Counts) -> str:
 
 def _describe(counts: jobs.Counts) -> str:
     text = f"{counts.kept:,} matching ({counts.new:,} new, {counts.updated:,} updated, {_unavailable(counts)})"
-    return text + (f", {_plural(counts.skipped, 'unusable entry')} skipped" if counts.skipped else "")
+    entries = "entry" if counts.skipped == 1 else "entries"
+    return text + (f", {counts.skipped:,} unusable {entries} skipped" if counts.skipped else "")
 
 
 def lock(data_dir: Path, file: str = LOCK_FILE, busy: str = BUSY) -> sqlite3.Connection:
@@ -244,11 +245,12 @@ class _Run:
         self.out(f"{label}: {_describe(counts)}")
 
     def read_feed(self, name: str) -> None:
-        source = f"feed:{name}"
+        source = FEEDS[name].SOURCE
         label = source_label(source)
         try:
             found, skipped = FEEDS[name].read(self.fetcher, self.roles)
-            counts = jobs.save(self.conn, source, found, self.roles, now())
+            # what could not be read is not known to be gone
+            counts = jobs.save(self.conn, source, found, self.roles, now(), complete=not skipped)
         except FetchError as error:
             self.failed.append(f"{label}: {error}")
             return
@@ -257,10 +259,10 @@ class _Run:
             return
         counts.skipped += skipped
         _add_up(self.total, counts)
-        self.out(f"{label}: {_describe(counts)}")
+        self.out(f"{label}: {_describe(counts)}" + (", so nothing was closed" if skipped else ""))
 
     def switch_off(self, name: str) -> None:
-        source = f"feed:{name}"
+        source = FEEDS[name].SOURCE
         counts = jobs.switch_off(self.conn, source, now())
         _add_up(self.total, counts)
         if counts.unavailable:
@@ -533,8 +535,9 @@ def _add_text(conn: sqlcipher3.Connection, row: tuple, pasted: str) -> str:
 
 def show(conn: sqlcipher3.Connection, link: str) -> str:
     """One saved job's status, with each source's own state. Reads only."""
-    sql = "SELECT id, company, title, status, status_reason FROM jobs WHERE apply_url = ?"
-    job = conn.execute(sql, (jobs.clean_url(link),)).fetchone()
+    sql = """SELECT id, company, title, status, status_reason FROM jobs
+        WHERE apply_url = :link OR id IN (SELECT job_id FROM job_sources WHERE source_job_id = :link)"""
+    job = conn.execute(sql, {"link": jobs.clean_url(link)}).fetchone()
     if job is None:
         raise CollectError("No saved job has that link. Copy the link exactly as it was added or collected.")
     job_id, company, title, status, reason = job

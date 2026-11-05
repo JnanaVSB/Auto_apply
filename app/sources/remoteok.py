@@ -11,6 +11,7 @@ SOURCE = "feed:remoteok"
 HOST = "remoteok.com"
 API = f"https://{HOST}/api"
 MIN_YEARLY = 10_000  # some listings put hourly pay in the same fields, which must not read as a year's
+MAX_YEARLY = 10_000_000  # past any real salary: a mistyped or hostile number
 
 
 def read(fetcher: Any, roles: Any) -> tuple[list[Job], int]:
@@ -34,8 +35,8 @@ def _job(entry: dict) -> Job:
     return Job(
         source=SOURCE,
         source_job_id=link,  # stays with the job when a board's link replaces this one
-        company=html.unescape(required_text(entry, "company")),
-        title=html.unescape(required_text(entry, "position")),
+        company=_name(entry, "company"),
+        title=_name(entry, "position"),
         url=link,
         locations=[place] if place else [],
         remote="remote",
@@ -43,6 +44,11 @@ def _job(entry: dict) -> Job:
         salary=_salary(entry),
         date_posted=day_from_iso(entry.get("date")) or day_from_timestamp(entry.get("epoch")),
     )
+
+
+def _name(entry: dict, key: str) -> str:
+    """As people read it; blank once cleaned is a broken entry."""
+    return required_text({key: html.unescape(entry[key])}, key)
 
 
 def _link(entry: dict) -> str:
@@ -55,6 +61,6 @@ def _link(entry: dict) -> str:
 
 def _salary(entry: dict) -> str | None:
     low, high = entry.get("salary_min"), entry.get("salary_max")
-    if not all(type(end) in (int, float) and end >= MIN_YEARLY for end in (low, high)) or low > high:
+    if not all(type(end) in (int, float) and MIN_YEARLY <= end <= MAX_YEARLY for end in (low, high)) or low > high:
         return None
     return f"USD {low:,.0f}–{high:,.0f} per year"

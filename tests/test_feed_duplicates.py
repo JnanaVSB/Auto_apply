@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from app import jobs
+from app import jobs, tracker
 from app.config import RoleSettings
 from app.sources import Job
 
@@ -41,8 +41,8 @@ def manual_job(**changes):
     return replace(base, **changes)
 
 
-def save(conn, *found, source=None, when=NOW):
-    return jobs.save(conn, source or found[0].source, list(found), ROLES, when, complete=False)
+def save(conn, *found, source=None, when=NOW, chosen=False):
+    return jobs.save(conn, source or found[0].source, list(found), ROLES, when, complete=False, chosen=chosen)
 
 
 def stored(conn, columns="id, apply_url"):
@@ -168,14 +168,6 @@ def test_a_feed_with_a_shorter_title_does_not_join_a_longer_one(conn):
     assert len(stored(conn)) == 2
 
 
-def test_a_hidden_job_stays_hidden_and_your_us_label_stays_when_a_feed_joins(conn):
-    save(conn, board_job())
-    with conn:
-        conn.execute("UPDATE jobs SET not_interested = 1, us_location = 'no', location_by_you = 1")
-    save(conn, feed_job())
-    assert stored(conn, "not_interested, us_location") == [(1, "no")]
-
-
 def test_reading_the_same_sources_again_changes_nothing(conn):
     save(conn, feed_job())
     save(conn, board_job())
@@ -243,15 +235,131 @@ def test_a_board_link_added_by_hand_counts_as_the_board(conn):
     assert stored(conn) == [(1, BOARD_LINK)]
 
 
-def test_a_job_a_board_closed_stays_closed_when_a_feed_joins_it(conn):
+def closed(conn):
+    conn.execute("UPDATE jobs SET status = 'no longer available', status_reason = 'removed from its board'")
+
+
+def hidden(conn):
+    conn.execute("UPDATE jobs SET not_interested = 1")
+
+
+def on_the_tracker(stage):
+    def mark(conn):
+        interview_round, applied = "1" if stage == "interview" else None, None if stage == "ready" else "2026-10-17"
+        conn.execute("INSERT INTO tracker VALUES (1, ?, ?, ?, 'then')", (stage, interview_round, applied))
+
+    return mark
+
+
+def submitted(conn):
+    conn.execute("INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+                 "VALUES (1, '2026-10-17', 'then', 'by hand', 'x', '[]', '[]')")  # fmt: skip
+
+
+def finished_resume(conn):
+    conn.execute("INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on) "
+                 "VALUES (1, 'resume', 1, '[]', '{}', 'done', '{}', 'now')")  # fmt: skip
+
+
+NOT_FREE = [closed, hidden, *map(on_the_tracker, tracker.STAGES), submitted, finished_resume]
+
+
+@pytest.mark.parametrize("mark", NOT_FREE)
+def test_a_feed_listing_never_joins_a_job_that_is_not_free(conn, mark):
     save(conn, board_job())
-    jobs.save(conn, BOARD, [], ROLES, NOW)
-    save(conn, feed_job(), when=LATER)
+    with conn:
+        mark(conn)
+    before = conn.execute("SELECT apply_url, description FROM jobs").fetchall()
+    save(conn, feed_job())
+    assert stored(conn, "apply_url")[1:] == [(LISTING,)]  # a new job of its own, open and visible
+    assert stored(conn, "status, not_interested")[1:] == [("open", 0)]
+    assert conn.execute("SELECT apply_url, description FROM jobs WHERE id = 1").fetchall() == before
+    assert entries(conn) == [(BOARD, "123")]
+
+
+@pytest.mark.parametrize("mark", NOT_FREE)
+def test_a_board_posting_never_joins_a_feed_job_that_is_not_free(conn, mark):
+    save(conn, feed_job())
+    with conn:
+        mark(conn)
+    save(conn, board_job())
+    assert stored(conn, "apply_url")[1:] == [(BOARD_LINK,)]
+    assert stored(conn, "status, not_interested")[1:] == [("open", 0)]
+    assert entries(conn) == [(FEED, LISTING)]
+
+
+@pytest.mark.parametrize("mark", NOT_FREE)
+def test_a_feed_with_the_same_places_never_joins_a_job_that_is_not_free_either(conn, mark):
+    save(conn, board_job())
+    with conn:
+        mark(conn)
+    save(conn, feed_job(locations=["Austin, TX"]))
+    assert stored(conn, "apply_url")[1:] == [(LISTING,)]
+    assert entries(conn) == [(BOARD, "123")]
+
+
+def test_a_feed_with_the_same_places_joins_an_open_free_job(conn):
+    save(conn, board_job())
+    save(conn, feed_job(locations=["Austin, TX"]))
     assert len(stored(conn)) == 1
-    assert stored(conn, "status, status_reason") == [("no longer available", jobs.REMOVED_FROM_BOARD)]
+    assert (FEED, LISTING) in entries(conn)
 
 
-@pytest.mark.parametrize(("sql", "values"), [(jobs.FEED_JOINS, ("a", "b", FEED)), (jobs.JOINS_A_FEED, ("a", "b"))])
+def test_a_simplify_list_keeps_todays_rule_beside_a_closed_job(conn):
+    save(conn, board_job())
+    with conn:
+        closed(conn)
+    save(conn, simplify_job(url="https://acme.example/1", locations=["Austin, TX"]))
+    assert len(stored(conn)) == 1
+
+
+def test_a_feed_joins_the_open_posting_not_an_older_closed_one(conn):
+    save(conn, board_job(1), board_job(2, locations=["Denver, CO"]))
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'no longer available', status_reason = 'removed from its board' "
+                     "WHERE id = 1")  # fmt: skip
+    save(conn, feed_job())
+    assert (FEED, LISTING) in entries(conn, 2)
+    assert (FEED, LISTING) not in entries(conn, 1)
+
+
+def test_a_job_you_applied_to_keeps_its_link_ad_and_places_when_the_board_posts_it_elsewhere(conn):
+    save(conn, feed_job(description="The ad I applied to.", locations=["Austin, TX"]))
+    with conn:
+        on_the_tracker("applied")(conn)
+    before = conn.execute("SELECT apply_url, description, locations, us_location FROM jobs").fetchall()
+    save(conn, board_job(locations=["Berlin, Germany"], description="ML in Berlin."), chosen=True)
+    assert (
+        conn.execute("SELECT apply_url, description, locations, us_location FROM jobs WHERE id = 1").fetchall()
+        == before
+    )
+    assert stored(conn, "description")[1:] == [("ML in Berlin.",)]
+
+
+def test_a_board_that_joins_also_gives_the_job_its_places_for_later_checks(conn):
+    save(conn, feed_job())
+    save(conn, board_job(locations=["Austin, TX"]))
+    assert stored(conn, "match_key") == [(jobs.match_key(board_job()),)]
+    save(conn, simplify_job(url="https://acme.example/careers/1", locations=["Austin, TX"]))
+    assert len(stored(conn)) == 1
+
+
+@pytest.mark.parametrize("places", [[], ["Worldwide"]])
+def test_a_feed_never_joins_a_job_you_added(conn, places):
+    jobs.save(conn, "manual", [manual_job()], ROLES, NOW, complete=False, chosen=True)
+    save(conn, feed_job(locations=places))
+    assert len(stored(conn)) == 2
+    assert entries(conn) == [("manual", "https://acme.example/careers/1")]
+
+
+@pytest.mark.parametrize(
+    ("sql", "values"),
+    [
+        (jobs.FEED_JOINS, ("a", "b", FEED)),
+        (jobs.JOINS_A_FEED, ("a", "b")),
+        (jobs.SAME_PLACES, {"key": "a", "source": FEED}),
+    ],
+)
 def test_the_fourth_check_uses_the_index_and_never_reads_the_whole_table(conn, sql, values):
     plan = " ".join(row[-1] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", values))
     assert "INDEX jobs_match_key" in plan and "SCAN" not in plan

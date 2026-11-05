@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from dataclasses import replace
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -100,6 +101,27 @@ def test_a_broken_entry_is_counted_and_never_saved_and_the_rest_are_read(broken)
     assert ([job.source_job_id for job in found], skipped) == ([LINK], 1)
 
 
+@pytest.mark.parametrize("name", ["company", "position"])
+def test_a_name_blank_once_cleaned_is_a_broken_entry(name):
+    found, skipped = remoteok.parse([NOTICE, listing(**{name: "&#32;"}), listing()])
+    assert (len(found), skipped) == (1, 1)
+
+
+@pytest.mark.parametrize("name", ["company", "position"])
+def test_a_name_of_nothing_but_broken_characters_is_a_broken_entry(name):
+    found, skipped = remoteok.parse([NOTICE, listing(**{name: "\ud800"}), listing()])
+    assert (len(found), skipped) == (1, 1)
+
+
+def test_a_time_too_big_to_read_skips_only_its_entry():
+    found, skipped = remoteok.parse([NOTICE, listing(date=None, epoch=10**400), listing()])
+    assert (len(found), skipped) == (1, 1)
+
+
+def test_every_feeds_address_is_on_its_allowed_list():
+    assert all(urlsplit(feed.API).hostname in fetch.FEED_HOSTS for feed in FEEDS.values())
+
+
 def test_every_entry_broken_is_refused():
     with pytest.raises(SourceError, match="none of its 2 entries"):
         remoteok.parse([NOTICE, listing(url="javascript:alert(1)"), without("position")])
@@ -131,6 +153,15 @@ def test_a_missing_location_counts_as_none():
 )  # fmt: skip
 def test_pay_needs_both_ends_to_look_like_a_year_and_in_order(low, high):
     assert one_job(salary_min=low, salary_max=high).salary is None
+
+
+@pytest.mark.parametrize("end", [float("inf"), 1e308, 10**400, 10_000_001])
+def test_pay_past_any_real_salary_gives_none(end):
+    assert one_job(salary_min=120000, salary_max=end).salary is None
+
+
+def test_the_highest_yearly_pay_is_shown():
+    assert one_job(salary_min=10_000_000, salary_max=10_000_000).salary == "USD 10,000,000–10,000,000 per year"
 
 
 def test_the_lowest_yearly_pay_is_shown():
