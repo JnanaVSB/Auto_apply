@@ -8,6 +8,7 @@ from app.sources import (
     board_of,
     closed_site,
     day_from_timestamp,
+    host_of,
     html_to_text,
     is_simplify_site,
     plain_text,
@@ -229,6 +230,36 @@ def test_addresses_that_are_not_simplify(url):
 @pytest.mark.parametrize("url", ["https://a..b/x", "https://[x", "https://" + "a" * 64 + ".com/"])
 def test_an_address_that_cannot_be_read_counts_as_closed(url):
     assert closed_site(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://linked%49n.com/x",  # a capital behind a percent sign
+        "https://LINKED%49N.com/x",
+        "https://%4cinkedin.com/x",
+        "https://www.indeed%2Ecom/x",
+        "https://linkedin.com%2Fjobs",  # no browser opens these: they can't be read, so they count as closed
+        "https://linked%00in.com/",
+    ],
+)
+def test_a_percent_sign_hides_nothing_from_the_guard(url):
+    assert closed_site(url)
+
+
+def test_a_capital_behind_a_percent_sign_is_still_simplify():
+    assert is_simplify_site("https://simpl%49fy.jobs/p/1")
+
+
+@pytest.mark.parametrize("url", ["https://[::1]/x", "https://my_site.example/x", "https://müller.example/x"])
+def test_ordinary_hosts_stay_readable_and_open(url):
+    assert host_of(url)
+    assert not closed_site(url)
+    assert not is_simplify_site(url)
+
+
+def test_a_capital_behind_a_percent_sign_reads_as_the_same_name():
+    assert host_of("https://my%53ite.example/x") == "mysite.example"
 
 
 def test_no_address_the_app_may_download_from_is_a_closed_site():
