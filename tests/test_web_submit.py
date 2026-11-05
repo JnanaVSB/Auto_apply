@@ -444,6 +444,18 @@ def test_use_all_refuses_a_list_that_changed_after_the_page_showed_it(client, co
     assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
 
 
+def test_help_added_in_another_tab_refuses_use_and_use_all(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    with_saved(conn, ("Hobby?", "Chess"))
+    submit.save(conn, job, submit.Form((HOBBY,)), "api")
+    one_seen, all_seen = seen(client, job), seen(client, job, "use-all")
+    changed = submit.Field(HOBBY.key, HOBBY.label, HOBBY.kind, HOBBY.required, HOBBY.part, "Of your manager")
+    submit.save(conn, job, submit.Form((changed,)), "api")
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key, seen=one_seen).text
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use-all", seen=all_seen).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+
+
 def test_use_on_a_line_that_is_no_suggestion_keeps_nothing(client, conn, data_dir, job):
     assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key).text
     assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
@@ -480,6 +492,8 @@ def test_a_writer_draft_under_a_rule_about_ai_is_closed_only_by_your_own_edit(cl
     assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=WHY.key, seen=shown).text
     assert form_part.CHANGED_SUGGESTION in press(client, job, "use-all", seen=shown).text
     assert one(conn, KEPT_ROW, job, WHY.key) == ("A draft.", "writer")
+    unchanged = press(client, job, "answer", field=WHY.key, answer="A   draft.\r\n").text
+    assert "draft unchanged" in unchanged and one(conn, KEPT_ROW, job, WHY.key) == ("A draft.", "writer")
     press(client, job, "answer", field=WHY.key, answer="My own words.")
     assert one(conn, KEPT_ROW, job, WHY.key) == ("My own words.", "you")
     assert preview.preview(conn, data_dir, job).open == 0

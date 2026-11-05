@@ -2,6 +2,7 @@
 from the review's tables and the decisions on them, before the code was run."""
 
 import random
+from pathlib import Path
 
 import pytest
 from test_submit_wordings import CONSENT, EVERY_CONSENT, EYE, YES_NO, outcome, person, q
@@ -289,6 +290,52 @@ def test_a_changed_kind_of_box_or_a_box_now_required_is_asked_again():
     assert form_line(box, kept=kept)[0][0].status == "fill"
     assert form_line(asked("I understand", C, required=False), kept=kept)[0][0].source != "your answer for this job"
     assert form_line(asked("I understand", T, required=True), kept=kept)[0][0].source != "your answer for this job"
+
+
+RESUME = ("Resume v3", Path("/made/up/resume.pdf"))
+LETTER = ("Cover letter v1", Path("/made/up/letter.pdf"))
+
+
+@pytest.mark.parametrize(
+    ("label", "help_"),
+    [
+        ("Resume", "Upload a copy of your passport here"),
+        ("Resume", "Blind hiring: remove your name and photo before you upload"),
+        ("Resume", "Your manager's reference, not your own resume"), ("CV", "Of your referee"),
+        ("Cover letter", "A letter from your last employer"), ("Cover letter", "A signed letter of recommendation"),
+    ],
+)  # fmt: skip
+def test_an_upload_by_its_label_with_help_is_yours_to_choose(label, help_):
+    box = asked(label, "file", help=help_)
+    found = match.match(Form((box,)), F1, "Acme", files={"resume": RESUME, "cover_letter": LETTER}, us_job=True)[0][0]
+    assert (found.status, found.value, found.decision) == ("decide", "", "choose_file")
+
+
+@pytest.mark.parametrize(
+    ("key", "label", "help_", "file"),
+    [("resume", "Resume/CV", "ATTACH RESUME/CV", RESUME), ("cover_letter", "Cover letter", "Attach it", LETTER),
+     ("question_1", "Resume", "", RESUME)],
+)  # fmt: skip
+def test_a_sites_own_upload_ignores_help_and_a_bare_label_still_fills(key, label, help_, file):
+    box = asked(label, "file", help=help_, key=key)
+    found = match.match(Form((box,)), F1, "Acme", files={"resume": RESUME, "cover_letter": LETTER}, us_job=True)[0][0]
+    assert (found.status, found.source) == ("fill", file[0])
+
+
+@pytest.mark.parametrize("label", ["Start date", "What is your start date?", "Website", "Website URL"])
+def test_a_bare_start_date_or_website_asks(label):
+    found = form_line(asked(label, T))[0][0]
+    assert (found.status, found.value) == ("decide", "")
+
+
+@pytest.mark.parametrize(
+    ("label", "value"),
+    [("Earliest start date", "January 15, 2027"), ("What is your earliest start date?", "January 15, 2027"),
+     ("When can you start?", "January 15, 2027"), ("Personal website", F1["contact"]["portfolio"]),
+     ("Personal website URL", F1["contact"]["portfolio"])],
+)  # fmt: skip
+def test_the_clearer_start_and_website_wordings_still_fill(label, value):
+    assert form_line(asked(label, T))[0][0].value == value
 
 
 @pytest.mark.parametrize(

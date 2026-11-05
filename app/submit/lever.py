@@ -75,7 +75,8 @@ def parse(page: str) -> tuple[Form, int]:
 
 def _control(name: str, controls: list[dict]) -> Field:
     """One of the page's own inputs, from every element with its name (a group of boxes, or a hidden default beside
-    a box, is one field); the first visible element gives its kind, label and accepted file types."""
+    a box, is one field); the first visible element gives its kind, label, accepted file types and help, the text
+    beside it inside its field."""
     shown = [control for control in controls if control["type"] != "hidden"] or controls
     first = shown[0]
     kind, part = _kind(name, first)
@@ -87,7 +88,8 @@ def _control(name: str, controls: list[dict]) -> Field:
         choices = tuple(Choice(value, value) for value in dict.fromkeys(values))
     accept = tuple(filter(None, map(str.strip, first["accept"].split(",")))) if kind == "file" else ()
     required = first["marked"] or any(control["required"] for control in shown)
-    return Field(name, first["label"] or name, kind, required, part, choices=choices, accept=accept)
+    help_ = " ".join("".join(first["beside"]).split())
+    return Field(name, first["label"] or name, kind, required, part, help_, choices, accept)
 
 
 def _kind(name: str, control: dict) -> tuple[str, str]:
@@ -138,6 +140,8 @@ class _Page(HTMLParser):
         self.items: list[str | tuple[str, str, str]] = []  # an element's name, or (template name, JSON, countries)
         self.controls: dict[str, list[dict]] = {}
         self.label, self.marked = "", False  # the current question's label, and whether it shows the required mark
+        self.beside: list[str] = []  # the current question's text inside its field, in no label of a box
+        self.in_field, self.in_label = False, 0
         self.reading: list[str] | None = None  # a label's text while it is read
         self.mark = False
         self.select: dict | None = None  # the drop-down whose options are being read
@@ -152,10 +156,15 @@ class _Page(HTMLParser):
         classes = found.get("class", "").split()
         if "application-question" in classes or "application-form" in classes:  # a new question or section
             self.label, self.marked, self.reading = "", False, None
+            self.beside, self.in_field = [], False
         if "application-form" in classes:  # a survey's countries hold for its own section only
             section = found.get("id", "")
             codes = section.removeprefix(SURVEY).replace("_", " ").split() if section.startswith(SURVEY) else []
             self.countries = ", ".join(codes)
+        if "application-field" in classes:
+            self.in_field, self.in_label = True, 0
+        elif tag == "label":
+            self.in_label += 1
         if "application-label" in classes or (tag == "label" and self.reading is None):
             self.reading, self.mark = [], False
         elif "required" in classes and self.reading is not None:
@@ -171,6 +180,7 @@ class _Page(HTMLParser):
         if tag in ("script", "style"):
             self.skip = max(0, self.skip - 1)
         elif tag == "label":
+            self.in_label = max(0, self.in_label - 1)
             self._end_label()
         elif tag == "select":
             self.select = None
@@ -178,6 +188,8 @@ class _Page(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.reading is not None and not self.skip:
             self.reading.append(data)
+        elif self.in_field and not self.in_label and self.select is None and not self.skip:
+            self.beside.append(data)
 
     def _end_label(self) -> None:
         """A label read with text becomes the current question's; an empty one (a box's own label) changes nothing."""
@@ -195,7 +207,7 @@ class _Page(HTMLParser):
         kind = found.get("type", "text").lower() if tag == "input" else tag
         boxes = [found["value"]] if kind in ("checkbox", "radio") and found.get("value", "").strip() else []
         control = {"type": kind, "required": "required" in found, "accept": found.get("accept", ""), "options": boxes,
-                   "label": self.label, "marked": self.marked}  # fmt: skip
+                   "label": self.label, "marked": self.marked, "beside": self.beside}  # fmt: skip
         if name not in self.controls:
             self.items.append(name)
         self.controls.setdefault(name, []).append(control)

@@ -197,7 +197,8 @@ def consent_choice(field: Field) -> Choice | None:
 
 
 def names(text: str, company: str) -> bool:
-    """Whether the text holds the company's name, as whole words, with or without its Inc, Corp, LLC, Ltd or Labs."""
+    """Whether the text holds the company's name, as whole words, without COMPANY_FORM's endings, or its first word
+    when that says more than COMMON_WORDS."""
     name, said = bare(company), f" {clean(text)} "
     first = name.partition(" ")[0]
     return bool(name) and (

@@ -58,7 +58,7 @@ def lines(
 def keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) -> None:
     """Your answer for this job's question as it is worded now, replacing a Writer draft."""
     with conn:
-        conn.execute(YOURS, (job_id, field.key, answer, now(), match.wording(field)))
+        conn.execute(YOURS, (job_id, field.key, answer, now(), wordings.wording(field)))
 
 
 def forget(conn: sqlcipher3.Connection, job_id: int, key: str) -> None:

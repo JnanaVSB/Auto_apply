@@ -48,7 +48,7 @@ UPLOADS = {"resume": "resume", "resume cv": "resume", "cv": "resume", "cover let
 LINKS = {  # a text box asked for one of your links, by its whole cleaned label
     "linkedin": re.compile(r"linkedin(?: profile| url| profile url)?"),
     "github": re.compile(r"github(?: profile| url| profile url)?"),
-    "portfolio": re.compile(r"portfolio(?: url| link| website)?|(?:personal )?website(?: url)?"),
+    "portfolio": re.compile(r"portfolio(?: url| link| website)?|personal website(?: url)?"),
     "scholar": re.compile(r"google scholar(?: profile| url)?"),
 }  # fmt: skip
 NOW, FUTURE = re.compile(r"\b(?:current|currently|now)\b"), re.compile(r"\bfuture\b")
@@ -98,9 +98,9 @@ A_LIMIT = (
     r"(?:please )?(?:keep it )?(?:in |up to |at most |maximum(?: of)? |max |no more than |not more than |under "
     r"|fewer than |less than )*\d[\d ]* ?(?:words?|characters?|chars?)(?: or (?:less|fewer)| maximum| max| limit)?"
 )
-OWN_WORDS = r"(?:please )?(?:explain )?in your own words(?: please)?"
+IN_OWN_WORDS = r"(?:please )?(?:explain )?in your own words(?: please)?"
 ESSAY_HELP = re.compile(  # an essay's help, whole and cleaned, may say this and nothing else
-    rf"{A_LIMIT}|{OWN_WORDS}(?: {A_LIMIT})?|{A_LIMIT} {OWN_WORDS}"
+    rf"{A_LIMIT}|{IN_OWN_WORDS}(?: {A_LIMIT})?|{A_LIMIT} {IN_OWN_WORDS}"
 )
 ESSAY = re.compile(  # the start of the cleaned label: only these may be the Writer's
     r"why (?:do you want|are you interested|would you like|should we|this (?:company|role|position|job|team)|us\b)"
@@ -110,7 +110,7 @@ ESSAY = re.compile(  # the start of the cleaned label: only these may be the Wri
     r"|what (?:interests|excites|motivates) you|cover letter"
 )
 US = r"(?:us|u s|usa|united states(?: of america)?)"
-PLAIN = {  # the only wordings a known question is filled on: the whole cleaned label, US forms only
+PLAIN = {  # the only wordings a known question is filled on: the whole cleaned label; a legal topic on US forms only
     "work": re.compile(rf"(?:are|do) you(?: currently| legally)* "
                        rf"(?:authorized|eligible|permitted|have the (?:legal )?right) to work(?: in the {US})?"),
     "sponsorship": re.compile(rf"(?:will|do|would) you(?: now or in the future| now| currently| in the future)* "
@@ -125,7 +125,8 @@ PLAIN = {  # the only wordings a known question is filled on: the whole cleaned 
                             r"|security clearance(?: level)?"),
     "salary": re.compile(r"(?:what (?:are|is) your )?"
                          r"(?:desired salary|expected salary|salary expectations?|salary requirements?)"),
-    "start": re.compile(r"(?:what is your )?(?:earliest )?(?:possible )?start date|earliest start|when can you start"
+    "start": re.compile(r"(?:what is your )?(?:earliest |possible |earliest possible )start date|earliest start"
+                        r"|when can you start"
                         r"|when are you available to start"),
     "notice": re.compile(r"(?:what is your )?notice period"),
     "degree": re.compile(r"(?:what is your )?highest (?:degree|level of education)(?: completed| earned)?"),
@@ -293,7 +294,8 @@ class _Matcher:
             return None
         if field.accept and not any("pdf" in kind.lower() for kind in field.accept):  # ".pdf" or "application/pdf"
             return Line(field, "decide", decision="non_pdf")
-        slot = field.key if field.key in ("resume", "cover_letter") else UPLOADS.get(words)
+        by_label = None if field.help.strip() else UPLOADS.get(words)
+        slot = field.key if field.key in ("resume", "cover_letter") else by_label
         if slot is None:
             return Line(field, "decide", decision="choose_file") if field.required else Line(field, "empty")
         if found := self.files.get(slot):

@@ -6,7 +6,7 @@ import pytest
 from helpers import FakeWeb
 
 from app.fetch import Fetcher
-from app.submit import Choice, FormClosed, FormError, lever
+from app.submit import Choice, FormClosed, FormError, lever, match
 
 FORM_URL = "https://jobs.lever.co/acme/0a1b-2c3d/apply"
 
@@ -168,6 +168,49 @@ def card_page(title, instructions, description):
 )  # fmt: skip
 def test_a_cards_title_instructions_and_a_fields_description_are_its_help(title, instructions, description, help_):
     assert lever.parse(card_page(title, instructions, description))[0].fields[0].help == help_
+
+
+CONSENT = """<form><div class="section page-centered application-form" data-qa="consent-section"><ul>
+<li class="application-question"><div class="application-field full-width"><p>{beside}</p><ul><li><label>
+<span>Acme may contact me about future job opportunities.</span>
+<input type="hidden" name="consent[marketing]" value="0"><input type="checkbox" name="consent[marketing]" value="1">
+</label></li></ul></div></li></ul></div></form>"""
+ESSAY = '<input type="hidden" name="cards[c-1][baseTemplate]" value="{}">'.format(
+    html.escape(
+        json.dumps(
+            {"id": "c-1", "fields": [{"type": "textarea", "text": "Why do you want to join?", "required": True}]}
+        )
+    )
+)
+PARAGRAPHS = (
+    "Your data is processed as Acme's Privacy Policy says.",
+    "By ticking this box you also agree to a background and credit check, and to the sale of your data.",
+)
+
+
+@pytest.mark.parametrize("beside", PARAGRAPHS)
+def test_text_beside_a_lever_consent_is_its_help_so_it_is_asked(beside):
+    form = lever.parse(CONSENT.format(beside=beside))[0]
+    assert form.fields[0].help == beside
+    line = match.match(form, {}, "Acme", consents={"marketing": "accept"})[0][0]
+    assert (line.status, line.decision) == ("decide", "consent")
+
+
+def test_a_lever_consent_with_nothing_beside_it_is_still_remembered():
+    form = lever.parse(CONSENT.format(beside=""))[0]
+    assert match.match(form, {}, "Acme", consents={"marketing": "accept"})[0][0].status == "fill"
+
+
+def test_a_rule_about_ai_beside_a_lever_consent_stops_the_writer():
+    page = CONSENT.format(beside="Do not use AI to write any part of this application.") + ESSAY
+    lines, warnings = match.match(lever.parse(page)[0], {}, "Acme", consents={"marketing": "accept"})
+    assert [line.status for line in lines] == ["left", "decide"] and warnings == (match.NO_AI_WARNING,)
+
+
+def test_the_text_of_a_boxs_own_label_is_no_help():
+    box = '<label><input type="checkbox" name="pronouns" value="They"><span>They</span></label>'
+    page = f'<li class="application-question"><div class="application-field">{box}</div></li>'
+    assert lever.parse(page)[0].fields[0].help == ""
 
 
 def test_a_survey_outside_a_country_section_is_for_everyone():

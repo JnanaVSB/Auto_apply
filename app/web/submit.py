@@ -46,6 +46,7 @@ NOT_OPTIONAL = "This question is required: answer it, or do it in the window"
 NO_YES = "This consent has no single yes choice: decide in the window"
 CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 CHANGED_QUESTION = "This question changed: look at it again"
+SAME_DRAFT = "This is the Writer's draft unchanged: only your own changed words close it"
 
 
 class _Refused(Exception):  # noqa: N818 (shown as it is)
@@ -123,6 +124,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             text = _typed(field, request.state.form)
         except _Refused as refused:
             return _part(request, job, failed=str(refused))
+        if _same_draft(preview.preview(conn, data_dir, job_id), field, text):
+            return _part(request, job, failed=SAME_DRAFT)
         preview.keep(conn, job_id, field, text)
         saved = field.kind != "long_text" and wordings.care(field, job["company"]) == wordings.ORDINARY
         if saved and request.state.form.get("save") == "1":
@@ -374,7 +377,13 @@ def _fingerprint(shown: object) -> str:
 
 def _seen(lines: list[match.Line]) -> str:
     """Suggestions as the page shows them: Use checks this, so a saved answer never goes unseen."""
-    return _fingerprint([(line.field.key, record.shown(line)) for line in lines])
+    return _fingerprint([(line.field.key, wordings.wording(line.field), record.shown(line)) for line in lines])
+
+
+def _same_draft(found: Preview, field: Field, text: str) -> bool:
+    """Whether this is the Writer's draft, untouched, on a form with a rule about AI."""
+    line = next(line for line in found.lines if line.field.key == field.key)
+    return found.no_writer and line.source == WRITER and text.split() == line.value.split()
 
 
 def _stale(request: Request, field: Field) -> bool:

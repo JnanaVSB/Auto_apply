@@ -167,7 +167,7 @@ class Other(Section):
 
 
 class Consents(Section):
-    """The consent kinds app/submit/match.py remembers; AI-use promises and arbitration are always asked."""
+    """The consent kinds app/submit/wordings.py knows; AI-use promises and arbitration are always asked."""
 
     privacy: Consent = "ask"
     processing: Consent = "ask"
