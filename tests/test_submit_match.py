@@ -507,3 +507,66 @@ def test_a_consents_kind_is_the_same_for_the_rule_and_the_page():
     assert match.consent_kind(field("I agree to receive text messages", "consent")) == ("texting", "texting")
     assert match.consent_kind(field("I acknowledge the code of conduct", "consent")) == ("", "consent")
     assert match.consent_kind(field("Favourite paper?")) is None
+
+
+EVERY_CONSENT = dict.fromkeys(("privacy", "retention", "texting", "marketing"), "accept")
+AUTHORIZED = "Are you authorized to work in the location(s) you selected in your previous response?"
+SPONSORED = (
+    "Will you require Acme to sponsor you for a work permit now or in the future for the location(s) you selected?"
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "name"),
+    [("I attest that my answers are true", "AI use"), ("I agree to binding arbitration", "arbitration")],
+)
+def test_a_one_choice_promise_is_left_for_you_whatever_you_accepted(label, name):
+    asked = field(label, "single", True, choices=("I agree",))
+    assert said(line(asked, consents=EVERY_CONSENT)) == ("left", "", name)
+
+
+def test_a_one_choice_acknowledgment_is_picked_once_you_accept_its_kind():
+    asked = field("Please review and acknowledge Acme's Candidate Privacy Policy.", "multi", True,
+                  choices=("Acknowledge/Confirm",))  # fmt: skip
+    found = line(asked, consents={"privacy": "accept"})
+    assert (found.status, found.value, found.source) == ("fill", ("0",), "remembered consent")
+    assert said(line(asked, consents={"privacy": "ask"})) == ("decide", "consent", "privacy")
+
+
+def test_an_only_choice_that_says_no_is_never_a_consent():
+    asked = field("I agree to the privacy policy", "single", True, choices=("No, thanks",))
+    assert said(line(asked, consents=EVERY_CONSENT)) == ("decide", "consent", "privacy")
+
+
+@pytest.mark.parametrize("label", [AUTHORIZED, SPONSORED])
+def test_a_question_pointing_at_another_answer_is_answered_for_this_job_only(label):
+    asked = field(label, "single", True, choices=YES_NO)
+    decision = ("decide", "unknown", "this depends on your answer to another question")
+    assert said(line(asked)) == decision and match.depends(asked, "Acme")
+    saved = ANSWERS | {"more": [{"question": label, "answer": "No"}]}
+    assert said(line(asked, saved)) == decision
+    assert chosen(line(asked, kept={asked.key: ("No", "you")})) == ["No"]
+
+
+def test_a_saved_answer_never_reaches_such_a_question_as_a_long_box_or_a_consent():
+    saved = ANSWERS | {"more": [{"question": AUTHORIZED, "answer": "Yes"}]}
+    assert said(line(field(AUTHORIZED, "long_text", True), saved))[0] == "decide"
+    assert line(field(AUTHORIZED, "consent"), saved).source != "your saved answer"
+
+
+def test_opt_in_wording_is_a_consent():
+    asked = field("Do you opt-in to receive WhatsApp messages from Acme Recruiting?", "single", True, choices=YES_NO)
+    assert said(line(asked)) == ("decide", "consent", "texting")
+    assert chosen(line(asked, consents={"texting": "accept"})) == ["Yes"]
+
+
+def test_greenhouses_alaskan_native_is_the_questionnaires_alaska_native():
+    asked = field("Race", "single", key="race", part="eeo", choices=("American Indian or Alaskan Native", "White"))
+    found = line(asked, changed("eeo", race="American Indian or Alaska Native"))
+    assert chosen(found) == ["American Indian or Alaskan Native"]
+
+
+def test_only_a_question_no_rule_answers_can_still_be_answered():
+    assert line(field("Hobby?")).askable
+    assert not line(field("Additional information", "long_text", key="comments", part="standard")).askable
+    assert not line(field("Subscribe to our newsletter", "consent"), consents={"marketing": "decline"}).askable

@@ -153,7 +153,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         except _Refused as refused:
             return _part(request, job, failed=str(refused))
         _keep(conn, job_id, field.key, text)
-        if field.kind != "long_text" and request.state.form.get("save") == "1":
+        remembered = field.kind != "long_text" and not match.depends(field, job["company"])
+        if remembered and request.state.form.get("save") == "1":
             try:
                 match.remember(conn, field.label, job["company"], text)
             except questionnaire.QuestionnaireError as error:  # the answer for this job is kept all the same
@@ -228,7 +229,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         except answers.NoQuestions as refused:
             return _part(request, job, failed=str(refused))
         request.app.state.preparer.wake()
-        return _part(request, job)
+        return Response(headers={"HX-Refresh": "true"})  # the page again: the box above says so too
 
     @app.post("/jobs/{job_id:int}/form/submitted")
     async def submitted(request: Request, job_id: int) -> Response:
@@ -292,6 +293,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
             kinds={line.field.key: match.consent_kind(line.field, job["company"]) for line in lines
                    if line.decision == "consent"},
+            askable={line.field.key for line in lines if line.askable and _answerable(line.field)},
+            this_job_only={line.field.key for line in lines if match.depends(line.field, job["company"])},
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
@@ -351,11 +354,11 @@ def _keep(conn: sqlcipher3.Connection, job_id: int, key: str, answer: str) -> No
 
 
 def _yes(field: Field) -> str:
-    """A consent given for this job: its box ticked, or the label of its one yes choice ("" when there is none)."""
+    """A consent given for this job: its box ticked, or the label of the choice that gives it ("" without one)."""
     if field.kind == "consent":
         return match.TICKED
-    yes = [choice.label for choice in field.choices if match.fits(match.clean(choice.label), "yes")]
-    return yes[0] if field.kind in ("single", "multi") and len(yes) == 1 else ""
+    choice = match.consent_choice(field)
+    return choice.label if choice and field.kind in ("single", "multi") else ""
 
 
 def _limit(most: tuple[int | None, int | None]) -> str:

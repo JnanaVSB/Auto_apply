@@ -297,7 +297,7 @@ def writer(tmp_path, data_dir, monkeypatch):
 def test_write_answers_starts_the_writer_unless_busy(client, conn, job, writer, monkeypatch):
     woken = []
     monkeypatch.setattr(client.app.state.preparer, "wake", lambda: woken.append(1))
-    press(client, job, "write")
+    assert press(client, job, "write").headers["hx-refresh"] == "true"  # the box above says so at once
     assert one(conn, "SELECT kind, status FROM preparations WHERE kind = 'answers'") == ("answers", "writing")
     assert woken == [1] and "The Writer is writing these answers" in client.get(f"/jobs/{job}/form").text
     assert "The Writer is still working on this job" in press(client, job, "write").text
@@ -314,7 +314,10 @@ def test_write_answers_on_a_form_that_wants_your_own_words_says_so(client, conn,
     job = made_up_job(conn, data_dir)
     own = submit.Field("question_1", "Why Acme?", "long_text", True, "company", help="Answers must be your own.")
     submit.save(conn, job, submit.Form((own,)), "api")
-    assert "Write these answers yourself" in client.get(f"/jobs/{job}/form").text
+    text = client.get(f"/jobs/{job}/form").text
+    assert (
+        "Write these answers yourself" in text and "to be written by you" in text and "Write answers, above" not in text
+    )
     assert "write these answers yourself" in press(client, job, "write").text
     assert one(conn, "SELECT count(*) FROM preparations WHERE kind = 'answers'")[0] == 0
 
@@ -356,3 +359,61 @@ def test_a_simplify_job_never_gets_a_link(client, conn, data_dir):
     text = client.get(f"/jobs/{job}/form").text
     assert '<code class="address">https://simplify.jobs/p/7</code>' in text and 'href="https://simplify' not in text
     assert "copy this into your browser yourself" in text
+
+
+SELECTED = "Are you authorized to work in the location(s) you selected in your previous response?"
+YES_NO = (submit.Choice("Yes", "1"), submit.Choice("No", "0"))
+DEPENDS = submit.Field("question_1", SELECTED, "single", True, "company", choices=YES_NO)
+
+
+def test_a_question_pointing_at_another_answer_is_never_saved_for_every_form(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    submit.save(conn, job, submit.Form((DEPENDS,)), "api")
+    assert "Save to my Questionnaire" not in client.get(f"/jobs/{job}/form").text
+    text = press(client, job, "answer", field=DEPENDS.key, answer="0", save="1").text
+    assert questionnaire.load(conn)[0]["more"] == [] and one(conn, KEPT_ROW, job, DEPENDS.key) == ("No", "you")
+    assert "your answer for this job" in text
+
+
+def test_a_question_pointing_at_another_answer_is_not_kept_as_needs_answer(client, conn, data_dir, web):
+    asked = question(DEPENDS.label, "question_1", "multi_value_single_select", True, [("Yes", 1), ("No", 0)])
+    web.pages[GREENHOUSE_FORM] = REPLY | {"questions": [asked]}
+    client.get(f"/jobs/{made_up_job(conn, data_dir)}/form")
+    assert DEPENDS.label not in [row["question"] for row in questionnaire.load(conn)[0]["more"]]
+
+
+def test_a_one_choice_consent_of_no_known_kind_is_given_for_this_job(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    rules = submit.Field("question_1", "I acknowledge the house rules", "multi", True, "company",
+                         choices=(submit.Choice("Acknowledge/Confirm", "9"),))  # fmt: skip
+    submit.save(conn, job, submit.Form((rules,)), "api")
+    press(client, job, "consent", field=rules.key, choice="accept")
+    assert one(conn, KEPT_ROW, job, rules.key)[0] == "Acknowledge/Confirm"
+    assert status(conn, data_dir, job, rules.key).value == ("9",)
+
+
+def test_every_consent_decision_can_be_left_for_the_window(client, conn, data_dir, job):
+    text = client.get(f"/jobs/{job}/form").text
+    assert text.count(f'name="field" value="{RULES.key}"') >= 3  # Accept, Decline and in the window
+    press(client, job, "window", field=RULES.key)
+    assert status(conn, data_dir, job, RULES.key).status == "left"
+
+
+def test_an_optional_question_no_rule_answers_has_a_folded_box(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    survey = submit.Field("surveysResponses[s][responses][field0]", "Your age?", "single", False, "demographic",
+                          help="A survey (for candidates in: GB)", choices=YES_NO)  # fmt: skip
+    submit.save(conn, job, submit.Form((HOBBY, survey)), "api")
+    text = client.get(f"/jobs/{job}/form").text
+    assert text.count("<summary>Answer it</summary>") == 1 and "Hobby?" in text
+    assert f'value="{survey.key}"' not in text
+    press(client, job, "answer", field=HOBBY.key, answer="Chess", save="1")
+    assert status(conn, data_dir, job, HOBBY.key).value == "Chess"
+    assert [(row["question"], row["answer"]) for row in questionnaire.load(conn)[0]["more"]] == [("Hobby?", "Chess")]
+
+
+def test_a_records_upload_shows_its_version_once(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    submit.save(conn, job, submit.Form((submit.Field("resume", "Resume/CV", "file", True, "standard"),)), "api")
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert '<td>Resume v3</td><td class="muted"></td>' in text

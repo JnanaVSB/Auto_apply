@@ -2,6 +2,21 @@
 {% macro post(action, label, fields={}) %}<form method="post" action="/jobs/{{ job_id }}/form/{{ action }}" hx-post="/jobs/{{ job_id }}/form/{{ action }}" hx-target="#form-part" hx-swap="outerHTML" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
     <button type="submit">{{ label }}</button></form>{% endmacro %}
+{% macro answer_box(field) %}      <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ field.key }}">
+        {% if field.kind == "single" %}
+        <label>Your answer <select name="answer">{% for choice in field.choices %}<option value="{{ choice.value }}">{{ choice.label }}</option>{% endfor %}</select></label>
+        {% elif field.kind == "multi" %}
+        <fieldset><legend>Your answer (tick every one that fits)</legend>
+          {% for choice in field.choices %}<label class="tick"><input type="checkbox" name="choice.{{ loop.index0 }}" value="{{ choice.value }}"> {{ choice.label }}</label>{% endfor %}</fieldset>
+        {% elif field.kind == "long_text" %}
+        <label>Your answer <textarea name="answer" rows="4" maxlength="20000"></textarea></label>
+        {% else %}
+        <label>Your answer <input name="answer" maxlength="2000"></label>
+        {% endif %}
+        {% if field.kind != "long_text" and field.key not in this_job_only %}<label class="tick"><input type="checkbox" name="save" value="1" checked> Save to my Questionnaire</label>{% endif %}
+        <p><button type="submit">Save</button></p>
+      </form>{% endmacro %}
 {% macro writing_line() %}<p class="muted" role="status" hx-get="/jobs/{{ job_id }}/form/writing" hx-trigger="every 3s" hx-swap="outerHTML">The Writer is writing these answers…</p>{% endmacro %}
 {% if writing_only %}{{ writing_line() }}{% else %}
 <section class="found" id="form-part">
@@ -32,7 +47,7 @@
     <thead><tr><th>Question</th><th>Answer</th><th>From</th></tr></thead>
     <tbody>
     {% for row in record.fields %}
-    <tr><td>{{ row.question }}</td><td>{{ row.value }}{% if row.note %}<br><span class="muted">{{ row.note }}</span>{% endif %}</td><td class="muted">{{ row.from }}</td></tr>
+    <tr><td>{{ row.question }}</td><td>{{ row.value }}{% if row.note %}<br><span class="muted">{{ row.note }}</span>{% endif %}</td><td class="muted">{{ row.from if row.from != row.value }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -52,21 +67,7 @@
     <li><span class="mark warn">{{ decisions[line.decision] }}</span> {{ field.label }}{% if line.note %} <span class="muted">({{ line.note }})</span>{% endif %}
       {% if field.help %}<br><span class="muted">{{ field.help }}</span>{% endif %}
       {% if line.decision == "unknown" and field.kind in ("text", "location", "long_text", "single", "multi") %}
-      <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ field.key }}">
-        {% if field.kind == "single" %}
-        <label>Your answer <select name="answer">{% for choice in field.choices %}<option value="{{ choice.value }}">{{ choice.label }}</option>{% endfor %}</select></label>
-        {% elif field.kind == "multi" %}
-        <fieldset><legend>Your answer (tick every one that fits)</legend>
-          {% for choice in field.choices %}<label class="tick"><input type="checkbox" name="choice.{{ loop.index0 }}" value="{{ choice.value }}"> {{ choice.label }}</label>{% endfor %}</fieldset>
-        {% elif field.kind == "long_text" %}
-        <label>Your answer <textarea name="answer" rows="4" maxlength="20000"></textarea></label>
-        {% else %}
-        <label>Your answer <input name="answer" maxlength="2000"></label>
-        {% endif %}
-        {% if field.kind != "long_text" %}<label class="tick"><input type="checkbox" name="save" value="1" checked> Save to my Questionnaire</label>{% endif %}
-        <p><button type="submit">Save</button></p>
-      </form>
+      {{ answer_box(field) }}
       {% elif line.decision == "consent" %}
       {{ post("consent", "Accept", {"field": field.key, "choice": "accept"}) }}
       {{ post("consent", "Decline", {"field": field.key, "choice": "decline"}) }}
@@ -74,10 +75,8 @@
       {% elif line.decision == "cover_letter" %}
       <br><span class="muted">Press Write cover letter in the Ready to Apply box: the letter is filled in here once it is done.</span>
       {% endif %}
-      {% if line.decision != "consent" %}
       {{ post("window", "I'll do this in the window myself", key) }}
-      {% if not field.required %}{{ post("empty", "Leave it empty", key) }}{% endif %}
-      {% endif %}
+      {% if line.decision != "consent" and not field.required %}{{ post("empty", "Leave it empty", key) }}{% endif %}
       {% if line.decision in ("non_pdf", "choose_file") %}
       <form method="post" action="/ready/{{ job_id }}/skip" class="inline">
         <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="value" value="1">
@@ -130,7 +129,8 @@
         {% if line.field.kind == "unknown" %} <span class="mark warn">a kind of box the app can't fill</span>{% endif %}</td>
       <td>{% if line.status == "fill" %}{{ value }}
         {% elif line.status == "empty" %}<span class="muted">left empty</span>
-        {% elif line.status == "write" %}<span class="muted">to be written (Write answers, above)</span>
+          {% if line.field.key in askable %}<details><summary>Answer it</summary>{{ answer_box(line.field) }}</details>{% endif %}
+        {% elif line.status == "write" %}<span class="muted">{{ "to be written by you" if own_words else "to be written (Write answers, above)" }}</span>
         {% elif line.status == "left" %}<span class="muted">{{ "you do this in the window" if line.source == mine else "you tick this yourself" }}</span>
         {% else %}<span class="error">{{ decisions[line.decision] }}</span>{% endif %}
         {% if line.note %}<br><span class="muted">{{ line.note }}</span>{% endif %}</td>

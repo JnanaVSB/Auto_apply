@@ -13,7 +13,7 @@ from app import places, questionnaire
 from app.council import runs
 from app.documents import pdf
 from app.questionnaire import DISABILITY, MAX_PAIRS, MONTH, NO_ANSWER, RACES, SECTIONS, VETERAN, QuestionnaireError
-from app.submit import Field, Form
+from app.submit import Choice, Field, Form
 
 STATUSES = ("fill", "empty", "hidden", "write", "decide", "left")  # left: you tick it yourself in the window
 DECISIONS = {  # the "Decision required" reasons, as the preview words them
@@ -47,6 +47,7 @@ KNOWN = {  # a known question, by its cleaned wording
     "heard": r"\b(?:how did you hear|where did you hear|how did you find|referral source)\b",
 }  # fmt: skip
 KNOWN = {name: re.compile(pattern) for name, pattern in KNOWN.items()}
+DEPENDS = re.compile(r"\byou selected\b|\bprevious (?:response|answer|question)\b")  # points at another answer
 NOW, FUTURE = re.compile(r"\b(?:current|currently|now)\b"), re.compile(r"\bfuture\b")
 US_NAMES = frozenset({"united states", "usa", "us"})
 SURVEY_COUNTRIES = re.compile(r"\(for candidates in: ([^)]*)\)$")  # how app/submit/lever.py words a survey's help
@@ -60,7 +61,7 @@ DECLINE = re.compile(  # "do not want": the US disability form's own words
 )
 GENDERS = {"Male": r"\b(?:male|man)\b", "Female": r"\b(?:female|woman)\b", "Non-binary": r"\bnon ?binary\b"}
 GENDERS = {answer: re.compile(pattern) for answer, pattern in GENDERS.items()}
-CONSENT_WORDS = re.compile(r"\b(?:consent\w*|agree|acknowledge|attest|certify)\b")
+CONSENT_WORDS = re.compile(r"\b(?:consent\w*|agree|acknowledge|attest|certify|opt in)\b")
 CONSENTS = (  # kind, as the preview names it, and its wording: the first that fits
     ("ai", "AI use", r"\b(?:ai|artificial intelligence|attest)\b"), ("arbitration", "arbitration", r"\barbitrat"),
     ("privacy", "privacy", r"\bprivacy (?:notice|policy)\b|\bdata processing\b"
@@ -96,6 +97,7 @@ class Line:
     source: str = ""  # where the value came from, e.g. "Questionnaire: Work authorization", "Resume v3"
     decision: str = ""  # a DECISIONS key when status is "decide"
     note: str = ""  # e.g. "split from your full name"
+    askable: bool = False  # optional and left empty only because no rule answers it: you may still answer it
 
 
 def clean(text: str, company: str = "") -> str:
@@ -260,6 +262,8 @@ class _Matcher:
         asked = [name for name, pattern in KNOWN.items() if pattern.search(words)]
         if len(asked) != 1:  # two known questions in one: never a guess
             return Line(field, "decide", decision="unknown", note="this asks more than one thing") if asked else None
+        if depends(field, self.company):  # only your answer for this job, kept above, may answer it
+            return Line(field, "decide", decision="unknown", note="this depends on your answer to another question")
         if field.kind == "long_text" and asked[0] not in FREE_TEXT:  # "Why do you want to relocate?": for the Writer
             return None
         if asked[0] in ("work", "sponsorship") and places.FOREIGN_NAMES.search(
@@ -289,7 +293,8 @@ class _Matcher:
 
     def _saved(self, field: Field, words: str) -> Line | None:
         about = f"{clean(field.key)} {words}"
-        answer = None if any(pattern.search(about) for pattern in PROMISES) else self.saved.get(words)
+        never = depends(field, self.company) or any(pattern.search(about) for pattern in PROMISES)
+        answer = None if never else self.saved.get(words)
         return self._given(field, answer, "your saved answer", NOT_A_CHOICE.format("saved answer")) if answer else None
 
     def _consent(self, field: Field, _: str) -> Line | None:
@@ -307,10 +312,11 @@ class _Matcher:
         return Line(field, "decide", decision="consent", note=note)
 
     def _tick(self, field: Field) -> str | tuple[str, ...]:
-        """A consent given: its box ticked, or its yes choice; nothing for a box to type in."""
+        """A consent given: its box ticked, or the choice that gives it; nothing for a box to type in."""
         if field.kind == "consent":
             return TICKED
-        return self._choose(field, "yes") if field.kind in ("single", "multi") else ""
+        choice = consent_choice(field)
+        return (choice.value,) if choice else ""
 
     def _fill(self, field: Field, value: str, section: str, note: str = "") -> Line:
         """A Questionnaire answer; an empty one leaves the field to the last rule, with what to fill in."""
@@ -356,7 +362,9 @@ class _Matcher:
 
 def _other(field: Field, note: str = "") -> Line:
     """The last rule: a required field is yours to decide, an optional one is left empty."""
-    return Line(field, "decide", decision="unknown", note=note) if field.required else Line(field, "empty", note=note)
+    if field.required:
+        return Line(field, "decide", decision="unknown", note=note)
+    return Line(field, "empty", note=note, askable=True)
 
 
 def written(answers: dict) -> dict[str, str]:
@@ -381,6 +389,23 @@ def consent_kind(field: Field, company: str = "") -> tuple[str, str] | None:
     return next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(about)), ("", "consent"))
 
 
+def consent_choice(field: Field) -> Choice | None:
+    """The choice that gives a consent: its one yes choice, else the only choice there is, unless that is a no. For a
+    consent you accepted: AI-use promises and arbitration never come here."""
+    labels = [(choice, clean(choice.label)) for choice in field.choices]
+    yes = [choice for choice, label in labels if fits(label, "yes")]
+    if len(labels) == 1 and not fits(labels[0][1], "no"):
+        return labels[0][0]
+    return yes[0] if len(yes) == 1 else None
+
+
+def depends(field: Field, company: str = "") -> bool:
+    """A work or sponsorship question that points at another answer ("the location(s) you selected"): your usual answer
+    may not hold for it, so it is answered for this job only."""
+    words = clean(field.label, company)
+    return DEPENDS.search(words) is not None and any(KNOWN[name].search(words) for name in ("work", "sponsorship"))
+
+
 def fits(label: str, wanted: str) -> bool:
     """A choice (cleaned) names the answer: the same words, or for yes or no, a choice starting with it."""
     return label == wanted or (wanted in ("yes", "no") and label.startswith(f"{wanted} "))
@@ -392,7 +417,7 @@ def _eeo_fits(topic: str, label: str, answer: str) -> bool:
     if declines or answer == NO_ANSWER:
         return declines and answer == NO_ANSWER
     if topic == "race":
-        wanted = clean(answer)
+        wanted, label = clean(answer), label.replace("alaskan native", "alaska native")  # Greenhouse's wording
         return label == wanted or label.startswith(f"{wanted} ")
     if topic == "gender":
         return answer in GENDERS and GENDERS[answer].search(label) is not None
