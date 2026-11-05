@@ -16,7 +16,7 @@ from test_web_settings import form as settings_form
 from app import config
 from app.config import PROJECT_DIR, ExportSettings, load_config
 from app.export import folder
-from app.web import main
+from app.web import export_settings, main
 from app.web.exporter import BUSY, Exporter
 
 PAGE = "/settings/export"
@@ -78,6 +78,18 @@ def chosen(tmp_path, settings):
     found.mkdir()
     settings(folder=str(found))
     return found
+
+
+def test_the_tick_is_a_tick_box_beside_its_words_in_both_forms(client):
+    assert client.get(PAGE).text.count('<label class="tick"><input type="checkbox" name="tick">') == 2
+
+
+def test_how_it_is_going_comes_right_under_the_warning_and_notices(client):
+    text = followed(client, "/folder", folder="relative").text
+    assert (
+        text.index(WARNING) < text.index('role="alert"') < text.index("Export status") < text.index("<h2>Folder</h2>")
+    )
+    assert text.index('id="export-status"') < text.index("<h2>Folder</h2>")
 
 
 def test_the_page_can_be_reached_from_settings(client):
@@ -222,7 +234,7 @@ def test_export_needs_a_folder(client, started):
 )  # fmt: skip
 def test_export_takes_the_dates_as_typed(client, started, chosen, first, last, dates):
     response = post(client, "/run", tick="on", start=first, end=last)
-    assert response.status_code == 303 and started == [dates]
+    assert (response.status_code, response.headers["location"]) == (303, PAGE) and started == [dates]
 
 
 @pytest.mark.parametrize(
@@ -248,12 +260,25 @@ def test_a_second_press_says_it_is_running(client, chosen, monkeypatch):
 
 
 @pytest.mark.parametrize("days", ["-1", "366", "1.5", "abc", "", "²", "1e2", "7 days"])
-def test_a_schedule_outside_0_to_365_is_refused_and_named(client, settings, chosen, days):
+def test_a_schedule_outside_0_to_365_is_refused_in_a_plain_sentence(client, settings, chosen, days):
     settings(folder=str(chosen), every_days=3)
     before = config.CONFIG_PATH.read_bytes()
-    response = followed(client, "/schedule", every_days=days, tick="on")
-    assert response.status_code == 400 and "export.every_days" in response.text
+    for tick in ({"tick": "on"}, {}):
+        response = followed(client, "/schedule", every_days=days, **tick)
+        assert response.status_code == 400 and "Give the days as a whole number from 0 to 365." in response.text
+        assert "export.every_days" not in response.text and "Invalid settings" not in response.text
     assert config.CONFIG_PATH.read_bytes() == before
+
+
+def test_a_schedule_refused_keeps_what_was_typed_escaped(client, chosen):
+    text = followed(client, "/schedule", every_days='"><script>', tick="on").text
+    assert "<script>" not in text and "&lt;script&gt;" in text
+
+
+def test_the_settings_check_stays_behind_the_page(client, monkeypatch, chosen):
+    monkeypatch.setattr(export_settings, "MOST_DAYS", 1000)
+    response = followed(client, "/schedule", every_days="999", tick="on")
+    assert response.status_code == 400 and "export.every_days" in response.text
 
 
 def test_a_schedule_above_0_needs_the_tick_and_0_doesnt(client, chosen):
@@ -341,6 +366,10 @@ def test_before_it_has_counted_it_only_says_exporting(client):
 
 def test_the_status_part_is_a_part_not_a_page(client):
     assert "<html" not in client.get(f"{PAGE}/status").text
+
+
+def test_no_notice_is_left_saying_it_is_exporting(client):
+    assert "how far it got" not in client.get(f"{PAGE}?done=started").text
 
 
 def test_a_press_really_runs_and_the_page_says_what_happened(client, conn, data_dir, settings, built, root):  # noqa: F811

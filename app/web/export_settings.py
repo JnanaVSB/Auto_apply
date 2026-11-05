@@ -21,10 +21,11 @@ ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 TICK = "Tick “I understand these files aren't encrypted” first."
 BAD_DATE = "Give each date as year-month-day, or leave it empty."
 DATE_ORDER = "The From date comes first."
+MOST_DAYS = 365
+BAD_DAYS = f"Give the days as a whole number from 0 to {MOST_DAYS}."
 DONE = {  # ?done=…: fixed words only
     "folder": "Folder saved.",
     "changed": "Folder saved. Earlier exports stay where they are.",
-    "started": "Exporting: this page shows how far it got.",
     "schedule": "Schedule saved.",
 }
 RUNS = "SELECT tried_on, last_result FROM export_runs WHERE id = 1"
@@ -67,16 +68,19 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         problem = problem or request.app.state.exporter.start(start, end)
         if problem:
             return _view(request, page, 400, problem=problem, **typed)
-        return RedirectResponse(f"{PAGE}?done=started", 303)
+        return RedirectResponse(PAGE, 303)
 
     @app.post(PAGE + "/schedule")
     async def save_schedule(request: Request) -> Response:
         form = request.state.form
-        days = actions.whole(form.get("every_days", ""))
-        if isinstance(days, int) and days > 0 and form.get("tick") != "on":
-            return _view(request, page, 400, problem=TICK, typed_days=form.get("every_days", ""))
+        typed = form.get("every_days", "")
+        days = actions.whole(typed)
+        if not isinstance(days, int) or days > MOST_DAYS:
+            return _view(request, page, 400, problem=BAD_DAYS, typed_days=typed)
+        if days > 0 and form.get("tick") != "on":
+            return _view(request, page, 400, problem=TICK, typed_days=typed)
         if problem := _save({"every_days": days}):
-            return _view(request, page, 400, problem=problem, typed_days=form.get("every_days", ""))
+            return _view(request, page, 400, problem=problem, typed_days=typed)
         return RedirectResponse(f"{PAGE}?done=schedule", 303)
 
     @app.get(PAGE + "/status")

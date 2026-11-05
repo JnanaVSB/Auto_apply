@@ -13,7 +13,7 @@ from app.tracker import ROUNDS, STAGES
 
 NOT_RECORDED = "this copy is not the file recorded"
 NO_RECORD = (
-    "No record of what was sent: this application wasn't recorded with I submitted it. The resume here is the newest "
+    "No record of what was sent: this application wasn't recorded with I submitted it. Any resume here is the newest "
     "the app prepared and may not be what you sent."
 )
 NO_FILES = "No files were recorded"
@@ -124,7 +124,7 @@ def _quick(conn: sqlcipher3.Connection, job_id: int) -> list[tuple[str, str]]:
     skills += f" ({', '.join(shared)})" if shared else ""
     line = (f"{result}. Your keywords in the title: {', '.join(json.loads(keywords)) or 'none'}. {skills}. "
             f"Meaning match {meaning:.2f} (0 to 1).")  # fmt: skip
-    return [("Quick check", line + (f'\nAimed at AI tools: score looks odd: the ad says "{trick}"' if trick else ""))]
+    return [("Quick check", line + (f"\nAimed at AI tools: score looks odd: the ad says “{trick}”" if trick else ""))]
 
 
 def _council(conn: sqlcipher3.Connection, label: str, version: dict) -> tuple[str, str]:

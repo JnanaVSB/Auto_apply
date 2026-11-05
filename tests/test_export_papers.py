@@ -162,6 +162,11 @@ def test_no_record_and_no_card_at_all(conn, job):
     assert papers.history(conn, job, None) == f"{papers.NO_RECORD}\n"
 
 
+def test_the_no_record_line_claims_no_resume_is_there():
+    assert "Any resume here is the newest the app prepared and may not be what you sent." in papers.NO_RECORD
+    assert "The resume here" not in papers.NO_RECORD
+
+
 @pytest.mark.parametrize(
     ("place", "day"),
     [("Pacific/Auckland", "2026-10-20"), ("America/Los_Angeles", "2026-10-19"), ("UTC", "2026-10-19")],
@@ -394,7 +399,7 @@ def test_a_phrase_aimed_at_ai_tools_is_named_as_text(conn, job):
     with conn:
         conn.execute(QUICK, (job, "[]", "[]", 0, trick, 1))
     paper = papers.council_notes(conn, job, [])
-    assert section(paper, "Quick check")[1] == f'Aimed at AI tools: score looks odd: the ad says "{trick}"'
+    assert section(paper, "Quick check")[1] == f"Aimed at AI tools: score looks odd: the ad says “{trick}”"
     assert r"\input{" not in latex.report(*paper)
 
 

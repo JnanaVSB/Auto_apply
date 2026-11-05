@@ -1,13 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Export{% endblock %}
 {% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
-{% macro tick() %}<label><input type="checkbox" name="tick"> I understand these files aren't encrypted</label>{% endmacro %}
+{% macro tick() %}<label class="tick"><input type="checkbox" name="tick"> I understand these files aren't encrypted</label>{% endmacro %}
 {% block content %}
 <h1>Export</h1>
 <p class="error" role="note">These files are not encrypted. Anyone who can open the folder can read them: your resume, your application history and every answer you gave, including your expected salary, your work authorization, and any answers about your gender, race, disability or veteran status. Choose a folder only you can reach. A folder that syncs to a cloud service (Dropbox, OneDrive, iCloud) uploads them.</p>
 <p><a href="/settings">Back to Settings</a></p>
 {% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
 {% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+
+<h2>Export status</h2>
+{% include "export_status.html" %}
 
 <h2>Folder</h2>
 <p class="hint">The folder's full path. A folder that doesn't exist yet is made here, if the folder above it exists.
@@ -43,7 +46,4 @@
   {{ tick() }}
   <p><button type="submit">Save schedule</button></p>
 </form>
-
-<h2>The last result</h2>
-{% include "export_status.html" %}
 {% endblock %}
