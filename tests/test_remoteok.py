@@ -212,8 +212,8 @@ def test_an_escaped_name_gives_the_same_match_key_as_the_plain_one():
 def test_read_asks_the_feed_itself():
     web = FakeWeb({remoteok.API: [NOTICE, listing()]})
     with closing(fetch.Fetcher(httpx.MockTransport(web))) as fetcher:
-        found, skipped = remoteok.read(fetcher, jobs.Roles(frozenset(), None))
-    assert ([job.source_job_id for job in found], skipped) == ([LINK], 0)
+        found, skipped, complete = remoteok.read(fetcher, [])
+    assert ([job.source_job_id for job in found], skipped, complete) == ([LINK], 0, True)
 
 
 def test_every_feed_has_a_label_and_a_reader_and_none_is_a_board():

@@ -4,19 +4,28 @@ import html
 from typing import Any
 from urllib.parse import urlsplit
 
-from app.sources import Job, SourceError, day_from_iso, day_from_timestamp, html_to_text, parse_each, required_text
+from app.sources import (
+    Job,
+    SourceError,
+    day_from_iso,
+    day_from_timestamp,
+    html_to_text,
+    parse_each,
+    required_name,
+    required_text,
+    yearly_pay,
+)
 
 LABEL = "Remote OK"
 SOURCE = "feed:remoteok"
 HOST = "remoteok.com"
 API = f"https://{HOST}/api"
-MIN_YEARLY = 10_000  # some listings put hourly pay in the same fields, which must not read as a year's
-MAX_YEARLY = 10_000_000  # past any real salary: a mistyped or hostile number
 
 
-def read(fetcher: Any, roles: Any) -> tuple[list[Job], int]:
-    """The feed's jobs and how many broken entries were skipped; it is one file, so `roles` narrow nothing here."""
-    return parse(fetcher.get_json(API)[0])
+def read(fetcher: Any, keywords: list[str]) -> tuple[list[Job], int, bool]:
+    """The feed's jobs, how many broken entries were skipped, and that the list is whole: it is one file, so `keywords`
+    narrow nothing here."""
+    return *parse(fetcher.get_json(API)[0]), True
 
 
 def parse(data: Any) -> tuple[list[Job], int]:
@@ -35,20 +44,15 @@ def _job(entry: dict) -> Job:
     return Job(
         source=SOURCE,
         source_job_id=link,  # stays with the job when a board's link replaces this one
-        company=_name(entry, "company"),
-        title=_name(entry, "position"),
+        company=required_name(entry, "company"),
+        title=required_name(entry, "position"),
         url=link,
         locations=[place] if place else [],
         remote="remote",
         description=(html_to_text(html.unescape(text)) or None) if isinstance(text, str) else None,  # some come escaped
-        salary=_salary(entry),
+        salary=yearly_pay(entry.get("salary_min"), entry.get("salary_max")),
         date_posted=day_from_iso(entry.get("date")) or day_from_timestamp(entry.get("epoch")),
     )
-
-
-def _name(entry: dict, key: str) -> str:
-    """As people read it; blank once cleaned is a broken entry."""
-    return required_text({key: html.unescape(entry[key])}, key)
 
 
 def _link(entry: dict) -> str:
@@ -57,10 +61,3 @@ def _link(entry: dict) -> str:
     if parts.scheme != "https" or parts.netloc.lower() != HOST or not parts.path.strip("/"):
         raise ValueError("not a Remote OK listing")
     return f"https://{HOST}{parts.path}"
-
-
-def _salary(entry: dict) -> str | None:
-    low, high = entry.get("salary_min"), entry.get("salary_max")
-    if not all(type(end) in (int, float) and MIN_YEARLY <= end <= MAX_YEARLY for end in (low, high)) or low > high:
-        return None
-    return f"USD {low:,.0f}–{high:,.0f} per year"

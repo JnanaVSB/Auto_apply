@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -25,11 +26,17 @@ SAFE_HOST = re.compile(r"[a-z0-9._:-]*")  # what a host can hold once read; a br
 CLOSED_SITE = re.compile(
     r"(.+\.)?(linkedin\.(com|cn)|lnkd\.in|joinhandshake\.(com|co\.uk)|indeed\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2}))"
 )
+MIN_YEARLY = 10_000  # some listings put hourly pay in the same fields, which must not read as a year's
+MAX_YEARLY = 10_000_000  # past any real salary: a mistyped or hostile number
 WORKPLACES = {"remote": "remote", "hybrid": "hybrid", "onsite": "on-site"}
 
 
 class SourceError(Exception):
     """A source's data is not in the expected shape; that source is skipped and closes nothing."""
+
+
+class Skipped(Exception):
+    """A feed has nothing it may do this run, e.g. no key: said in one line, it closes nothing and is no failure."""
 
 
 @dataclass
@@ -91,6 +98,18 @@ def required_text(entry: dict, key: str) -> str:
     if not isinstance(value, str) or not SURROGATE.sub("", value).strip():
         raise ValueError(f"{key} is empty")
     return value.strip()
+
+
+def yearly_pay(low: Any, high: Any) -> str | None:
+    """e.g. "USD 85,000–120,000 per year"; None unless both ends can be a year's pay, in order."""
+    if not all(type(end) in (int, float) and MIN_YEARLY <= end <= MAX_YEARLY for end in (low, high)) or low > high:
+        return None
+    return f"USD {low:,.0f}–{high:,.0f} per year"
+
+
+def required_name(entry: dict, key: str) -> str:
+    """A name as people read it; blank once cleaned counts as empty."""
+    return required_text({key: unescape(entry[key])}, key)
 
 
 def workplace(value: Any) -> str | None:

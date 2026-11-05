@@ -22,7 +22,7 @@ from app import db, jobs
 from app.config import Config, ConfigError, RoleSettings, SimplifyList, load_config
 from app.fetch import BLOCKED_HINT, COLLECT_HOSTS, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import Job, SourceError, host_of, is_simplify_site, plain_text, posting_of, simplify
+from app.sources import Job, Skipped, SourceError, host_of, is_simplify_site, plain_text, posting_of, simplify
 from app.sources.boards import BOARDS
 from app.sources.feeds import FEEDS
 
@@ -244,13 +244,19 @@ class _Run:
         _add_up(self.total, counts)
         self.out(f"{label}: {_describe(counts)}")
 
-    def read_feed(self, name: str) -> None:
+    def read_feed(self, name: str, keywords: list[str]) -> None:
         source = FEEDS[name].SOURCE
         label = source_label(source)
         try:
-            found, skipped = FEEDS[name].read(self.fetcher, self.roles)
+            found, skipped, complete = FEEDS[name].read(self.fetcher, keywords)
+            listed = self.conn.execute(LISTED_BY, (source,)).fetchone()[0]
+            if not found and listed:  # an empty reply must never close every job
+                raise SourceError(f"sent no jobs, but its last good read listed {_plural(listed, 'job')}")
             # what could not be read is not known to be gone
-            counts = jobs.save(self.conn, source, found, self.roles, now(), complete=not skipped)
+            counts = jobs.save(self.conn, source, found, self.roles, now(), complete=complete and not skipped)
+        except Skipped as why:
+            self.out(f"{label}: {why}")
+            return
         except FetchError as error:
             self.failed.append(f"{label}: {error}")
             return
@@ -259,7 +265,10 @@ class _Run:
             return
         counts.skipped += skipped
         _add_up(self.total, counts)
-        self.out(f"{label}: {_describe(counts)}" + (", so nothing was closed" if skipped else ""))
+        cut_short = "" if complete else ", the list was cut short"
+        self.out(
+            f"{label}: {_describe(counts)}{cut_short}" + (", so nothing was closed" if skipped or cut_short else "")
+        )
 
     def switch_off(self, name: str) -> None:
         source = FEEDS[name].SOURCE
@@ -450,7 +459,7 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
         run.read_boards(config.sources.extra_boards)
         for name in FEEDS:  # after the boards, so a board's job is known first
             if name in config.sources.feeds:
-                run.read_feed(name)
+                run.read_feed(name, config.roles.keywords)
             else:
                 run.switch_off(name)
         outcome = "done"
