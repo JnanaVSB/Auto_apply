@@ -252,6 +252,14 @@ def test_a_cover_letter_with_failed_tries_links_to_them(client, conn, job):
     assert f"($0.00 · {link})" in text and "Cover letter 2 ·" not in text
 
 
+def test_the_failed_tries_page_names_a_forms_answers(client, conn, job):
+    found = version(conn, job, 1, "by_hand", "Writer failed twice.")
+    with conn:
+        conn.execute("UPDATE preparations SET kind = 'answers' WHERE id = ?", (found,))
+        conn.execute(TRY, (1, 0, "reason", None, None, found))
+    assert "Form answers 1" in client.get("/failed-tries").text
+
+
 def test_the_failed_tries_page_goes_page_by_page(client, conn, job, monkeypatch):
     monkeypatch.setattr(drafts.queries, "PAGE_SIZE", 1)
     found = version(conn, job, 1, "by_hand", "Writer failed twice.")

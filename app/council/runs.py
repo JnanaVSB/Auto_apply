@@ -18,7 +18,7 @@ from app.council import writer
 from app.documents import latex, pdf, privacy, tile_sets, uploads, writer_sources
 from app.resume import read_latex
 
-KIND, LETTER = "resume", "cover_letter"  # each kind has its own versions
+KIND, LETTER, ANSWERS = "resume", "cover_letter", "answers"  # each kind has its own versions
 LABELS = {"writing": "writing", "done": "done", "by_hand": "check by hand", "stopped": "stopped"}  # as pages say them
 FAILED = ("stopped", "by_hand")  # a version that failed: Retry writes a new one
 JOB = "SELECT title, company, locations, description FROM jobs WHERE id = ?"

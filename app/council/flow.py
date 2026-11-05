@@ -18,9 +18,11 @@ import sqlcipher3
 
 from app import questionnaire
 from app.config import REVIEWERS, AIRole, Config
+from app.council import answers as form_answers  # "answers" names the reviewers' answers here
 from app.council import letter, reviewers, runs, writer
 from app.documents import pdf, privacy, writer_sources
 from app.resume import ResumeError, read_resume
+from app.submit import Field
 
 MOST_ROUNDS = 6  # the round limit is at most 5; one more when your words came after the last Writer
 WAITING = ("sent", "waiting")
@@ -33,14 +35,18 @@ VERSION = """SELECT p.id, p.job_id, p.kind, p.version, p.based_on, p.feedback, p
     LEFT JOIN pilots t ON t.id = p.pilot_id WHERE p.id = ?"""
 STEPS = "SELECT round, member, turn, status, answer, sent_on FROM steps WHERE preparation_id = ?"
 ROUND = "UPDATE preparations SET round = ? WHERE id = ?"
+READ_AGAIN = """SELECT 1 FROM forms f JOIN preparations p ON p.job_id = f.job_id
+    WHERE p.id = ? AND f.read_on > p.created_on"""  # both UTC times in the same format
 DRAFT = "UPDATE preparations SET draft = ?, flags = ? WHERE id = ?"
 ENDED = """UPDATE preparations SET status = ?, problem = ?, agreed = ?, wording = ?, draft = coalesce(?, draft),
     finished_on = ? WHERE id = ?"""
 CLOSED = "Job closed: preparation stopped. Steps already sent were finished and saved."
 SKIPPED = "You skipped this job: preparation stopped. Steps already sent were finished and saved."
 CHANGED = "Your entries changed: preparation stopped. It starts again once you confirm them."
+FORM_READ = "The form was read again while the Writer was writing: press Write answers again"
 NO_WRITER = "The Writer gave no valid answer twice in round {}: check by hand, or press Retry."
 ONE_PAGE = "The resume's PDF is {} pages: it must fit on one page."
+NOTHING_SENT = (privacy.PrivacyError, ResumeError, reviewers.NoInstructions, form_answers.NoQuestions)  # fix, Retry
 LETTER_UNCLEAR = ("No agreement: the Truth checker still objects to the letter as a whole or to an entry, so no "
                   "paragraph can be left out. Check it by hand.")  # fmt: skip
 
@@ -69,14 +75,19 @@ def start(
     """A new version of the job's resume (or cover letter), waiting for its first step, with the Writer's and the
     reviewers' settings as they are now (a later change in Settings applies to new versions only). A change (your
     words) builds on the newest finished version. `writer_only`: "Resume only", no council. `pilot`: a pilot's
-    version (its id, the line-up's name, and the line-up's models by member), kept apart from yours."""
+    version (its id, the line-up's name, and the line-up's models by member), kept apart from yours. A form's answers
+    (kind answers): the Writer alone, refused (NoQuestions) when the form has nothing for it."""
+    if kind == runs.ANSWERS and (refusal := form_answers.questions(conn, job_id)[1]):
+        raise form_answers.NoQuestions(refusal)
     if pilot:  # a pilot's version: only its line-up's models, whatever Settings say
         kind, roles = "pilot", pilot[2]
         writer, council = json.dumps(roles["writer"]), {"members": {m: roles[m] for m in REVIEWERS}, "names": {}}
     else:
         letters = {*reviewers.LETTER_MEMBERS, *(added.id for added in config.ai.extra if added.letters)}
-        members = {} if writer_only else {member: role.model_dump() for member, role in config.ai.members.items()
-                                          if kind != runs.LETTER or member in letters}  # fmt: skip
+        members = {} if writer_only or kind == runs.ANSWERS else {
+            member: role.model_dump() for member, role in config.ai.members.items()
+            if kind != runs.LETTER or member in letters
+        }  # fmt: skip
         council = {"members": members, "names": {m: name for m, name in config.ai.names.items() if m in members}}
         writer = config.ai.writer.model_dump_json()
     base = runs.last_done(conn, job_id, kind) if feedback else None
@@ -106,7 +117,7 @@ def advance(conn: sqlcipher3.Connection, config: Config, preparation: int) -> li
         return []
     try:
         return _next(conn, config, version)
-    except (privacy.PrivacyError, ResumeError, reviewers.NoInstructions) as error:  # nothing sent: fix it, Retry
+    except NOTHING_SENT as error:
         end(conn, preparation, "stopped", str(error))
     except privacy.PrivacyStop as stop:
         end(conn, preparation, "stopped", f"Privacy check stopped this: {stop}. Change that, then try again.")
@@ -119,7 +130,7 @@ def pending(conn: sqlcipher3.Connection, config: Config, preparation: int) -> li
     version's status: steps already sent always finish and are saved."""
     try:
         return _next(conn, config, _version(conn, preparation), waiting=True)
-    except (privacy.PrivacyError, privacy.PrivacyStop, ResumeError, reviewers.NoInstructions):
+    except (*NOTHING_SENT, privacy.PrivacyStop):
         return []
 
 
@@ -139,8 +150,12 @@ def _next(conn: sqlcipher3.Connection, config: Config, version: dict, waiting: b
     if number == 1 and version["claims"] and not version["planted"] and not waiting:
         found = _plant(conn, version, found)
     _keep(conn, config, version, found)
-    if not seen.members:  # "Resume only": no council
-        if not waiting:
+    if not seen.members:  # "Resume only", or a form's answers: no council
+        if waiting:
+            return []
+        if version["kind"] == runs.ANSWERS:
+            _answered(conn, version, found["draft"])
+        else:
             end(conn, preparation, "done", None)
             _build(conn, config, preparation)
         return []
@@ -183,12 +198,20 @@ class _Seen(NamedTuple):
     names: dict[str, str]
     data_dir: Path
     one_page: bool
+    questions: list[Field]  # a form's long questions, for its answers
 
     @classmethod
     def of(cls, conn: sqlcipher3.Connection, config: Config, version: dict) -> "_Seen":
         title, company, locations, description = conn.execute(runs.JOB, (version["job_id"],)).fetchone()
         entries = runs.originals(conn, version["sources"])
-        if version["kind"] == runs.LETTER:
+        questions: list[Field] = []
+        if version["kind"] == runs.ANSWERS:  # worked out again: your answers may have changed
+            if conn.execute(READ_AGAIN, (version["id"],)).fetchone():  # Q1, Q2... may name other questions now
+                raise form_answers.NoQuestions(FORM_READ)
+            questions, refusal = form_answers.questions(conn, version["job_id"])
+            if refusal:
+                raise form_answers.NoQuestions(refusal)
+        if version["kind"] in (runs.LETTER, runs.ANSWERS):  # your resume's entries, as the letter's
             resume = runs.last_done(conn, version["job_id"])
             fresh = resume is not None and not runs.outdated(resume, json.loads(version["sources"]))
             keys = (
@@ -203,7 +226,7 @@ class _Seen(NamedTuple):
         return cls(
             (title, company, ", ".join(json.loads(locations)), description or ""), entries, shield,
             version["kind"] == runs.LETTER, {member: AIRole(**role) for member, role in council["members"].items()},
-            names, config.data_dir, config.documents.one_page,
+            names, config.data_dir, config.documents.one_page, questions,
         )  # fmt: skip
 
 
@@ -220,11 +243,18 @@ def _writer(seen: _Seen, version: dict, steps: dict, number: int) -> list[Call]:
         objections, asked = reviewers.objections(answers), " ".join([asked, _pages(seen, version)]).strip()
     elif version["based_on"]:
         previous, asked = json.loads(version["base"]), " ".join([asked, _pages(seen, version, "base_version")]).strip()
-    module = letter if seen.letter else writer
-    system, user = module.request(*seen.job, seen.entries, seen.shield, previous, asked if previous else "", council)
+    module = form_answers if version["kind"] == runs.ANSWERS else letter if seen.letter else writer
+    if module is form_answers:  # one draft only: never a revision
+        system, user = form_answers.request(*seen.job, seen.entries, seen.shield, seen.questions)
+    else:
+        system, user = module.request(
+            *seen.job, seen.entries, seen.shield, previous, asked if previous else "", council
+        )
 
     def check(text: str) -> dict:
-        if seen.letter:
+        if module is form_answers:
+            found = form_answers.checked(text, seen.questions, seen.entries, seen.job[3])
+        elif seen.letter:
             found = letter.checked(text, seen.entries, seen.job[3], objections)
         else:
             found = writer.checked(text, seen.entries, seen.shield, objections)
@@ -314,8 +344,15 @@ def _keep(conn: sqlcipher3.Connection, config: Config, version: dict, found: dic
     with conn:
         conn.execute(DRAFT, (draft, json.dumps(found["flags"]), version["id"]))
     version["draft"] = draft
-    if version["kind"] != runs.LETTER:  # a letter has no page limit
+    if version["kind"] not in (runs.LETTER, runs.ANSWERS):  # a letter has no page limit, answers no PDF
         _build(conn, config, version["id"], in_progress=True)
+
+
+def _answered(conn: sqlcipher3.Connection, version: dict, draft: dict) -> None:
+    """A form's answers done: each kept for the job as the Writer's, in one transaction with the version's end."""
+    with conn:
+        form_answers.save(conn, version["job_id"], version["id"], draft)
+        conn.execute(ENDED, ("done", None, None, None, None, _now(), version["id"]))
 
 
 def _plant(conn: sqlcipher3.Connection, version: dict, found: dict) -> dict:

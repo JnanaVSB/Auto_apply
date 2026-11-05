@@ -128,7 +128,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         rows = runs.failed_tries(request.app.state.conn, size + 1, (number - 1) * size, version)  # one more: a next?
         return page(
             request, "failed_tries.html", rows=rows[:size], more=len(rows) > size, number=number, version=version,
-            kinds={runs.KIND: "Resume", runs.LETTER: "Cover letter"},
+            kinds={runs.KIND: "Resume", runs.LETTER: "Cover letter", runs.ANSWERS: "Form answers"},
         )  # fmt: skip
 
 
