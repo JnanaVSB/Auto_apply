@@ -54,7 +54,12 @@ UPLOAD = "/resume-profile/upload"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_FIELDS = 500
 # The Questionnaire sends up to 300 More answers, two fields each, with up to 3,000 characters a row
-FORM_LIMITS = {UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS), "/questionnaire": (8 * 1024 * 1024, 1000)}
+# /add/job: a job's pasted text, at most 12 bytes a character once a form has encoded it
+FORM_LIMITS = {
+    UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS),
+    "/questionnaire": (8 * 1024 * 1024, 1000),
+    "/add/job": (256 * 1024, MAX_FIELDS),
+}
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
@@ -279,7 +284,7 @@ def create_app(
         form = request.state.form
         message, job_id = await run_in_threadpool(  # beside the dashboard: sites can take a while to answer
             actions.add_job, data_dir, request.app.state.collector.fetcher, form.get("link", ""),
-            form.get("company", ""), form.get("title", ""),
+            form.get("company", ""), form.get("title", ""), form.get("job_text", ""),
         )  # fmt: skip
         return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
 
