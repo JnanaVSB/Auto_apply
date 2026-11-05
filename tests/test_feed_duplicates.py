@@ -313,6 +313,79 @@ def test_a_simplify_list_keeps_todays_rule_beside_a_closed_job(conn):
     assert len(stored(conn)) == 1
 
 
+def rejected_and_closed(conn):
+    on_the_tracker("rejected")(conn)
+    closed(conn)
+
+
+def hidden_and_closed(conn):
+    hidden(conn)
+    closed(conn)
+
+
+BOARD_POSTING = board_job(description="A new opening.")
+SIMPLIFY_POSTING = simplify_job(url="https://acme.example/1", locations=["Austin, TX"])
+
+
+@pytest.mark.parametrize("posting", [BOARD_POSTING, SIMPLIFY_POSTING], ids=["board", "simplify"])
+@pytest.mark.parametrize("mark", [rejected_and_closed, hidden_and_closed, on_the_tracker("applied"), closed])
+def test_a_posting_with_the_same_places_never_joins_a_feed_job_that_is_not_free(conn, mark, posting):
+    save(conn, feed_job(locations=["Austin, TX"], description="The ad I applied to."))
+    with conn:
+        mark(conn)
+    before = conn.execute("SELECT * FROM jobs").fetchall()
+    save(conn, posting)
+    assert conn.execute("SELECT * FROM jobs WHERE id = 1").fetchall() == before
+    assert entries(conn) == [(FEED, LISTING)]
+    assert stored(conn, "status, not_interested")[1:] == [("open", 0)]
+
+
+@pytest.mark.parametrize(
+    "posting",
+    [replace(BOARD_POSTING, locations=[]), replace(SIMPLIFY_POSTING, locations=[])],
+    ids=["board", "simplify"],
+)
+def test_no_place_on_either_side_is_no_way_into_a_closed_feed_job(conn, posting):
+    save(conn, feed_job())
+    with conn:
+        closed(conn)
+    save(conn, posting)
+    assert len(stored(conn)) == 2
+    assert entries(conn) == [(FEED, LISTING)]
+
+
+def test_a_board_posting_with_the_same_places_joins_a_free_feed_job(conn):
+    save(conn, feed_job(locations=["Austin, TX"]))
+    save(conn, board_job())
+    assert stored(conn, "apply_url, description") == [(BOARD_LINK, "From the board.")]
+
+
+@pytest.mark.parametrize("places", [[], ["Austin, TX"]])
+def test_a_feed_never_joins_a_job_you_added_by_a_board_link(conn, places):
+    jobs.save(conn, BOARD, [board_job()], ROLES, NOW, complete=False, chosen=True)
+    save(conn, feed_job(locations=places))
+    assert len(stored(conn)) == 2
+    assert entries(conn) == [(BOARD, "123")]
+
+
+def test_the_same_link_from_a_list_leaves_a_tracker_jobs_key_alone(conn):
+    save(conn, feed_job())
+    with conn:
+        on_the_tracker("applied")(conn)
+    before = conn.execute("SELECT apply_url, match_key FROM jobs").fetchall()
+    save(conn, simplify_job(url=LISTING))
+    assert conn.execute("SELECT apply_url, match_key FROM jobs").fetchall() == before
+
+
+def test_an_unfinished_resume_is_not_on_the_tracker(conn):
+    save(conn, board_job())
+    with conn:
+        conn.execute("INSERT INTO preparations (job_id, kind, version, sources, writer, status, created_on) "
+                     "VALUES (1, 'resume', 1, '[]', '{}', 'writing', 'now')")  # fmt: skip
+    save(conn, feed_job())
+    assert len(stored(conn)) == 1
+
+
 def test_a_feed_joins_the_open_posting_not_an_older_closed_one(conn):
     save(conn, board_job(1), board_job(2, locations=["Denver, CO"]))
     with conn:
@@ -363,3 +436,4 @@ def test_a_feed_never_joins_a_job_you_added(conn, places):
 def test_the_fourth_check_uses_the_index_and_never_reads_the_whole_table(conn, sql, values):
     plan = " ".join(row[-1] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", values))
     assert "INDEX jobs_match_key" in plan and "SCAN" not in plan
+    assert "INDEXED BY jobs_match_key" in sql  # for one key SQLite finds it alone today; by name, it always will

@@ -70,13 +70,15 @@ NOT_ON_TRACKER = """NOT EXISTS (SELECT 1 FROM tracker WHERE job_id = {job})
 # A job a new posting may join without hiding it or rewriting a job with a record: open, wanted, not on the Tracker.
 FREE = f"j.status = 'open' AND j.not_interested = 0 AND {NOT_ON_TRACKER.format(job='j.id')}"
 ON_FEEDS_ONLY = "NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%')"
-NOT_ADDED_BY_YOU = "NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source = 'manual')"
+NOT_ADDED_BY_YOU = (
+    "j.added_by_you = 0 AND NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source = 'manual')"
+)
 # Only another source's job: one source's separate postings with the same title stay separate. A job you add and a
 # job on feeds stay apart, whichever came first: both often have no places, and two visible jobs beat a hidden join.
-# A feed joins only a free job here too.
+# A job only on feeds is joined only if it is free, and a feed joins only a free job.
 SAME_PLACES = f"""SELECT id FROM jobs j INDEXED BY jobs_match_key WHERE match_key = :key
     AND id NOT IN (SELECT job_id FROM job_sources WHERE source = :source)
-    AND (:source != 'manual' OR NOT {ON_FEEDS_ONLY})
+    AND (NOT {ON_FEEDS_ONLY} OR (:source != 'manual' AND {FREE}))
     AND (:source NOT LIKE 'feed:%' OR ({FREE} AND {NOT_ADDED_BY_YOU}))"""  # noqa: S608 (fixed text)
 # The oldest free job with a company and title, whatever its places (see _same_name): for a feed, one it doesn't list
 # yet and you didn't add; for anything else, one on feeds and nothing else. By a range on match_key, on that index by

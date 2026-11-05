@@ -286,6 +286,16 @@ def test_a_job_drops_lone_surrogates_from_every_text():
     assert (job.title, job.url, job.description, job.salary, job.source_job_id) == ("xy",) * 5
 
 
+@pytest.mark.parametrize("name", ["remote", "level", "category", "sponsorship", "date_posted"])
+def test_every_other_text_field_is_cleaned_too(name):
+    job = Job(source="s", source_job_id="1", company="c", title="t", url="u", locations=[], **{name: "x\ud800y"})
+    assert getattr(job, name) == "xy"
+
+
+def test_a_jobs_source_is_cleaned_too():
+    assert Job(source="x\ud800y", source_job_id="1", company="c", title="t", url="u", locations=[]).source == "xy"
+
+
 def test_a_job_keeps_what_is_not_text():
     job = Job(source="s", source_job_id="1", company="c", title="t", url="u", locations=[], listed=False)
     assert (job.listed, job.description, job.locations) == (False, None, [])
