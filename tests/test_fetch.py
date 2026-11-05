@@ -54,6 +54,9 @@ def test_returns_data_and_version_tag_and_says_who_it_is():
         "http://hacker-news.firebaseio.com/v0/item/1.json",
         "https://hacker-news.firebaseio.com.evil.com/",
         "https://user@hacker-news.firebaseio.com/",
+        "https://www.remoteok.com/api",  # the feed's own address only: a redirect there isn't followed either
+        "https://remoteok.com.evil.example/api",
+        "http://remoteok.com/api",
     ],
 )
 def test_only_https_to_the_allowed_hosts(url):
@@ -73,6 +76,12 @@ def test_hacker_news_api_may_be_read_but_is_no_collection_site():
     fetcher, requests = fake_web(httpx.Response(200, json={"id": 1}))
     assert fetcher.get_json("https://hacker-news.firebaseio.com/v0/item/1.json")[0] == {"id": 1}
     assert len(requests) == 1 and fetch.HN_API not in fetch.COLLECT_HOSTS
+
+
+def test_a_feed_may_be_read_but_is_no_collection_site():
+    fetcher, requests = fake_web(httpx.Response(200, json=[]))
+    assert fetcher.get_json("https://remoteok.com/api")[0] == []
+    assert len(requests) == 1 and not fetch.FEED_HOSTS & fetch.COLLECT_HOSTS
 
 
 def test_redirect_is_reported_not_followed():
