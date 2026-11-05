@@ -30,6 +30,7 @@ from app.web import (
     council_view,
     drafts,
     emails,
+    export_settings,
     gmail_settings,
     look,
     pilot,
@@ -361,6 +362,7 @@ def create_app(
     writer_settings.add_routes(app, _page)
     council_settings.add_routes(app, _page)
     gmail_settings.add_routes(app, _page)
+    export_settings.add_routes(app, _page, data_dir)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
@@ -376,7 +378,7 @@ async def _schedule(app: FastAPI) -> None:
     while True:
         await asyncio.sleep(SCHEDULE_CHECK_SECONDS)
         # collections first
-        for runner in (app.state.collector, app.state.scorer, app.state.preparer, app.state.mailer):
+        for runner in (app.state.collector, app.state.scorer, app.state.preparer, app.state.mailer, app.state.exporter):
             try:
                 runner.tick(app.state.conn)
             except Exception as error:  # e.g. the database busy for a moment: try again next minute

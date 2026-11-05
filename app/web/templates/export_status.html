@@ -1,0 +1,12 @@
+{# How the export is going; while it runs, HTMX reloads just this part every 3 seconds. #}
+<div id="export-status"{% if exporter.running %} hx-get="/settings/export/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  {% if exporter.running %}
+  <p role="status">{% if exporter.total %}Exporting {{ exporter.done }} of {{ exporter.total }} applications…{% else %}Exporting…{% endif %}</p>
+  <p class="hint">Closing the dashboard stops it; pressing Export again carries on.</p>
+  {% else %}
+  {% if result %}<p class="result" role="status">{{ result }}</p>{% endif %}
+  {% if exporter.problems %}
+  <ul>{% for line in exporter.problems %}<li class="error">{{ line }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% endif %}
+</div>

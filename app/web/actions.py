@@ -236,7 +236,7 @@ def decline_board(conn: sqlcipher3.Connection, board: str) -> bool:
     return rows.rowcount == 1
 
 
-def _whole(text: str) -> int | str:
+def whole(text: str) -> int | str:
     """A whole number typed in the form; anything else is kept as typed, so the settings check names it."""
     text = text.strip()
     return int(text) if re.fullmatch(r"[0-9]{1,9}", text) else text  # "²" is not a number
@@ -256,8 +256,8 @@ def _lines(text: str) -> list[str]:
 # The Scoring section's fields, and how each is read from the form. A field missing from the form keeps its value.
 SCORING_FIELDS = {
     "automatic": lambda text: text == "on",
-    "minutes_per_day": _whole,
-    "ready_threshold": _whole,
+    "minutes_per_day": whole,
+    "ready_threshold": whole,
     "meaning_threshold": _decimal,
     "skills_threshold": _decimal,
     "extra_skills": _lines,
@@ -265,7 +265,7 @@ SCORING_FIELDS = {
 EVALUATOR_FIELDS = {
     "ai_model": ("model", str.strip),
     "ai_thinking": ("thinking", str),
-    "ai_context": ("context", _whole),
+    "ai_context": ("context", whole),
 }
 
 
@@ -342,7 +342,7 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
             "extra_boards": _lines(form.get("extra_boards", "")),
             "phonebook_lists": _lines(form.get("phonebook_lists", "")),
         },
-        **{name: _whole(form.get(name, "")) for name in NUMBERS},
+        **{name: whole(form.get(name, "")) for name in NUMBERS},
         "gmail_read_all": form.get("gmail_read_all") == "on",
     }
     scoring = dict(old.get("scoring") or {}) | {
