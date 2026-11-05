@@ -91,8 +91,11 @@ def test_a_thread_gives_names_and_the_refresh_says_what_it_gained(conn, data_dir
     pages = thread(comments) | {LEVER_ACME: [lever(1), lever(2, "ML Researcher"), lever(3, "Accountant")]}
     lines = refresh(conn, data_dir, FakeWeb(pages))
     assert lines[0] == "Hacker News: 3 new comments read, 2 with a readable board link, 1 new names"
-    assert lines[-1] == "Boards from Hacker News so far: 1; 2 of your matching jobs came from them"
-    assert lines[-2].startswith("Checked ")  # the tally counts what the check just added
+    assert lines[-1].startswith("Checked 3 names: 1 added")  # the page shows only the last line, so one line holds both
+    assert "to confirm on the Boards page" in lines[-1]
+    assert lines[-1].endswith(
+        "(asked again next time). Boards from Hacker News so far: 1; 2 of your matching jobs came from them"
+    )  # the tally counts what the check just added
     assert one(conn, "SELECT outcome FROM phonebook_runs") == ("done",)
 
 
@@ -207,6 +210,42 @@ def test_a_comment_that_fails_stops_the_read_and_the_next_refresh_starts_there(c
     web = FakeWeb(thread(comments))
     refresh(conn, data_dir, web)
     assert asked(web) == [hn.POSTS, hn.item(THREAD), *map(hn.item, range(5, 11))]
+
+
+def test_a_comment_that_looks_changed_is_said_and_asked_for_again_and_the_good_ones_are_kept(conn, data_dir):
+    comments = {1: comment(1, "one"), 2: comment(2, "two"), 3: comment(3, "three"), 4: {"id": 4, "by": "someone"}}
+    lines = refresh(conn, data_dir, FakeWeb(thread(comments)))
+    assert lines[0] == (
+        "Hacker News could not be read (1 comments look different from usual). Names found so far are kept; tried "
+        "again next time."
+    )
+    assert marks(conn) == {"hn:1", "hn:2", "hn:3"}
+    assert names(conn) == {"lever:one", "lever:two", "lever:three"}
+    assert outcomes(conn) == ["partial"]
+    web = FakeWeb(thread(comments))
+    refresh(conn, data_dir, web)
+    assert asked(web) == [hn.POSTS, hn.item(THREAD), hn.item(4)]
+
+
+def test_the_comments_after_one_that_looks_changed_are_still_read(conn, data_dir):
+    comments = {1: {}, 2: comment(2, "two")}
+    refresh(conn, data_dir, FakeWeb(thread(comments)))
+    assert marks(conn) == {"hn:2"}
+
+
+def test_a_thread_whose_comment_ids_are_all_odd_is_said_not_read_as_empty(conn, data_dir):
+    pages = NO_INDEX | {hn.POSTS: {"submitted": [THREAD]}, hn.item(THREAD): story(kids=["a", True])}
+    lines = refresh(conn, data_dir, FakeWeb(pages))
+    assert lines[0].startswith("Hacker News could not be read (its list of comments looks different from usual)")
+    assert outcomes(conn) == ["partial"]
+
+
+def test_a_comment_the_api_says_is_not_there_is_nothing_there_and_the_read_goes_on(conn, data_dir):
+    comments = {number: comment(number, f"co{number}") for number in range(1, 11)}
+    lines = refresh(conn, data_dir, FakeWeb(thread(comments) | {hn.item(5): 404}))
+    assert lines[0] == "Hacker News: 10 new comments read, 9 with a readable board link, 9 new names"
+    assert "hn:5" in marks(conn)
+    assert outcomes(conn) == ["done"]
 
 
 def test_deleted_and_empty_comments_are_marked_done_and_not_asked_for_again(conn, data_dir):

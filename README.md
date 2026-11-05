@@ -115,8 +115,8 @@ name is also tried once on the other sites; a board found that way is added only
 with the first one, otherwise it waits for you on the dashboard's Boards page.
 
 It is slow on purpose (Common Crawl asks for pauses between requests and is often overloaded): often an hour or more.
-The first refresh also takes up to about 17 more minutes for Hacker News (about 1,000 comments at one request a
-second); later ones read only the new comments.
+The first refresh also reads Hacker News, usually in well under 33 more minutes (at most 1,000 comments in each of two
+threads, at one request a second); later ones read only the new comments.
 It says which part of the index it is reading. When the index is overloaded (two site parts in a row fail), it
 leaves the rest for the next refresh and goes on to check the names it already has.
 Collections never wait for it: when a collection starts (from the dashboard or a terminal), a running refresh pauses

@@ -248,22 +248,32 @@ def _hiring_threads(fetcher: Fetcher | Guarded) -> list[dict]:
 def read_hn(conn: sqlcipher3.Connection, fetcher: Fetcher | Guarded, out: Output) -> tuple[int, int, int]:
     """Take board names from the top-level comments not read yet, each comment saved as it is read.
 
-    A thread grows all month, so each comment has its own "done" mark, and only names are kept from it. Returns the
-    comments read, how many linked a board, and the new names.
+    A thread grows all month, so each comment has its own "done" mark, and only names are kept from it. A comment
+    that looks changed is asked again next time, and said once the others are saved. Returns the comments read, how
+    many linked a board, and the new names.
     """
-    read = linked = new = 0
+    read = linked = new = changed = 0
     for thread in _hiring_threads(fetcher):
         for number in hn.comments_of(thread):
             part = f"hn:{number}"
             if _done(conn, part):
                 continue
-            boards = hn.boards_in(fetcher.get_json(hn.item(number))[0])
+            try:
+                comment = fetcher.get_json(hn.item(number))[0]
+            except NotFound:
+                comment = None
+            if hn.looks_changed(comment):
+                changed += 1
+                continue
+            boards = hn.boards_in(comment)
             with conn:  # the comment's names and "comment done" are saved together
                 new += _add_names(conn, boards, "hackernews")
                 conn.execute(DONE, (part, now()))
             read, linked = read + 1, linked + bool(boards)
             if read % PROGRESS_EVERY == 0:
                 out(f"  {read:,} Hacker News comments read")
+    if changed:
+        raise SourceError(f"{changed:,} comments look different from usual")
     return read, linked, new
 
 
@@ -392,14 +402,13 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guar
             complete = False
             say(f"Common Crawl's index could not be read ({error}). Names found so far are kept; try again later.")
         results = check_names(conn, fetcher, jobs.Roles.from_settings(config.roles), say)
-        say(
+        checked = (
             f"Checked {results.total():,} names: {results['added']:,} added (read on every collection from now on), "
             f"{results['empty']:,} with no jobs yet (asked again next round), {results['not found']:,} not found, "
             f"{results['to confirm']:,} to confirm on the Boards page, "
             f"{results['could not be checked']:,} could not be checked (asked again next time)."
         )
-        if config.sources.hacker_news:
-            say(hn_so_far(conn))
+        say(f"{checked} {hn_so_far(conn)}" if config.sources.hacker_news else checked)  # the page shows the last line
         outcome = "done" if complete else "partial"
     except Paused:
         outcome = "paused"

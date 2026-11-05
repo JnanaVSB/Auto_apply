@@ -80,9 +80,14 @@ def test_a_thread_with_no_comments_yet_has_none():
     assert hn.comments_of(story()) == []
 
 
-def test_a_changed_thread_reply_is_refused_without_repeating_it():
+@pytest.mark.parametrize("kids", ["sam@example.com", None, [True, "sam@example.com", 0]])
+def test_a_changed_thread_reply_is_refused_without_repeating_it(kids):
     with pytest.raises(SourceError, match="^its list of comments looks different from usual$"):
-        hn.comments_of(story(kids="sam@example.com"))
+        hn.comments_of(story(kids=kids))
+
+
+def test_a_thread_with_an_empty_list_has_no_comments():
+    assert hn.comments_of(story(kids=[])) == []
 
 
 def test_at_most_a_thousand_comments_are_read():
@@ -160,3 +165,16 @@ def test_capitals_and_repeats_give_one_name():
 )
 def test_a_comment_that_is_gone_or_odd_gives_nothing(item):
     assert hn.boards_in(item) == set()
+
+
+@pytest.mark.parametrize("reply", [{}, {"id": 1}, [], [1], 5, "text", True, comment(5), comment(None)])
+def test_a_reply_that_is_there_but_no_comment_as_we_know_it_looks_changed(reply):
+    assert hn.looks_changed(reply) is True
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [None, comment("Hello"), comment(""), {"id": 1, "deleted": True}, {"id": 1, "dead": True}, comment(5, dead=True)],
+)
+def test_nothing_there_gone_and_real_comments_do_not_look_changed(reply):
+    assert hn.looks_changed(reply) is False

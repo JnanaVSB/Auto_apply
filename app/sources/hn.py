@@ -14,7 +14,7 @@ from app.sources import SourceError, board_of
 POSTS = f"https://{HN_API}/v0/user/whoishiring.json"
 POSTS_TO_READ = 12  # three kinds of thread are posted each month
 THREADS = 2  # the newest hiring threads: a thread grows all month, so the one before it is still read
-MAX_COMMENTS = 1000
+MAX_COMMENTS = 1000  # per thread
 HIRING_TITLE = "Ask HN: Who is hiring?"
 HREF = re.compile(r'href="([^"]*)"')  # the visible text of a link is shortened, so only its address is read
 
@@ -50,9 +50,16 @@ def is_hiring(post: Any) -> bool:
 def comments_of(thread: dict) -> list[int]:
     """The ids of a thread's top-level comments; replies to them are never read."""
     kids = thread.get("kids", [])
-    if not isinstance(kids, list):
+    if not isinstance(kids, list) or (kids and not _whole_numbers(kids)):
         raise SourceError("its list of comments looks different from usual")
     return _whole_numbers(kids)[:MAX_COMMENTS]
+
+
+def looks_changed(comment: Any) -> bool:
+    """A reply that is there but isn't a comment as we know it; `None` is an id with nothing behind it."""
+    if isinstance(comment, dict):
+        return not (comment.get("deleted") or comment.get("dead") or isinstance(comment.get("text"), str))
+    return comment is not None
 
 
 def boards_in(comment: Any) -> set[str]:

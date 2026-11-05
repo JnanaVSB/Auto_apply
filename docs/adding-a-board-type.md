@@ -11,7 +11,8 @@ Adding one more **company** of a kind that already exists is just one settings l
 - Use only the site's **official public job-board API**: read-only, no login, no scraping of web pages. Check the
   site's terms of use first. Never add simplify.jobs: its terms forbid automated access.
 - The download itself is shared (`app/fetch.py`): it only contacts the hosts listed in `ALLOWED_HOSTS` there
-  (collection sites in `COLLECT_HOSTS`, plus Common Crawl's index for the phone book).
+  (collection sites in `COLLECT_HOSTS`, plus Common Crawl's index and Hacker News' API for the phone book, and
+  Lever's application pages for a job's form).
   A new board type needs its API host added to that list, which is a security decision for the owner.
 
 ## The template: `app/sources/<name>.py`
