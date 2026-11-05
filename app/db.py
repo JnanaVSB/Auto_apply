@@ -676,6 +676,61 @@ UPGRADES = (
         last_result TEXT  -- counts only, in plain words
     );
     """,
+    """
+    -- Job feeds give two more reasons a job is not open. SQLite can't change a check, so jobs is rebuilt, every row and
+    -- column of that day kept. Foreign keys are off, so dropping it touches no other table's rows.
+    CREATE TABLE jobs_v21 (
+        id INTEGER PRIMARY KEY,
+        apply_url TEXT NOT NULL UNIQUE,
+        match_key TEXT NOT NULL,
+        company TEXT NOT NULL,
+        title TEXT NOT NULL,
+        locations TEXT NOT NULL,
+        us_location TEXT NOT NULL CHECK (us_location IN ('yes', 'unclear', 'no')),
+        remote TEXT NOT NULL CHECK (remote IN ('remote', 'hybrid', 'on-site', 'unknown')),
+        level TEXT NOT NULL CHECK (level IN ('intern', 'new grad', 'entry', 'mid', 'senior', 'staff+', 'unknown')),
+        role_category TEXT,
+        sponsorship TEXT NOT NULL CHECK (sponsorship IN ('offers', 'no', 'citizens only', 'unknown')),
+        terms TEXT NOT NULL,
+        description TEXT,
+        salary TEXT,
+        date_posted TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'no longer available', 'closed')),
+        open_manually_only INTEGER NOT NULL DEFAULT 0,
+        added_by_you INTEGER NOT NULL DEFAULT 0,
+        check_location INTEGER NOT NULL DEFAULT 0,
+        status_reason TEXT CHECK (status_reason IN ('removed from its board', 'board shut down',
+            'company stopped hiring', 'removed from Simplify', 'inactive on Simplify',
+            'reason not recorded (before 2026-10-21)', 'no longer in the feed', 'feed turned off')),  -- NULL while open
+        not_interested INTEGER NOT NULL DEFAULT 0,
+        location_by_you INTEGER NOT NULL DEFAULT 0,
+        prepare_anyway INTEGER NOT NULL DEFAULT 0,  -- you sent it on despite its score
+        prepare_requested_on TEXT,  -- when you pressed Prepare; NULL until you do
+        writer_sources TEXT  -- this job's own choice of the Writer's sources; NULL: the default
+    );
+    INSERT INTO jobs_v21 (id, apply_url, match_key, company, title, locations, us_location, remote, level,
+        role_category, sponsorship, terms, description, salary, date_posted, first_seen, last_seen, status,
+        open_manually_only, added_by_you, check_location, status_reason, not_interested, location_by_you,
+        prepare_anyway, prepare_requested_on, writer_sources)
+        SELECT id, apply_url, match_key, company, title, locations, us_location, remote, level, role_category,
+        sponsorship, terms, description, salary, date_posted, first_seen, last_seen, status, open_manually_only,
+        added_by_you, check_location, status_reason, not_interested, location_by_you, prepare_anyway,
+        prepare_requested_on, writer_sources FROM jobs;
+    DROP TABLE jobs;
+    ALTER TABLE jobs_v21 RENAME TO jobs;
+    CREATE INDEX jobs_match_key ON jobs (match_key);
+    CREATE INDEX jobs_list ON jobs (not_interested, status, status_reason, us_location, check_location, level, remote,
+        added_by_you, role_category, sponsorship, terms, date_posted, first_seen, company, title, locations);
+    CREATE TRIGGER job_text_changed AFTER UPDATE OF title, description ON jobs
+        WHEN old.title IS NOT new.title OR old.description IS NOT new.description
+    BEGIN
+        UPDATE stage_a SET changed = 1 WHERE job_id = new.id;
+        UPDATE ai_scores SET changed = 1 WHERE job_id = new.id;
+        UPDATE ai_failures SET changed = 1 WHERE job_id = new.id;
+    END;
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

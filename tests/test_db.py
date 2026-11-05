@@ -1,5 +1,6 @@
 import functools
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -9,6 +10,7 @@ from contextlib import closing
 import pytest
 import sqlcipher3
 from helpers import MASTER_PASSWORD as PASSWORD
+from helpers import add_job
 
 from app import db
 from app.config import Config
@@ -1213,3 +1215,222 @@ def test_a_new_row_in_exported_isnt_finished_yet(conn):
     with conn:
         conn.execute("INSERT INTO exported (job_id, folder, exported_on) VALUES (7, 'a', 'now')")
     assert conn.execute("SELECT finished_on FROM exported").fetchone() == (None,)
+
+
+# The jobs rebuild for feeds. Found by its table's name, so it stays this rebuild's test when other upgrades are added.
+REBUILD = next(version for version, step in enumerate(db.UPGRADES, 1) if "jobs_v21" in step)
+OLD_REASONS = (
+    "removed from its board", "board shut down", "company stopped hiring", "removed from Simplify",
+    "inactive on Simplify", "reason not recorded (before 2026-10-21)",
+)  # fmt: skip
+NEW_REASONS = ("no longer in the feed", "feed turned off")
+ODD_TEXT = 'Café d\'été "Ñandú" 日本語 -- ; DROP TABLE jobs;\n' * 2000
+FIRST_JOB = 1
+SCORED = ("stage_a", "ai_scores", "ai_failures")
+
+
+def _use_steps(patch, steps):
+    patch.setattr(db, "UPGRADES", steps)
+    patch.setattr(db, "SCHEMA_VERSION", len(steps))
+
+
+def _table_names(conn):
+    return [name for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()]
+
+
+def _children(conn):
+    """Every table with a foreign key to jobs, as the database itself says."""
+    keys = {table: conn.execute(f'PRAGMA foreign_key_list("{table}")').fetchall() for table in _table_names(conn)}
+    return {table: rows for table, rows in keys.items() if any(row[2] == "jobs" for row in rows)}
+
+
+def _place_row(conn, table, job_id):
+    """A row in any table: its required columns, made up (the filling connection ignores checks)."""
+    columns = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+    needed = {name: 1 if kind == "INTEGER" else "x" for _, name, kind, required, default, _ in columns
+              if required and default is None}  # fmt: skip
+    row = needed | {"job_id": job_id}
+    sql = f'INSERT INTO "{table}" ({", ".join(row)}) VALUES ({", ".join("?" * len(row))})'  # noqa: S608 (test helper)
+    conn.execute(sql, list(row.values()))
+
+
+def _every_row(conn):
+    """Every row of every table, compared whole so that no table is left out by hand."""
+    return {table: conn.execute(f'SELECT * FROM "{table}"').fetchall() for table in _table_names(conn)}  # noqa: S608
+
+
+def _schema(conn):
+    return conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").fetchall()
+
+
+def _version(conn):
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _read(path, *readers):
+    with _open_as_is(path / db.DB_FILE) as conn:
+        return [reader(conn) for reader in readers]
+
+
+@pytest.fixture
+def old_jobs(tmp_path, monkeypatch):
+    """A data folder really made by the upgrades before the rebuild, with a job of each kind and a row everywhere."""
+    path = tmp_path / "data"
+    with monkeypatch.context() as earlier:
+        _use_steps(earlier, db.UPGRADES[: REBUILD - 1])
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            add_job(
+                conn, "ML Engineer", sources=["lever:zeta", "greenhouse:acme"], description=ODD_TEXT, salary="$1",
+                not_interested=1, location_by_you=1, added_by_you=1, check_location=1, open_manually_only=1,
+                prepare_anyway=1, prepare_requested_on="2026-10-02", writer_sources="[1]",
+            )  # fmt: skip
+            for reason in OLD_REASONS:
+                add_job(conn, reason, status="no longer available", status_reason=reason, sources=["lever:zeta"])
+            for table in _children(conn):
+                _place_row(conn, table, FIRST_JOB)  # in job_sources, after the later jobs' rows
+    return path
+
+
+def _rebuild(path, monkeypatch, step=None):
+    """Open the database with the rebuild (or a copy of it) as the newest upgrade."""
+    with monkeypatch.context() as now:
+        _use_steps(now, (*db.UPGRADES[: REBUILD - 1], step or db.UPGRADES[REBUILD - 1]))
+        with closing(db.connect(path)):
+            pass
+
+
+def _no_comments_or_spaces(sql):
+    return "".join(re.sub(r"--.*", "", sql).split())
+
+
+def test_the_rebuild_keeps_every_row_of_every_table(old_jobs, monkeypatch):
+    [before] = _read(old_jobs, _every_row)
+    assert len(before["jobs"]) == 1 + len(OLD_REASONS)
+    _rebuild(old_jobs, monkeypatch)
+    assert _read(old_jobs, _version, _every_row) == [REBUILD, before]
+
+
+def test_the_rebuild_changes_nothing_in_the_schema_but_the_two_reasons(old_jobs, monkeypatch):
+    def columns(conn):
+        return conn.execute("PRAGMA table_info(jobs)").fetchall()
+
+    schema, table = _read(old_jobs, _schema, columns)
+    _rebuild(old_jobs, monkeypatch)
+    new_schema, new_table = _read(old_jobs, _schema, columns)
+    assert new_table == table
+
+    def others(rows):
+        return [row for row in rows if row[:2] != ("table", "jobs")]
+
+    assert others(new_schema) == others(schema)  # every other table, the indexes and the trigger, word for word
+    assert {row[1] for row in others(schema)} >= {"jobs_match_key", "jobs_list", "job_text_changed"}
+    old_sql = next(row[3] for row in schema if row[:2] == ("table", "jobs"))
+    new_sql = next(row[3] for row in new_schema if row[:2] == ("table", "jobs"))
+    added = "".join(f",'{reason}'" for reason in NEW_REASONS).replace(" ", "")
+    assert _no_comments_or_spaces(new_sql).replace(added, "") == _no_comments_or_spaces(old_sql)  # every other check
+
+
+def test_tables_that_point_at_jobs_still_do_and_every_row_has_its_job(old_jobs, monkeypatch):
+    [before] = _read(old_jobs, _children)
+    _rebuild(old_jobs, monkeypatch)
+    children, rows, broken = _read(
+        old_jobs, _children, _every_row, lambda conn: conn.execute("PRAGMA foreign_key_check").fetchall()
+    )
+    assert children == before
+    assert {"tracker", "tracker_moves", "submissions", "forms", "form_answers", "preparations", "emails"} <= set(
+        children
+    )
+    assert all(rows[table] for table in children)
+    assert broken == []
+
+
+def test_job_sources_keep_their_order(old_jobs, monkeypatch):
+    def order(conn):
+        return conn.execute("SELECT rowid, source, job_id FROM job_sources ORDER BY rowid").fetchall()
+
+    [before] = _read(old_jobs, order)
+    assert [job_id for _, _, job_id in before] != sorted(job_id for _, _, job_id in before)  # not simply by job
+    _rebuild(old_jobs, monkeypatch)
+    assert _read(old_jobs, order) == [before]
+
+
+def test_nothing_goes_back_to_scoring_until_a_jobs_text_really_changes(old_jobs, monkeypatch):
+    _rebuild(old_jobs, monkeypatch)
+    with _open_as_is(old_jobs / db.DB_FILE) as conn, conn:
+
+        def changed():
+            return [one for table in SCORED for (one,) in conn.execute(f"SELECT changed FROM {table}")]  # noqa: S608
+
+        assert changed() == [0, 0, 0]
+        conn.execute("UPDATE jobs SET last_seen = '2026-11-05' WHERE id = ?", (FIRST_JOB,))
+        assert changed() == [0, 0, 0]
+        conn.execute("UPDATE jobs SET description = 'New text.' WHERE id = ?", (FIRST_JOB,))
+        assert changed() == [1, 1, 1]
+
+
+@pytest.mark.parametrize("reason", NEW_REASONS)
+def test_the_two_new_reasons_are_accepted(old_jobs, monkeypatch, reason):
+    _rebuild(old_jobs, monkeypatch)
+    with _open_as_is(old_jobs / db.DB_FILE) as conn, conn:
+        conn.execute("UPDATE jobs SET status_reason = ? WHERE id = ?", (reason, FIRST_JOB))
+
+
+@pytest.mark.parametrize(("column", "value"), [("status_reason", "made up"), ("status", "made up")])
+def test_anything_else_is_still_refused(old_jobs, monkeypatch, column, value):
+    _rebuild(old_jobs, monkeypatch)
+    with _open_as_is(old_jobs / db.DB_FILE) as conn, pytest.raises(sqlcipher3.IntegrityError):
+        conn.execute(f"UPDATE jobs SET {column} = ? WHERE id = ?", (value, FIRST_JOB))  # noqa: S608
+
+
+def test_the_backup_comes_first_and_holds_the_old_table(old_jobs, monkeypatch):
+    backup, upgrade, there = old_jobs / f"{db.DB_FILE}.bak-v{REBUILD - 1}", db._upgrade, []
+    before = _read(old_jobs, _schema, _every_row)
+    monkeypatch.setattr(db, "_upgrade", lambda *values: (there.append(backup.exists()), upgrade(*values)))
+    _rebuild(old_jobs, monkeypatch)
+    assert there == [True]
+    with _open_as_is(backup) as conn:
+        assert [_schema(conn), _every_row(conn)] == before
+
+
+def test_a_fault_after_the_old_table_is_dropped_leaves_it_whole_and_a_retry_works(old_jobs, monkeypatch):
+    before = _read(old_jobs, _version, _schema, _every_row)
+    rename = "ALTER TABLE jobs_v21 RENAME TO jobs;"
+    assert db.UPGRADES[REBUILD - 1].index("DROP TABLE jobs;") < db.UPGRADES[REBUILD - 1].index(rename)
+    broken = db.UPGRADES[REBUILD - 1].replace(rename, f"DROP INDEX no_such_index;\n{rename}")
+    with pytest.raises(sqlcipher3.OperationalError, match="no_such_index"):
+        _rebuild(old_jobs, monkeypatch, broken)
+    assert _read(old_jobs, _version, _schema, _every_row) == before  # no jobs_v21; the old check, indexes and trigger
+    _rebuild(old_jobs, monkeypatch)
+    assert _read(old_jobs, _version) == [REBUILD]
+
+
+def test_a_row_the_new_table_refuses_fails_the_whole_step(old_jobs, monkeypatch):
+    with _open_as_is(old_jobs / db.DB_FILE) as conn, conn:
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute("UPDATE jobs SET status_reason = 'made up' WHERE id = ?", (FIRST_JOB,))
+    before = _read(old_jobs, _version, _schema, _every_row)
+    with pytest.raises(sqlcipher3.IntegrityError):
+        _rebuild(old_jobs, monkeypatch)
+    assert _read(old_jobs, _version, _schema, _every_row) == before
+
+
+def test_a_phase_1_database_and_a_new_one_end_with_the_same_schema(v1_data_dir):
+    with closing(db.connect(v1_data_dir)) as upgraded, closing(sqlcipher3.connect(":memory:")) as new:
+        db._upgrade(new, 0)
+        assert _version(upgraded) == _version(new) == db.SCHEMA_VERSION
+        assert _schema(upgraded) == _schema(new)
+
+
+def test_foreign_keys_are_off_while_the_rebuild_runs(old_jobs, monkeypatch):
+    noted = "CREATE TABLE noted AS SELECT foreign_keys FROM pragma_foreign_keys;"
+    _rebuild(old_jobs, monkeypatch, f"{db.UPGRADES[REBUILD - 1]};\n{noted}")
+    assert _read(old_jobs, lambda conn: conn.execute("SELECT * FROM noted").fetchall()) == [[(0,)]]
+
+
+def test_the_next_new_job_gets_a_fresh_id(old_jobs, monkeypatch):
+    _rebuild(old_jobs, monkeypatch)
+    with _open_as_is(old_jobs / db.DB_FILE) as conn, conn:
+        highest = conn.execute("SELECT max(id) FROM jobs").fetchone()[0]
+        assert add_job(conn, "ML Intern") == highest + 1
