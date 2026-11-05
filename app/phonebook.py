@@ -1,7 +1,8 @@
 """The phone book of company boards: `python -m app.phonebook refresh` finds more boards in public lists.
 
 The lists: every job-board link in Simplify's lists (closed jobs too), in the other GitHub job lists you approved
-(phonebook_lists in data/config.yaml), and in Common Crawl's index of the web.
+(phonebook_lists in data/config.yaml), in Hacker News' monthly "Who is hiring?" threads, and in Common Crawl's index of
+the web.
 
 Every name found waits in the phonebook table until its site's own API confirms it; a confirmed board is read on every
 collection from then on. A new name is also tried once on the other sites (the cross-check). Nothing is deleted, and an
@@ -26,7 +27,7 @@ from app.collect import CollectError, Download, Output, now
 from app.config import Config, ConfigError, load_config
 from app.fetch import COLLECT_HOSTS, COMMON_CRAWL, Fetcher, FetchError, Guarded, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import BOARD_HOSTS, SourceError, board_of, greenhouse, simplify
+from app.sources import BOARD_HOSTS, SourceError, board_of, greenhouse, hn, simplify
 from app.sources.boards import BOARDS
 
 CRAWLS = f"https://{COMMON_CRAWL}/collinfo.json"
@@ -59,6 +60,9 @@ TO_CHECK = """SELECT board, found_by, cross_of FROM phonebook
     WHERE checked_on IS NULL OR (result = 'empty' AND checked_on < ?) ORDER BY board"""
 DONE = "INSERT INTO phonebook_done (part, done_on) VALUES (?, ?) ON CONFLICT (part) DO NOTHING"
 LINK = re.compile(r"https?://[^\s\"'<>()\[\]|\\]+")  # any web address in a list file, JSON or Markdown
+# What Hacker News has added so far: the boards it found, and the jobs they list (one job on two boards counts once).
+HN_GAINED = """SELECT count(DISTINCT s.name), count(DISTINCT j.job_id) FROM sources s
+    LEFT JOIN job_sources j ON j.source = s.name WHERE s.found_by = 'hackernews'"""
 
 
 class Paused(Exception):
@@ -227,6 +231,57 @@ def read_lists(conn: sqlcipher3.Connection, fetcher: Fetcher, config: Config, ou
     return failed
 
 
+def _hiring_threads(fetcher: Fetcher | Guarded) -> list[dict]:
+    """The newest "Who is hiring?" threads, found among the whoishiring user's posts of every kind."""
+    threads = []
+    for post in hn.newest_posts(fetcher.get_json(hn.POSTS)[0]):
+        thread = fetcher.get_json(hn.item(post))[0]
+        if hn.is_hiring(thread):
+            threads.append(thread)
+            if len(threads) == hn.THREADS:
+                break
+    if not threads:
+        raise SourceError("no 'Who is hiring?' thread among its newest posts")
+    return threads
+
+
+def read_hn(conn: sqlcipher3.Connection, fetcher: Fetcher | Guarded, out: Output) -> tuple[int, int, int]:
+    """Take board names from the top-level comments not read yet, each comment saved as it is read.
+
+    A thread grows all month, so each comment has its own "done" mark, and only names are kept from it. A comment
+    that looks changed is asked again next time, and said once the others are saved. Returns the comments read, how
+    many linked a board, and the new names.
+    """
+    read = linked = new = changed = 0
+    for thread in _hiring_threads(fetcher):
+        for number in hn.comments_of(thread):
+            part = f"hn:{number}"
+            if _done(conn, part):
+                continue
+            try:
+                comment = fetcher.get_json(hn.item(number))[0]
+            except NotFound:
+                comment = None
+            if hn.looks_changed(comment):
+                changed += 1
+                continue
+            boards = hn.boards_in(comment)
+            with conn:  # the comment's names and "comment done" are saved together
+                new += _add_names(conn, boards, "hackernews")
+                conn.execute(DONE, (part, now()))
+            read, linked = read + 1, linked + bool(boards)
+            if read % PROGRESS_EVERY == 0:
+                out(f"  {read:,} Hacker News comments read")
+    if changed:
+        raise SourceError(f"{changed:,} comments look different from usual")
+    return read, linked, new
+
+
+def hn_so_far(conn: sqlcipher3.Connection) -> str:
+    boards, matching = conn.execute(HN_GAINED).fetchone()
+    return f"Boards from Hacker News so far: {boards:,}; {matching:,} of your matching jobs came from them"
+
+
 def _titles(titles: list[str]) -> set[str]:
     return {" ".join(title.casefold().split()) for title in titles}
 
@@ -330,6 +385,15 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guar
         for line in failed:
             say(line)
         complete = not failed
+        if config.sources.hacker_news:
+            try:
+                read, linked, new = read_hn(conn, fetcher, say)
+                say(
+                    f"Hacker News: {read:,} new comments read, {linked:,} with a readable board link, {new:,} new names"
+                )
+            except (FetchError, SourceError) as error:
+                complete = False
+                say(f"Hacker News could not be read ({error}). Names found so far are kept; tried again next time.")
         try:
             new, damaged, failed = read_common_crawl(conn, fetcher, say)  # failed parts are said as they happen
             complete = complete and not failed
@@ -338,12 +402,13 @@ def refresh(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher | Guar
             complete = False
             say(f"Common Crawl's index could not be read ({error}). Names found so far are kept; try again later.")
         results = check_names(conn, fetcher, jobs.Roles.from_settings(config.roles), say)
-        say(
+        checked = (
             f"Checked {results.total():,} names: {results['added']:,} added (read on every collection from now on), "
             f"{results['empty']:,} with no jobs yet (asked again next round), {results['not found']:,} not found, "
             f"{results['to confirm']:,} to confirm on the Boards page, "
             f"{results['could not be checked']:,} could not be checked (asked again next time)."
         )
+        say(f"{checked} {hn_so_far(conn)}" if config.sources.hacker_news else checked)  # the page shows the last line
         outcome = "done" if complete else "partial"
     except Paused:
         outcome = "paused"

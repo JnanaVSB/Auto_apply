@@ -50,6 +50,10 @@ def test_returns_data_and_version_tag_and_says_who_it_is():
         "https://[not a url",
         "http://jobs.lever.co/acme/1/apply",
         "https://jobs.lever.co.evil.example/acme/1/apply",
+        "https://news.ycombinator.com/item?id=1",
+        "http://hacker-news.firebaseio.com/v0/item/1.json",
+        "https://hacker-news.firebaseio.com.evil.com/",
+        "https://user@hacker-news.firebaseio.com/",
     ],
 )
 def test_only_https_to_the_allowed_hosts(url):
@@ -63,6 +67,12 @@ def test_lever_application_pages_may_be_read_but_are_no_collection_site():
     fetcher, requests = fake_web(httpx.Response(200, text="<form></form>"))
     assert fetcher.get_text("https://jobs.lever.co/acme/1/apply") == "<form></form>"
     assert len(requests) == 1 and "jobs.lever.co" not in fetch.COLLECT_HOSTS
+
+
+def test_hacker_news_api_may_be_read_but_is_no_collection_site():
+    fetcher, requests = fake_web(httpx.Response(200, json={"id": 1}))
+    assert fetcher.get_json("https://hacker-news.firebaseio.com/v0/item/1.json")[0] == {"id": 1}
+    assert len(requests) == 1 and fetch.HN_API not in fetch.COLLECT_HOSTS
 
 
 def test_redirect_is_reported_not_followed():

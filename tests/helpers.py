@@ -5,6 +5,7 @@ from itertools import count
 import httpx
 
 from app.config import Config, RoleSettings, SimplifyList, SourceSettings
+from app.sources import hn
 from app.web import security
 
 PASSWORD = "fake dashboard words here"  # noqa: S105 (fake value, tests only)
@@ -13,6 +14,10 @@ ADDRESS = "http://127.0.0.1:8765"
 LIST = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json"
 ACME = "https://boards-api.greenhouse.io/v1/boards/acme/jobs?content=true"
 ACME_JOB = "https://job-boards.greenhouse.io/acme/jobs/123"
+NO_HN_COMMENTS = {  # a hiring thread nobody has answered, so a refresh's Hacker News read has nothing to do
+    hn.POSTS: {"submitted": [1]},
+    hn.item(1): {"id": 1, "type": "story", "title": "Ask HN: Who is hiring? (November 2026)"},
+}
 URLS = count()
 
 

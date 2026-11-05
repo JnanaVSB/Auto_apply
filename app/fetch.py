@@ -12,9 +12,10 @@ import httpx
 
 # The only places the app downloads from; anything else (including simplify.jobs) is refused.
 COMMON_CRAWL = "index.commoncrawl.org"  # only the phone-book refresh reads it, never a collection
+HN_API = "hacker-news.firebaseio.com"  # Hacker News' official API, only for the refresh too; not news.ycombinator.com
 COLLECT_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
 FORM_HOSTS = frozenset({"jobs.lever.co"})  # public application pages, read for a job's form questions (Phase 7)
-ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL} | FORM_HOSTS
+ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL, HN_API} | FORM_HOSTS
 # Files job scoring downloads once (download_file): only these downloads may follow a redirect, and only between these
 # hosts. huggingface.co hands its large files to its storage address, us.aws.cdn.hf.co.
 SETUP_HOSTS = frozenset({"huggingface.co", "us.aws.cdn.hf.co", "www.onetcenter.org"})
@@ -205,8 +206,8 @@ def _allowed_host(url: str) -> str:
         parsed = None
     if parsed is None or parsed.scheme != "https" or parsed.host not in ALLOWED_HOSTS or parsed.userinfo:
         raise FetchError(
-            "address not allowed (only https to the job lists, job-board APIs, Lever's application pages and Common "
-            "Crawl's index)"
+            "address not allowed (only https to the job lists, job-board APIs, Lever's application pages, Common "
+            "Crawl's index and Hacker News' API)"
         )
     return parsed.host
 
