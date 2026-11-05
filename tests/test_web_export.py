@@ -139,7 +139,11 @@ def test_a_new_folder_is_made_for_you_only_and_saved_as_it_really_is(client, tmp
 
 def test_a_first_folder_says_saved_and_a_change_says_earlier_exports_stay(client, tmp_path, chosen):
     text = followed(client, "/folder", folder=str(tmp_path / "other")).text
-    assert "Earlier exports stay where they are." in text and saved().folder == str(tmp_path / "other")
+    assert (
+        "Folder saved. Earlier exports stay where they are. To copy everything here, press Export with both dates "
+        "empty: the schedule only adds what comes next." in text
+    )
+    assert saved().folder == str(tmp_path / "other")
     assert chosen.is_dir()  # moved or deleted nothing
 
 

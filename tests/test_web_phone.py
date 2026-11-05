@@ -519,3 +519,87 @@ def test_the_phones_login_page_says_the_reset_is_on_the_laptop(phone):
     for page in (phone.get("/login"), log_in_with(phone, "wrong guess", ORIGIN)):
         assert f"Forgot it? Reset it on the laptop: stop the dashboard and run {reset}" in page.text
         assert "Forgot it? Stop the dashboard" not in page.text
+
+
+EXPORT = "/settings/export"
+ON_THE_LAPTOP = "Export on the laptop: it writes unencrypted files there."
+
+
+@pytest.fixture
+def started(laptop, monkeypatch):
+    """Presses of Export, kept and not run."""
+    found = []
+    monkeypatch.setattr(laptop.app.state.exporter, "start", lambda start, end: found.append((start, end)))
+    return found
+
+
+@pytest.mark.parametrize("route", ["/folder", "/run", "/schedule"])
+def test_no_press_on_the_export_page_works_from_the_phone(phone, laptop, settings, started, tmp_path, route):
+    write_export(settings, tmp_path)
+    before = settings.read_bytes()
+    cookie, session = phone_login(phone)
+    form = {"csrf_token": session.csrf, "tick": "on", "folder": str(tmp_path / "new"), "every_days": "7"}
+    response = phone.post(EXPORT + route, data=form, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (response.status_code, ON_THE_LAPTOP in words(response)) == (403, True)
+    assert settings.read_bytes() == before and started == [] and not (tmp_path / "new").exists()
+
+
+def write_export(settings, folder):
+    settings.write_text(f'{settings.read_text(encoding="utf-8")}export:\n  folder: "{folder}"\n', encoding="utf-8")
+
+
+def test_a_forged_press_from_the_phone_is_refused_all_the_same(phone, laptop, settings, started):
+    cookie, _ = phone_login(phone)
+    response = phone.post(f"{EXPORT}/run", data={"tick": "on"}, headers=cookie | ORIGIN, follow_redirects=False)
+    assert response.status_code == 403 and started == []
+
+
+def test_on_the_phone_the_page_only_says_how_it_is_going(phone, laptop, settings):
+    laptop.app.state.exporter.notice = "1 new folder, 5 files added"
+    cookie, _ = phone_login(phone)
+    response = phone.get(EXPORT, headers=cookie)
+    assert response.status_code == 200 and ON_THE_LAPTOP in words(response)
+    assert "These files are not encrypted." in response.text and "1 new folder, 5 files added" in response.text
+    assert "<form" not in response.text.split("<h1>Export</h1>")[1].split("</main>")[0]
+    assert 'name="folder"' not in response.text and 'name="tick"' not in response.text
+    laptop.app.state.exporter.notice = None
+
+
+def test_the_phone_is_told_nothing_of_the_folder(phone, laptop, settings, tmp_path):
+    write_export(settings, tmp_path)
+    cookie, _ = phone_login(phone)
+    assert str(tmp_path) not in phone.get(EXPORT, headers=cookie).text
+
+
+def test_the_status_part_still_answers_on_the_phone(phone, laptop, settings):
+    exporter = laptop.app.state.exporter
+    exporter._thread, exporter.done, exporter.total = object(), 3, 9
+    cookie, _ = phone_login(phone)
+    response = phone.get(f"{EXPORT}/status", headers=cookie)
+    exporter._thread = None
+    assert response.status_code == 200 and "Exporting 3 of 9 applications…" in response.text
+
+
+def test_on_the_laptop_the_page_keeps_its_forms_and_its_presses_work(laptop, settings, started, tmp_path):
+    write_export(settings, tmp_path)
+    log_in(laptop)
+    text = laptop.get(EXPORT).text
+    assert ON_THE_LAPTOP not in words(laptop.get(EXPORT)) and text.count('method="post" action="/settings/export') == 3
+    data = {"csrf_token": csrf(laptop), "tick": "on"}
+    assert laptop.post(f"{EXPORT}/run", data=data, follow_redirects=False).status_code == 303 and started == [
+        (None, None)
+    ]
+    new = {"csrf_token": csrf(laptop), "folder": str(tmp_path / "new")}
+    assert laptop.post(f"{EXPORT}/folder", data=new, follow_redirects=False).status_code == 303
+    assert (tmp_path / "new").is_dir()
+
+
+def test_the_schedule_runs_from_the_laptops_check_whatever_a_phone_is_doing(phone, laptop, settings, conn, tmp_path):
+    settings.write_text(f'{settings.read_text(encoding="utf-8")}export:\n  folder: "{tmp_path}"\n  every_days: 1\n',
+                        encoding="utf-8")  # fmt: skip
+    cookie, session = phone_login(phone)
+    phone.post(f"{EXPORT}/run", data={"csrf_token": session.csrf, "tick": "on"}, headers=cookie | ORIGIN)
+    exporter, begun = laptop.app.state.exporter, []
+    exporter._begin = begun.append
+    exporter.tick(conn)
+    assert begun == [None]

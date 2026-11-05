@@ -1,6 +1,7 @@
 """Settings → Export (/settings/export), kept apart from main.py: the warning, the folder, Export now, the schedule and
 what the last run said. The files aren't encrypted, so nothing is exported unasked: every press needs the tick, checked
-here, and the typed path never goes into an address or a log."""
+here, and the typed path never goes into an address or a log. They are written on the laptop, so only the laptop can
+press anything: a phone sees how it is going."""
 
 from collections.abc import Callable
 from datetime import date, timedelta
@@ -12,10 +13,11 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import ConfigError, ExportSettings, load_config
 from app.export import folder, papers
-from app.web import actions
+from app.web import actions, security
 from app.web.exporter import Exporter
 
 PAGE = "/settings/export"
+ON_THE_LAPTOP = "Export on the laptop: it writes unencrypted files there."
 TICK = "Tick “I understand these files aren't encrypted” first."
 BAD_DATE = "Give each date as year-month-day, or leave it empty."
 DATE_ORDER = "The From date comes first."
@@ -23,7 +25,10 @@ MOST_DAYS = 365
 BAD_DAYS = f"Give the days as a whole number from 0 to {MOST_DAYS}."
 DONE = {  # ?done=…: fixed words only
     "folder": "Folder saved.",
-    "changed": "Folder saved. Earlier exports stay where they are.",
+    "changed": (
+        "Folder saved. Earlier exports stay where they are. To copy everything here, press Export with both dates "
+        "empty: the schedule only adds what comes next."
+    ),
     "schedule": "Schedule saved.",
 }
 RUNS = "SELECT tried_on, last_result FROM export_runs WHERE id = 1"
@@ -38,6 +43,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
 
     @app.post(PAGE + "/folder")
     async def save_folder(request: Request) -> Response:
+        security.laptop_only(request, ON_THE_LAPTOP)
         typed = request.state.form.get("folder", "").strip()
         try:
             path = str(await run_in_threadpool(folder.make, typed, data_dir))  # a network disk can be slow
@@ -50,6 +56,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
 
     @app.post(PAGE + "/run")
     async def export_now(request: Request) -> Response:
+        security.laptop_only(request, ON_THE_LAPTOP)
         form = request.state.form
         settings, problem = _settings()
         typed = {"typed_start": form.get("start", ""), "typed_end": form.get("end", "")}
@@ -70,6 +77,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
 
     @app.post(PAGE + "/schedule")
     async def save_schedule(request: Request) -> Response:
+        security.laptop_only(request, ON_THE_LAPTOP)
         form = request.state.form
         typed = form.get("every_days", "")
         days = actions.whole(typed)
@@ -119,4 +127,12 @@ def _view(request: Request, page: Callable[..., HTMLResponse], status: int = 200
     if last_run and settings.every_days:
         values["last_run"] = last_run
         values["next_run"] = (date.fromisoformat(last_run) + timedelta(days=settings.every_days)).isoformat()
-    return page(request, "export_settings.html", status, settings=settings, **status_values, **values)
+    return page(
+        request,
+        "export_settings.html",
+        status,
+        settings=settings,
+        on_the_laptop=ON_THE_LAPTOP,
+        **status_values,
+        **values,
+    )

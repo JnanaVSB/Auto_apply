@@ -12,6 +12,9 @@
 <h2>Export status</h2>
 {% include "export_status.html" %}
 
+{% if remote %}
+<p>{{ on_the_laptop }}</p>
+{% else %}
 <h2>Folder</h2>
 <p class="hint">The folder's full path. A folder that doesn't exist yet is made here, if the folder above it exists.
   Changing the folder moves and deletes nothing.</p>
@@ -46,4 +49,5 @@
   {{ tick() }}
   <p><button type="submit">Save schedule</button></p>
 </form>
+{% endif %}
 {% endblock %}
