@@ -1,6 +1,7 @@
 """USAJobs' search, with made-up replies. Nobody here has had a key: their shape comes from its documentation only."""
 
 import json
+import logging
 from contextlib import closing
 from urllib.parse import urlencode
 
@@ -20,6 +21,7 @@ KEY, MAIL = "fake-key-1234", "sam.fake@example.com"
 LINK = "https://www.usajobs.gov/GetJob/ViewDetails/123456"
 FEED = "feed:usajobs"
 LEVER = "https://api.lever.co/v0/postings/acme?mode=json"
+DEEP = "<script>" * 5000  # each unclosed tag makes the reader call itself once more
 
 
 def descriptor(**changes):
@@ -49,9 +51,14 @@ def numbered(number):
     return item(PositionURI=f"https://www.usajobs.gov/GetJob/ViewDetails/{number}")
 
 
-def reply(*items, pages="1"):
-    return {"SearchResult": {"SearchResultCount": len(items), "SearchResultItems": list(items),
-                             "UserArea": {"NumberOfPages": pages}}}  # fmt: skip
+def reply(*items, pages="1", total=None):
+    result = {"SearchResultCount": len(items), "SearchResultItems": list(items), "UserArea": {"NumberOfPages": pages}}
+    return {"SearchResult": result | ({} if total is None else {"SearchResultCountAll": total})}
+
+
+def full_page(page=1):
+    first = page * 1000
+    return [numbered(number) for number in range(first, first + usajobs.RESULTS_PER_PAGE)]
 
 
 def search(word="ML", page=1):
@@ -115,9 +122,9 @@ def test_each_request_carries_the_key_and_e_mail_in_its_headers_only():
 @pytest.mark.parametrize(
     ("secrets", "keywords", "line"),
     [
-        ({}, ["ML"], usajobs.NEEDS_KEY),
-        ({"usajobs-key": KEY}, ["ML"], usajobs.NEEDS_KEY),
-        ({"usajobs-email": MAIL}, ["ML"], usajobs.NEEDS_KEY),
+        ({}, ["ML"], "needs your key and e-mail: Settings → USAJobs key"),
+        ({"usajobs-key": KEY}, ["ML"], "needs your e-mail: Settings → USAJobs key"),
+        ({"usajobs-email": MAIL}, ["ML"], "needs your key: Settings → USAJobs key"),
         ({"usajobs-key": KEY, "usajobs-email": MAIL}, [], usajobs.NO_KEYWORDS),
         ({"usajobs-key": KEY, "usajobs-email": MAIL}, ["  "], usajobs.NO_KEYWORDS),
     ],
@@ -142,7 +149,7 @@ def test_a_keychain_that_fails_is_said_and_asks_nothing(monkeypatch):
 
 def test_skipping_is_one_line_closes_nothing_and_is_no_failure(conn, data_dir):
     lines, web = run(conn, data_dir, {})
-    assert f"USAJobs: {usajobs.NEEDS_KEY}" in lines
+    assert "USAJobs: needs your key and e-mail: Settings → USAJobs key" in lines
     assert "No sources failed." in lines
     assert not hosts(web) & fetch.FEED_HOSTS
 
@@ -173,26 +180,69 @@ def test_a_failed_page_saves_and_closes_nothing(conn, data_dir):
 
 @pytest.mark.usefixtures("key")
 def test_paging_stops_where_the_reply_says():
-    pages = {search(): reply(numbered(1), pages="2"), search(page=2): reply(numbered(2), pages="2")}
+    pages = {search(): reply(*full_page(), pages="2"), search(page=2): reply(numbered(1), pages="2", total=501)}
     (found, _, complete), web = read(pages)
-    assert len(found) == 2 and complete
+    assert len(found) == usajobs.RESULTS_PER_PAGE + 1 and complete
     assert len(web.requests) == 2
 
 
 @pytest.mark.usefixtures("key")
-def test_at_the_page_cap_jobs_are_saved_but_none_closed(conn, data_dir):
+@pytest.mark.parametrize(
+    "pages",
+    [
+        {search(): reply(*full_page(), pages="2"), search(page=2): reply(pages="2")},  # the last page came back empty
+        {search(): reply(numbered(1), pages="2"), search(page=2): reply(numbered(2), pages="2")},  # a short first page
+        {search(): reply(pages="2"), search(page=2): reply(numbered(2), pages="2")},  # an empty first page
+        {search(): reply(item(), pages="1", total=3)},  # says three, gave one
+        {search(): reply(item(), pages="1", total="3")},
+        {search(): reply(item(), pages="0")},  # says no pages, gave a job
+        {search(): reply(item(), pages=0)},
+        {search(): reply(item(), pages=-1)},
+        {search(): reply(item(), pages="9" * 5000)},
+    ],
+    ids=["last empty", "first short", "first empty", "count", "count as text", "0 as text", "0", "-1", "thousands"],
+)
+def test_a_list_that_doesnt_add_up_is_saved_and_closes_nothing(conn, data_dir, pages):
     run(conn, data_dir, {search(): reply(numbered(99))})
-    pages = {search(page=page): reply(numbered(page), pages="9") for page in range(1, 10)}
-    (found, _, complete), web = read(pages)
-    assert (len(found), complete, len(web.requests)) == (usajobs.MAX_PAGES, False, usajobs.MAX_PAGES)
-    run(conn, data_dir, pages)
+    (_, _, whole), _ = read(pages)
+    assert whole is False
+    lines, _ = run(conn, data_dir, pages)
+    assert any("the list was cut short, so nothing was closed" in line for line in lines)
     assert conn.execute("SELECT status FROM jobs WHERE apply_url LIKE '%/99'").fetchall() == [("open",)]
 
 
 @pytest.mark.usefixtures("key")
 @pytest.mark.parametrize(
-    ("pages", "complete"), [("text", False), (True, False), (None, False), ("0", True), (0, True), (1, True)]
+    "page",
+    [
+        reply(pages="0"),  # truly nothing found
+        reply(pages=0),
+        reply(pages="1"),
+        reply(item(), pages="1", total=1),
+        reply(item(), pages="1", total="1"),
+        reply(item(), pages="1", total="a lot"),  # a count that can't be read says nothing
+        reply(item(), pages="1", total=True),
+        reply(item(), pages="1", total="9" * 5000),
+    ],
 )
+def test_a_list_with_nothing_against_it_is_whole(page):
+    (_, _, whole), _ = read({search(): page})
+    assert whole is True
+
+
+@pytest.mark.usefixtures("key")
+def test_at_the_page_cap_jobs_are_saved_but_none_closed(conn, data_dir):
+    run(conn, data_dir, {search(): reply(numbered(99))})
+    pages = {search(page=page): reply(*full_page(page), pages="9") for page in range(1, 10)}
+    (found, _, complete), web = read(pages)
+    assert (len(found), complete) == (usajobs.MAX_PAGES * usajobs.RESULTS_PER_PAGE, False)
+    assert len(web.requests) == usajobs.MAX_PAGES
+    run(conn, data_dir, pages)
+    assert conn.execute("SELECT status FROM jobs WHERE apply_url LIKE '%/99'").fetchall() == [("open",)]
+
+
+@pytest.mark.usefixtures("key")
+@pytest.mark.parametrize(("pages", "complete"), [("text", False), (True, False), (None, False), ("1", True), (1, True)])
 def test_an_odd_page_count_never_counts_as_everything_read(pages, complete):
     (_, _, whole), _ = read({search(): reply(item(), pages=pages)})
     assert whole is complete
@@ -286,6 +336,7 @@ def test_the_link_is_written_one_way():
         (["United States Citizens"], "unknown"),
         (5, "unknown"),
         (None, "unknown"),
+        ("United States Citizens and Nationals", "unknown"),  # not only citizens: a looser match would say otherwise
     ],
 )
 def test_who_may_apply(who, sponsorship):
@@ -433,6 +484,53 @@ def test_a_job_on_a_board_joins_and_the_page_links_back(conn, data_dir):
     job_id = one(conn, "SELECT id FROM jobs")[0]
     assert one(conn, "SELECT count(*) FROM jobs") == (1,)
     assert LINK in [source["via"] for source in queries.job(conn, job_id)["sources"]]
+
+
+@pytest.mark.usefixtures("key")
+def test_keywords_that_differ_only_by_capitals_or_spaces_make_one_request():
+    _, web = read({search(): reply(item())}, ["ML", "ml", "ML "])
+    assert len(web.requests) == 1
+
+
+@pytest.mark.usefixtures("key")
+def test_a_304_is_one_line_and_closes_nothing(conn, data_dir):
+    run(conn, data_dir, {search(): reply(item())})
+    lines, _ = run(conn, data_dir, {search(): 304})
+    assert any(line.startswith("Needs investigation") for line in lines)
+    assert one(conn, "SELECT status FROM jobs") == ("open",)
+
+
+@pytest.mark.usefixtures("key")
+def test_deep_unclosed_tags_skip_only_their_entry(conn, data_dir):
+    deep = item(PositionURI="https://www.usajobs.gov/GetJob/ViewDetails/1", **details(JobSummary=DEEP))
+    lines, _ = run(conn, data_dir, {search(): reply(deep, item())})
+    assert "No sources failed." in lines
+    assert "1 unusable entry skipped" in [line for line in lines if line.startswith("USAJobs: ")][0]
+
+
+@pytest.mark.usefixtures("key")
+def test_two_identical_runs_change_nothing(conn, data_dir):
+    pages = {search(): reply(numbered(1), numbered(2))}
+    run(conn, data_dir, pages)
+    before = conn.execute("SELECT * FROM job_sources").fetchall(), one(conn, "SELECT count(*) FROM jobs")
+    fields = "SELECT apply_url, match_key, title, company, status, status_reason, description, salary FROM jobs"
+    texts = conn.execute(fields).fetchall()
+    lines, _ = run(conn, data_dir, pages)
+    assert "USAJobs: 2 matching (0 new, 0 updated, 0 no longer available)" in lines
+    assert (conn.execute("SELECT * FROM job_sources").fetchall(), one(conn, "SELECT count(*) FROM jobs")) == before
+    assert conn.execute(fields).fetchall() == texts
+
+
+@pytest.mark.usefixtures("key")
+def test_a_collection_leaves_the_key_and_e_mail_in_no_log_output_or_table(conn, data_dir, caplog):
+    with caplog.at_level(logging.DEBUG):
+        lines, _ = run(conn, data_dir, {search(): reply(item())})
+        failed, _ = run(conn, data_dir, {search(): 401})
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    stored = [conn.execute(f'SELECT * FROM "{name}"').fetchall() for (name,) in tables]  # noqa: S608 (database's names)
+    everything = caplog.text + "\n".join(lines + failed) + str(stored)
+    assert "ML Engineer" in everything  # the search reaches what was saved
+    assert KEY not in everything and MAIL not in everything
 
 
 def test_remote_ok_still_reads_and_counts_as_complete():

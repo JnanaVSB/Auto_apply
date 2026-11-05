@@ -9,9 +9,10 @@ Adding one more **company** of a kind that already exists is just one settings l
 
 ## A feed is not a board
 A feed is a job list read as one file, such as Remote OK's: it is listed in `FEEDS` in `app/sources/feeds.py`, never in
-`BOARDS`, and has no row in the `sources` table or on the Boards page. Its file gives `LABEL`, `HOST` and
-`read(fetcher, roles)`. A feed decides a job only when no company board lists it, as a Simplify list does. The rest of
-this guide is about boards.
+`BOARDS`, and has no row in the `sources` table or on the Boards page. Its file gives `LABEL`, `HOST`, `SOURCE` and
+`read(fetcher, keywords)`, which returns three things: the jobs, how many entries were skipped, and whether the list is
+whole (a list cut short closes nothing). A feed decides a job only when no company board lists it, as a Simplify list
+does. The rest of this guide is about boards.
 
 ## Before you start
 - Use only the site's **official public job-board API**: read-only, no login, no scraping of web pages. Check the

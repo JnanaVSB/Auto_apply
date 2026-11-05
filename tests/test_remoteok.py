@@ -118,6 +118,12 @@ def test_a_time_too_big_to_read_skips_only_its_entry():
     assert (len(found), skipped) == (1, 1)
 
 
+def test_a_304_is_refused_not_a_crash():
+    web = FakeWeb({remoteok.API: 304})
+    with closing(fetch.Fetcher(httpx.MockTransport(web))) as fetcher, pytest.raises(SourceError):
+        remoteok.read(fetcher, [])
+
+
 def test_every_feeds_address_is_on_its_allowed_list():
     assert all(urlsplit(feed.API).hostname in fetch.FEED_HOSTS for feed in FEEDS.values())
 

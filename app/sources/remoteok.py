@@ -13,6 +13,7 @@ from app.sources import (
     parse_each,
     required_name,
     required_text,
+    untagged_json,
     yearly_pay,
 )
 
@@ -25,7 +26,7 @@ API = f"https://{HOST}/api"
 def read(fetcher: Any, keywords: list[str]) -> tuple[list[Job], int, bool]:
     """The feed's jobs, how many broken entries were skipped, and that the list is whole: it is one file, so `keywords`
     narrow nothing here."""
-    return *parse(fetcher.get_json(API)[0]), True
+    return *parse(untagged_json(fetcher, API)), True
 
 
 def parse(data: Any) -> tuple[list[Job], int]:

@@ -489,7 +489,8 @@ async def _settings_page(
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
         rows=rows, stopped=queries.stopped_boards(request.app.state.conn), ollama_line=ollama_line,
-        feeds={name: feed.LABEL for name, feed in FEEDS.items()}, needs_usajobs_key=usajobs_settings.needs_key(config),
+        feeds={name: feed.LABEL for name, feed in FEEDS.items()},
+        usajobs_missing=usajobs_settings.still_missing(config),
     )  # fmt: skip
 
 

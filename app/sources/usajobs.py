@@ -19,6 +19,7 @@ from app.sources import (
     parse_each,
     required_name,
     required_text,
+    untagged_json,
     yearly_pay,
 )
 
@@ -28,11 +29,11 @@ HOST = "www.usajobs.gov"  # where its listings are; the search itself is on data
 API = "https://data.usajobs.gov/api/search"
 KEY, EMAIL = "usajobs-key", "usajobs-email"
 RESULTS_PER_PAGE, MAX_PAGES = 500, 5
-NEEDS_KEY = "needs your key: Settings → USAJobs key"
 NO_KEYWORDS = "no role keywords are set, so there is nothing to search for"
 KEY_REFUSED = "refused the key: check it in Settings → USAJobs key"
 CANT_SEND = "the saved key or e-mail can't be sent: save them again in Settings → USAJobs key"
 SENDABLE = re.compile(r"[!-~]+")  # a request's headers carry visible plain characters only
+COUNT = re.compile(r"[0-9]{1,9}")  # any longer is no real count, and reading thousands of digits would raise
 YEARLY = {"PA", "Per Year"}
 CITIZENS_ONLY = re.compile(r"(all )?(united states|u\.s\.|us) citizens", re.IGNORECASE)
 TEXT_FIELDS = (
@@ -52,7 +53,7 @@ def read(fetcher: Any, keywords: list[str]) -> tuple[list[Job], int, bool]:
     Any failed request raises, so nothing is saved or closed this run.
     """
     headers = _headers()
-    words = [word.strip() for word in keywords if word.strip()]
+    words = list({word.strip().casefold(): word.strip() for word in keywords if word.strip()}.values())
     if not words:
         raise Skipped(NO_KEYWORDS)
     found, skipped, complete = {}, 0, True
@@ -67,38 +68,50 @@ def read(fetcher: Any, keywords: list[str]) -> tuple[list[Job], int, bool]:
     return list(found.values()), skipped, complete
 
 
+def missing(key: str | None, email: str | None) -> str:
+    """Which of the two is still to save, in words; nothing when both are there."""
+    return " and ".join(name for name, value in (("key", key), ("e-mail", email)) if not value)
+
+
 def _headers() -> dict[str, str]:
     try:
         key, email = get_secret(KEY), get_secret(EMAIL)
     except KeychainError as error:
         raise Skipped(str(error)) from None
-    if not (key and email):
-        raise Skipped(NEEDS_KEY)
+    if lacking := missing(key, email):
+        raise Skipped(f"needs your {lacking}: Settings → USAJobs key")
     if not (SENDABLE.fullmatch(key) and SENDABLE.fullmatch(email)):
         raise Skipped(CANT_SEND)
     return {"Authorization-Key": key, "User-Agent": email}
 
 
 def _search(fetcher: Any, word: str, headers: dict[str, str]) -> tuple[list, bool]:
-    """One keyword's entries, page by page, and whether they are all of them."""
-    entries = []
+    """One keyword's entries, page by page, and whether they are all of them: a list that doesn't add up is not."""
+    entries, adds_up = [], True
     for page in range(1, MAX_PAGES + 1):
         query = urlencode({"Keyword": word, "ResultsPerPage": RESULTS_PER_PAGE, "Page": page})
-        data = fetcher.get_json(f"{API}?{query}", headers=headers)[0]
+        data = untagged_json(fetcher, f"{API}?{query}", headers)
         result = data.get("SearchResult") if isinstance(data, dict) else None
         items = result.get("SearchResultItems") if isinstance(result, dict) else None
         if not isinstance(items, list):
             raise SourceError("unexpected format (no list of jobs)")
         entries += items
         area = result.get("UserArea")
-        pages = area.get("NumberOfPages") if isinstance(area, dict) else None
-        if isinstance(pages, str) and pages.isdecimal():
-            pages = int(pages)
-        if type(pages) is not int:  # how far it goes is unknown, so what was not read must not count as gone
+        pages = _count(area.get("NumberOfPages") if isinstance(area, dict) else None)
+        if pages is None:  # how far it goes is unknown, so what was not read must not count as gone
             return entries, False
         if page >= pages:
-            return entries, True
+            total = _count(result.get("SearchResultCountAll"))  # its name is unproven, so the rest stands without it
+            ends_well = (items or page == 1) and (pages or not entries)
+            return entries, adds_up and bool(ends_well) and (total is None or len(entries) >= total)
+        adds_up = adds_up and len(items) >= RESULTS_PER_PAGE  # only the last page may be short
     return entries, False
+
+
+def _count(value: Any) -> int | None:
+    """A count, sent as a number or as digits; None for anything else."""
+    text = str(value) if type(value) is int else value
+    return int(text) if isinstance(text, str) and COUNT.fullmatch(text) else None
 
 
 def _job(item: dict) -> Job:

@@ -126,7 +126,7 @@ def test_a_key_removed_while_ticked_skips_it_and_closes_nothing(conn, data_dir):
     with conn:
         add_job(conn, "ML Engineer", ["feed:usajobs"])
     lines, _ = collect_with(conn, data_dir, {}, ["usajobs"])
-    assert f"USAJobs: {usajobs.NEEDS_KEY}" in lines
+    assert "USAJobs: needs your key and e-mail: Settings → USAJobs key" in lines
     assert one(conn, "SELECT status FROM jobs") == ("open",)
 
 

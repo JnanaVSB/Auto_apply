@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from app.config import Config
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
-from app.sources.usajobs import EMAIL, KEY
+from app.sources.usajobs import EMAIL, KEY, missing
 from app.web import security
 from app.web.writer_settings import KEY as KEY_SHAPE
 
@@ -19,12 +19,12 @@ EMAIL_SHAPE = re.compile(r"[!-?A-~]+@[!-?A-~]+")  # visible plain characters, as
 MAX_EMAIL = 254
 
 
-def needs_key(config: Config) -> bool:
-    """USAJobs is ticked, but a collection would skip it. A failing keychain is said on the key page."""
+def still_missing(config: Config) -> str:
+    """What a ticked USAJobs lacks, so a collection would skip it. A failing keychain is said on the key page."""
     try:
-        return "usajobs" in config.sources.feeds and not (get_secret(KEY) and get_secret(EMAIL))
+        return missing(get_secret(KEY), get_secret(EMAIL)) if "usajobs" in config.sources.feeds else ""
     except KeychainError:
-        return False
+        return ""
 
 
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:

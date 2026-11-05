@@ -51,7 +51,7 @@
   <input type="hidden" name="feed_{{ name }}" value="off">
   <label class="tick"><input type="checkbox" name="feed_{{ name }}" value="on"{% if form["feed_" ~ name] == "on" %} checked{% endif %}> {{ label }}{% if name == "usajobs" %} (needs your own free key; almost all jobs need US citizenship){% endif %}</label>
   {% if name == "usajobs" %}
-  <p class="hint">{% if remote %}Change your USAJobs key on the laptop.{% else %}Your key: <a href="/settings/usajobs">Settings → USAJobs key</a>.{% endif %}{% if needs_usajobs_key %} <strong>Ticked, but no key is saved yet, so USAJobs is skipped.</strong>{% endif %}</p>
+  <p class="hint">{% if remote %}Change your USAJobs key on the laptop.{% else %}Your key: <a href="/settings/usajobs">Settings → USAJobs key</a>.{% endif %}{% if usajobs_missing %} <strong>Ticked, but USAJobs is skipped until you save your {{ usajobs_missing }}.</strong>{% endif %}</p>
   {% endif %}
   {% endfor %}
 

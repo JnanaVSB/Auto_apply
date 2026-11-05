@@ -284,11 +284,17 @@ def test_usajobs_is_off_until_you_tick_it_and_the_page_says_what_it_needs(client
     assert NO_USAJOBS_KEY not in page
 
 
-NO_USAJOBS_KEY = "Ticked, but no key is saved yet, so USAJobs is skipped."
+NO_USAJOBS_KEY = "Ticked, but USAJobs is skipped until you save your"
 
 
-def test_ticked_with_no_key_says_so(client):
-    assert NO_USAJOBS_KEY in save(client, feed_usajobs=TICKED).text
+@pytest.mark.parametrize(
+    ("saved", "missing"),
+    [({}, "key and e-mail"), ({usajobs.KEY: "fake-key-1234"}, "e-mail"), ({usajobs.EMAIL: "sam@example.com"}, "key")],
+)
+def test_ticked_with_something_missing_says_which(client, saved, missing):
+    for name, value in saved.items():
+        keychain.set_secret(name, value)
+    assert f"{NO_USAJOBS_KEY} {missing}." in " ".join(save(client, feed_usajobs=TICKED).text.split())
 
 
 def test_ticked_with_a_key_says_nothing_more(client):

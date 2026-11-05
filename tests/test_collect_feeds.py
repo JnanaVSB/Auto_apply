@@ -253,6 +253,19 @@ def test_a_lone_surrogate_on_a_board_stops_nothing(conn, data_dir):
     assert one(conn, "SELECT title FROM jobs") == ("ML Engineer",)
 
 
+def test_deep_unclosed_tags_on_a_feed_skip_only_their_entry(conn, data_dir):
+    lines, _ = run(conn, data_dir, feed(listing(), listing(OTHER_LINK) | {"description": "<script>" * 5000}))
+    assert "No sources failed." in lines
+    assert one(conn, "SELECT count(*) FROM jobs") == (1,)
+
+
+def test_deep_unclosed_tags_on_a_board_skip_only_their_entry(conn, data_dir):
+    deep = BOARD_JOB | {"id": "l-2", "hostedUrl": "https://jobs.lever.co/acme/l-2", "description": "<script>" * 5000}
+    lines, _ = run(conn, data_dir, {LEVER: [BOARD_JOB, deep]}, OFF, extra_boards=["lever:acme"])
+    assert "No sources failed." in lines
+    assert one(conn, "SELECT count(*) FROM jobs") == (1,)
+
+
 def test_show_finds_a_job_by_its_feed_listing_after_a_board_took_over_the_link(conn, data_dir):
     run(conn, data_dir, feed(listing()))
     run(conn, data_dir, feed(listing()) | {LEVER: [BOARD_JOB]}, extra_boards=["lever:acme"])

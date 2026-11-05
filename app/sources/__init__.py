@@ -72,6 +72,14 @@ def _whole_characters(value: Any) -> Any:
     return type(value)(map(_whole_characters, value)) if isinstance(value, list | tuple) else value
 
 
+def untagged_json(fetcher: Any, url: str, headers: dict[str, str] | None = None) -> Any:
+    """A reply asked for with no version tag, so a 304 ("nothing changed") answers nothing that was asked."""
+    reply = fetcher.get_json(url, headers=headers)
+    if reply is None:
+        raise SourceError("unexpected reply (nothing changed, but nothing was asked about a version)")
+    return reply[0]
+
+
 def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[Job], int]:
     """Turn each entry into a job; return the jobs and how many broken entries were skipped.
 
@@ -83,7 +91,7 @@ def parse_each(entries: Any, to_job: Callable[[Any], Job | None]) -> tuple[list[
     for entry in entries:
         try:
             job = to_job(entry)
-        except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError):
+        except (ArithmeticError, AttributeError, KeyError, RecursionError, TypeError, ValueError):
             skipped += 1
             continue
         if job is not None:
