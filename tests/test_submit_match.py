@@ -1,3 +1,6 @@
+import json
+from datetime import date
+
 import pytest
 from helpers import add_job
 
@@ -432,3 +435,56 @@ def test_documents_are_the_newest_finished_versions_with_their_file(conn, data_d
     resume.write_bytes(b"%PDF-1.7 fake")
     assert match.documents(conn, data_dir, job) == {"resume": ("Resume v2", resume), "cover_letter": None}
     assert match.documents(conn, data_dir, add_job(conn, "Data Intern")) == {"resume": None, "cover_letter": None}
+
+
+def remembered(conn):
+    return questionnaire.load(conn)[0]["more"]
+
+
+def test_remember_keeps_one_row_per_wording_with_its_first_asker(conn):
+    match.remember(conn, "Have you worked at Acme before?", "Acme", today=date(2026, 11, 4))
+    match.remember(conn, "Have you worked at GLOBEX before?", "Globex", "No", today=date(2026, 11, 5))
+    match.remember(conn, "Have you worked at Initech before?", "Initech", "Yes", today=date(2026, 11, 6))
+    assert remembered(conn) == [
+        {
+            "question": "Have you worked at [company] before?",
+            "answer": "No",
+            "asked_by": "Acme",
+            "asked_on": "2026-11-04",
+        }
+    ]
+
+
+def test_remember_marks_the_company_however_it_is_written():
+    assert match._marked("Why ACME, Inc? Acmeville is near.", "Acme Inc.") == "Why [company]? Acmeville is near."
+    assert match._marked("Why us?", "") == "Why us?"
+
+
+def test_a_remembered_question_answers_the_same_question_from_another_company(conn):
+    match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
+    asked = field("Have you worked at Globex before?", "single", choices=YES_NO)
+    found = match.match(Form((asked,)), questionnaire.load(conn)[0], "Globex")[0][0]
+    assert (chosen(found), found.source) == (["No"], "your saved answer")
+
+
+def test_remember_refuses_a_full_list_and_saves_nothing(conn):
+    full = [{"question": f"Question {number}?", "answer": ""} for number in range(questionnaire.MAX_PAIRS)]
+    questionnaire.save(conn, questionnaire.check({"more": full}))
+    before = conn.execute("SELECT answers, saved_on FROM questionnaire").fetchone()
+    with pytest.raises(questionnaire.QuestionnaireError, match=r"More answers is full \(300 rows\): delete some"):
+        match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
+    assert conn.execute("SELECT answers, saved_on FROM questionnaire").fetchone() == before
+    match.remember(conn, "Question 7?", "Acme", "Yes")  # a row already there still takes its answer
+    assert remembered(conn)[7]["answer"] == "Yes" and len(remembered(conn)) == 300
+
+
+def test_remember_changes_nothing_when_the_saved_answers_break_a_rule(conn):
+    stored = questionnaire.Answers().model_dump(mode="json")
+    stored["contact"]["phone"] = "12"
+    with conn:
+        conn.execute("INSERT INTO questionnaire VALUES (1, ?, 'then')", (json.dumps(stored),))
+    with pytest.raises(
+        questionnaire.QuestionnaireError, match="fix it on the Questionnaire page first: Contact, phone"
+    ):
+        match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
+    assert json.loads(conn.execute("SELECT answers FROM questionnaire").fetchone()[0]) == stored

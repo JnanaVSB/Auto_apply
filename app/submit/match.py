@@ -9,10 +9,10 @@ from pathlib import Path
 
 import sqlcipher3
 
-from app import places
+from app import places, questionnaire
 from app.council import runs
 from app.documents import pdf
-from app.questionnaire import DISABILITY, MONTH, NO_ANSWER, RACES, SECTIONS, VETERAN
+from app.questionnaire import DISABILITY, MAX_PAIRS, MONTH, NO_ANSWER, RACES, SECTIONS, VETERAN, QuestionnaireError
 from app.submit import Field, Form
 
 STATUSES = ("fill", "empty", "hidden", "write", "decide")
@@ -81,6 +81,8 @@ NO_AI = re.compile(  # on cleaned wording: "must be your own", "not AI-generated
 NO_AI_WARNING = ("This form asks that application materials be your own and not AI-written: write the long answers "
                  "yourself")  # fmt: skip
 LIMIT_WARNING = "This company limits applications (its words: {})"
+FULL = f"More answers is full ({MAX_PAIRS} rows): delete some on the Questionnaire page"
+BROKEN = "Your saved Questionnaire breaks a rule; fix it on the Questionnaire page first: {}"
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,37 @@ def documents(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict[
         path = pdf.tailored(data_dir, job_id, done["version"], kind) if done else None
         found[kind] = (f"{name} v{done['version']}", path) if path and path.is_file() else None
     return found
+
+
+def remember(
+    conn: sqlcipher3.Connection, label: str, company: str, answer: str = "", today: date | None = None
+) -> None:
+    """Keep a form's question in your More answers, the company's name saved as [company] so the same question from
+    any company finds it, with `answer` if given. One row per wording: a row keeps the first company and day that
+    asked it, and an answer it holds is never changed."""
+    values, _, problem = questionnaire.load(conn)
+    if problem:
+        raise QuestionnaireError(BROKEN.format(problem))
+    wording, answer = clean(label, company), answer.strip()
+    if row := next((row for row in values["more"] if clean(row["question"], company) == wording), None):
+        if row["answer"] or not answer:
+            return
+        row["answer"] = answer
+    elif len(values["more"]) >= MAX_PAIRS:
+        raise QuestionnaireError(FULL)
+    else:
+        asked_on = (today or date.today()).isoformat()
+        values["more"].append({"question": _marked(label, company), "answer": answer, "asked_by": company[:100],
+                               "asked_on": asked_on})  # fmt: skip
+    questionnaire.save(conn, questionnaire.check(values))
+
+
+def _marked(label: str, company: str) -> str:
+    """The label with the company's name (whole words, any capitals and punctuation between) as [company]."""
+    if not (words := WORDS.findall(company)):
+        return label
+    name = r"[\W_]+".join(map(re.escape, words))
+    return re.sub(rf"(?<!\w){name}(?!\w)", COMPANY, label, flags=re.IGNORECASE)
 
 
 def _warnings(form: Form, company: str) -> tuple[str, ...]:

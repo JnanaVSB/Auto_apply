@@ -1,6 +1,7 @@
 """The questionnaire's rules, saving and file, with a made-up person only."""
 
 import json
+from datetime import date
 
 import pytest
 import yaml
@@ -56,6 +57,9 @@ def test_every_field_is_optional_and_eeo_defaults_to_no_answer():
         ("eeo.race", "Martian", "EEO, race: Input should be"),
         ("more.question.1", "", None),  # an empty row is simply left out
         ("more.answer.1", "An answer with no question", "More answers, row 2, question: String should have at least"),
+        ("more.question.0", "Q" * 1001, "More answers, row 1, question: String should have at most 1000 characters"),
+        ("more.asked_on.0", "yesterday", "More answers, row 1, asked on: Input should be a valid date"),
+        ("consents.texting", "always", "Consents, texting: Input should be 'ask', 'accept' or 'decline'"),
     ],
 )
 def test_broken_rules_name_the_field_never_the_value(field, value, problem):
@@ -69,8 +73,28 @@ def test_broken_rules_name_the_field_never_the_value(field, value, problem):
 
 def test_too_many_extra_answers_are_refused():
     rows = {f"more.question.{n}": f"Question {n}?" for n in range(questionnaire.MAX_PAIRS + 1)}
-    with pytest.raises(QuestionnaireError, match="More answers: List should have at most 100 items"):
+    assert len(questionnaire.check(questionnaire.typed(rows | {"more.question.300": ""})).more) == 300
+    with pytest.raises(QuestionnaireError, match="More answers: List should have at most 300 items"):
         questionnaire.check(questionnaire.typed(rows))
+
+
+def test_consents_are_asked_each_time_until_you_choose():
+    assert answers().consents.model_dump() == {
+        "privacy": "ask",
+        "retention": "ask",
+        "texting": "ask",
+        "marketing": "ask",
+    }
+    assert answers(**{"consents.marketing": "decline"}).consents.marketing == "decline"
+
+
+def test_who_first_asked_a_question_survives_a_save_and_a_row_needs_a_question_or_answer():
+    saved = answers(**{"more.asked_by.0": "Acme", "more.asked_on.0": "2026-11-04", "more.asked_by.1": "Globex"})
+    assert [(pair.question, pair.asked_by, pair.asked_on) for pair in saved.more] == [
+        ("Why this company?", "Acme", date(2026, 11, 4)),  # the row with only asked_by is left out
+    ]
+    needs = answers(**{"more.question.1": "Have you worked at [company] before?", "more.asked_on.1": ""})
+    assert (needs.more[1].answer, needs.more[1].asked_by, needs.more[1].asked_on) == ("", "", None)
 
 
 def test_saving_twice_keeps_one_row_with_the_newest_answers(conn):
@@ -94,6 +118,19 @@ def test_saved_answers_that_break_a_newer_rule_are_shown_unchanged(conn):
     values, _, problem = questionnaire.load(conn)
     assert values == stored and "Contact, phone: needs 7 to 15 digits" in problem
     assert json.loads(conn.execute("SELECT answers FROM questionnaire").fetchone()[0]) == stored  # never changed
+
+
+def test_answers_saved_before_consents_and_asked_by_load_with_the_defaults(conn):
+    stored = questionnaire.Answers().model_dump(mode="json")
+    del stored["consents"]
+    stored["more"] = [{"question": "Why this company?", "answer": "Made-up answer."}]
+    with conn:
+        conn.execute("INSERT INTO questionnaire VALUES (1, ?, 'then')", (json.dumps(stored),))
+    values, _, problem = questionnaire.load(conn)
+    assert problem is None and values["consents"]["privacy"] == "ask"
+    assert values["more"] == [
+        {"question": "Why this company?", "answer": "Made-up answer.", "asked_by": "", "asked_on": None}
+    ]
 
 
 def test_the_file_holds_every_saved_answer(conn):

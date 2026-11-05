@@ -87,13 +87,36 @@
   {{ text("other", "clearance", "Security clearance (none, or its level)") }}
   {{ text("other", "heard_about", "How you heard about jobs") }}
 
+  <h2>Consents</h2>
+  <p class="hint">AI-use promises and arbitration agreements are always asked, on every form.</p>
+  {% set consents = values.get("consents") or {} %}
+  {% for name, label in [("privacy", "Privacy notice"), ("retention", "Keeping your data (GDPR)"),
+                         ("texting", "Text or WhatsApp messages"), ("marketing", "Marketing or talent community")] %}
+  <label>{{ label }}
+    <select name="consents.{{ name }}">
+      {% for value, shown in [("ask", "Ask me each time"), ("accept", "Accept"), ("decline", "Decline")] %}
+      <option value="{{ value }}"{% if consents.get(name) == value %} selected{% endif %}>{{ shown }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endfor %}
+
   <h2>More answers</h2>
-  <p class="hint">Any other question you often see, with your answer (up to {{ MAX_PAIRS }}). Clear both boxes to
-    remove one.</p>
-  {% for pair in values.more + [{}] %}
+  <p class="hint">Any other question you often see, with your answer (up to {{ MAX_PAIRS }}). Questions a form asked
+    that you have not answered yet come first. Clear both boxes to remove one.</p>
+  {% set MONTHS = {"01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr", "05": "May", "06": "Jun", "07": "Jul",
+                   "08": "Aug", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec"} %}
+  {% for pair in (values.more | rejectattr("answer") | list) + (values.more | selectattr("answer") | list) + [{}] %}
+  {% set day = (pair.get("asked_on") or "").split("-") %}
   <div class="list-row">
-    <label>Question <input name="more.question.{{ loop.index0 }}" maxlength="300" value="{{ pair.get('question') or '' }}"></label>
+    <label>Question
+      {% if pair.get("question") and not pair.get("answer") %}<span class="mark warn">needs answer</span>
+      {% if pair.get("asked_by") %}<span class="hint">asked by {{ pair.asked_by }}{% if day | length == 3 and day[1] in MONTHS %}, {{ day[2] | int }} {{ MONTHS[day[1]] }}{% endif %}</span>{% endif %}
+      {% endif %}
+      <input name="more.question.{{ loop.index0 }}" maxlength="1000" value="{{ pair.get('question') or '' }}"></label>
     <label>Answer <textarea name="more.answer.{{ loop.index0 }}" rows="2" maxlength="2000">{{ pair.get("answer") or "" }}</textarea></label>
+    <input type="hidden" name="more.asked_by.{{ loop.index0 }}" value="{{ pair.get('asked_by') or '' }}">
+    <input type="hidden" name="more.asked_on.{{ loop.index0 }}" value="{{ pair.get('asked_on') or '' }}">
   </div>
   {% endfor %}
 

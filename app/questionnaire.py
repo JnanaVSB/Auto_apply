@@ -20,14 +20,14 @@ RACES = (
 VETERAN = ("I am a protected veteran", "I am not a protected veteran", NO_ANSWER)
 DISABILITY = ("Yes, I have a disability (or had one in the past)", "No, I do not have a disability", NO_ANSWER)
 STATUSES = ("citizen", "permanent resident", "F-1 OPT", "STEM OPT", "H-1B", "other")
-MAX_PAIRS = 100
-PAIR_ROW = re.compile(r"more\.(question|answer)\.([0-9]{1,3})")  # one "More answers" row on the form
+MAX_PAIRS = 300
+PAIR_ROW = re.compile(r"more\.(question|answer|asked_by|asked_on)\.([0-9]{1,3})")  # one "More answers" row
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PHONE = re.compile(r"[0-9 +().-]+")
 MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 SECTIONS = {
     "contact": "Contact", "work": "Work authorization", "availability": "Availability", "salary": "Salary",
-    "education": "Education", "eeo": "EEO", "other": "Other", "more": "More answers",
+    "education": "Education", "eeo": "EEO", "other": "Other", "consents": "Consents", "more": "More answers",
 }  # fmt: skip
 SAVE = """INSERT INTO questionnaire (id, answers, saved_on) VALUES (1, ?, ?)
     ON CONFLICT (id) DO UPDATE SET answers = excluded.answers, saved_on = excluded.saved_on"""
@@ -81,6 +81,7 @@ Month = Annotated[str, AfterValidator(_visible), AfterValidator(_month)]
 Day = Annotated[date | None, Empty]
 Money = Annotated[Annotated[int, Field(ge=0, le=100_000_000)] | None, Empty]
 YesNo = Literal["", "yes", "no"]
+Consent = Literal["ask", "accept", "decline"]  # how a form's consent box is answered: asked each time, or remembered
 Ticked = Annotated[bool, BeforeValidator(lambda value: value not in ("", "0", False))]  # a ticked box sends "1"
 
 
@@ -156,9 +157,20 @@ class Other(Section):
     heard_about: Short = "Company website"
 
 
+class Consents(Section):
+    """The consent kinds app/submit/match.py remembers; AI-use promises and arbitration are always asked."""
+
+    privacy: Consent = "ask"
+    retention: Consent = "ask"
+    texting: Consent = "ask"
+    marketing: Consent = "ask"
+
+
 class Pair(Section):
-    question: Annotated[str, Field(min_length=1, max_length=300), AfterValidator(_visible)]
-    answer: Annotated[str, Field(max_length=2000), AfterValidator(_visible)] = ""
+    question: Annotated[str, Field(min_length=1, max_length=1_000), AfterValidator(_visible)]  # a form label's limit
+    answer: Annotated[str, Field(max_length=2000), AfterValidator(_visible)] = ""  # empty: needs an answer
+    asked_by: Short = ""  # the company whose form first asked it
+    asked_on: Day = None
 
 
 class Answers(Section):
@@ -169,6 +181,7 @@ class Answers(Section):
     education: Education = Education()
     eeo: EEO = EEO()
     other: Other = Other()
+    consents: Consents = Consents()
     more: list[Pair] = Field(default=[], max_length=MAX_PAIRS)
 
 
@@ -181,7 +194,9 @@ def typed(form: dict[str, str]) -> dict:
             rows.setdefault(int(match[2]), {})[match[1]] = value
         elif (section := name.partition(".")[0]) in values:
             values[section][name.partition(".")[2]] = value
-    values["more"] = [row for _, row in sorted(rows.items()) if any(text.strip() for text in row.values())]
+    values["more"] = [  # a row counts when its question or answer has text
+        row for _, row in sorted(rows.items()) if row.get("question", "").strip() or row.get("answer", "").strip()
+    ]
     return values
 
 
