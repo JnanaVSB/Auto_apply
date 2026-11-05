@@ -1,6 +1,7 @@
 """The job box's Application form part: reading a form from its site (a fake web, never the network), the preview and
 what is left for you, with a made-up person, job and forms."""
 
+import re
 from datetime import date
 
 import httpx
@@ -145,6 +146,19 @@ def test_a_required_question_no_rule_answers_is_kept_to_answer_once(client, conn
     ]
 
 
+def test_reading_a_form_never_saves_an_answer_by_itself(client, conn, data_dir, web):
+    asked = ["Lantern copper meadow?", "Quartz harbor?", "Velvet thimble juniper sparrow?"]
+    web.pages[GREENHOUSE_FORM] = REPLY | {"questions": [
+        *REPLY["questions"],
+        *(question(label, f"question_{at}", "input_text", required=True) for at, label in enumerate(asked, 200)),
+    ]}  # fmt: skip
+    job = made_up_job(conn, data_dir)
+    client.get(f"/jobs/{job}/form")
+    more = questionnaire.load(conn)[0]["more"]
+    assert [row["question"] for row in more] == asked and not any(row["answer"] for row in more)
+    assert all(line.status != "suggested" for line in form_part.preview(conn, data_dir, job).lines)
+
+
 def test_a_full_more_answers_is_said_and_the_form_still_saved(client, conn, data_dir, web):
     web.pages[GREENHOUSE_FORM] = FORM
     job = made_up_job(conn, data_dir)
@@ -179,7 +193,7 @@ TOOLS = submit.Field("question_3", "Which tools?", "multi", False, "company",
 WHY = submit.Field("question_4", "Why Acme? In 100 words or less.", "long_text", True, "company")
 CONDUCT = submit.Field("question_5", "I acknowledge the code of conduct", "consent", False, "privacy")
 RULES = submit.Field("question_6", "I acknowledge the house rules", "consent", True, "privacy")
-TEXTS = submit.Field("question_7", "I agree to receive text messages", "consent", True, "privacy")
+TEXTS = submit.Field("question_7", "Do you opt in to WhatsApp messages?", "consent", True, "privacy")
 AI = submit.Field("question_8", "I consent to Acme's use of AI tools", "consent", True, "privacy")
 SAMPLE = submit.Field("question_9", "Writing sample", "file", True, "company")
 HOBBY = submit.Field("question_10", "Hobby?", "text", False, "company")
@@ -283,7 +297,7 @@ def test_choices_are_kept_as_their_labels_and_filled_by_the_rules(client, conn, 
         ({"field": PAPER.key, "answer": match.IN_WINDOW}, "That text is one the app keeps for itself"),
         ({"field": PAPER.key, "answer": "   "}, "Type an answer, or press Leave it empty"),
         ({"field": SAMPLE.key, "answer": "x"}, "This question isn&#39;t answered here"),
-        ({"field": AI.key, "answer": "yes"}, "You tick this yourself in the window: the app never answers it"),
+        ({"field": AI.key, "answer": "yes"}, "You do this yourself in the window: the app never answers it"),
     ],
 )
 def test_an_answer_that_cant_be_kept_says_why_and_saves_nothing(client, conn, job, fields, problem):
@@ -349,7 +363,114 @@ def writer(tmp_path, data_dir, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", path)
 
 
+def with_saved(conn, *pairs):
+    values = questionnaire.load(conn)[0]
+    values["more"] = [{"question": question, "answer": answer} for question, answer in pairs]
+    questionnaire.save(conn, questionnaire.check(values))
+
+
+COLOUR = submit.Field("question_20", "Favourite colour?", "single", True, "company",
+                      choices=(submit.Choice("Teal", "7"), submit.Choice("Red", "8")))  # fmt: skip
+
+
+def seen(client, job, action="use"):
+    """The fingerprint the page sends with its first Use or Use all button."""
+    page = client.get(f"/jobs/{job}/form").text
+    return re.search(rf'form/{action}".*?name="seen" value="(\w+)"', page, re.DOTALL)[1]
+
+
+def test_a_suggestion_is_open_shown_and_filled_only_once_you_press_use(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    with_saved(conn, ("Hobby?", "Chess"), ("Favourite colour?", "Teal"))
+    submit.save(conn, job, submit.Form((HOBBY, COLOUR)), "api")
+    assert form_part.preview(conn, data_dir, job).open == 2
+    text = client.get(f"/jobs/{job}/form").text
+    assert "Use all 2 suggestions" in text and ">Use</button>" in text and "Chess" in text
+    assert form_part.CHANGED_SUGGESTION not in text
+    assert status(conn, data_dir, job, COLOUR.key).status == "suggested"
+    press(client, job, "use", field=HOBBY.key, seen=seen(client, job))
+    assert one(conn, KEPT_ROW, job, HOBBY.key) == ("Chess", "you")
+    press(client, job, "use", field=COLOUR.key, seen=seen(client, job))
+    assert one(conn, KEPT_ROW, job, COLOUR.key) == ("Teal", "you")  # a choice is kept by its label, as yours is
+    found = status(conn, data_dir, job, COLOUR.key)
+    assert (found.status, found.value, found.source) == ("fill", ("7",), form_part.MINE)
+    assert form_part.preview(conn, data_dir, job).open == 0
+
+
+def test_use_all_keeps_every_suggestion_and_nothing_else(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    with_saved(conn, ("Hobby?", "Chess"), ("Favourite colour?", "Teal"))
+    submit.save(conn, job, submit.Form((HOBBY, COLOUR, PAPER)), "api")
+    press(client, job, "use-all", seen=seen(client, job, "use-all"))
+    assert conn.execute("SELECT field, answer FROM form_answers ORDER BY field").fetchall() == [
+        ("question_10", "Chess"), ("question_20", "Teal"),
+    ]  # fmt: skip
+
+
+def test_use_refuses_a_suggestion_that_changed_after_the_page_showed_it(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    with_saved(conn, ("Hobby?", "Chess"))
+    submit.save(conn, job, submit.Form((HOBBY,)), "api")
+    shown = seen(client, job)
+    with_saved(conn, ("Hobby?", "Poker"))
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key, seen=shown).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key).text  # no fingerprint at all
+
+
+def test_use_all_refuses_a_list_that_changed_after_the_page_showed_it(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    with_saved(conn, ("Hobby?", "Chess"))
+    submit.save(conn, job, submit.Form((HOBBY, COLOUR)), "api")
+    shown = seen(client, job, "use-all")
+    with_saved(conn, ("Hobby?", "Chess"), ("Favourite colour?", "Teal"))  # one more than the page showed
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use-all", seen=shown).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+
+
+def test_use_on_a_line_that_is_no_suggestion_keeps_nothing(client, conn, data_dir, job):
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+    assert form_part.PROMISE in press(client, job, "use", field=AI.key).text
+
+
+def test_a_long_box_ruled_by_its_own_help_is_yours_to_write_in_a_box(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    rule = submit.Field("question_1", "Why Acme?", "long_text", True, "company", help="Do not use AI for this answer.")
+    submit.save(conn, job, submit.Form((rule,)), "api")
+    text = client.get(f"/jobs/{job}/form").text
+    assert "this one is yours to write" in text and "<textarea" in text and "tick" not in text.split("<h3>To copy")[0]
+
+
+def test_a_long_box_that_is_a_promise_by_its_label_is_done_in_the_window_not_ticked(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    rule = submit.Field("question_1", "Describe how you used AI in this application", "long_text", True, "company")
+    submit.save(conn, job, submit.Form((rule,)), "api")
+    text = client.get(f"/jobs/{job}/form").text
+    assert "You do this yourself in the window." in text and "you do this in the window" in text
+    assert "You tick this yourself" not in text
+
+
+def test_an_optional_long_box_no_rule_answers_has_a_folded_box(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    extra = submit.Field("question_1", "Anything else?", "long_text", False, "company")
+    submit.save(conn, job, submit.Form((extra,)), "api")
+    assert "<summary>Answer it</summary>" in client.get(f"/jobs/{job}/form").text
+
+
+@pytest.mark.parametrize(("us_location", "wanted"), [("yes", "fill"), ("unclear", "decide"), ("no", "decide")])
+def test_a_plain_legal_question_fills_only_on_a_job_marked_as_in_the_us(conn, data_dir, us_location, wanted):
+    job = made_up_job(conn, data_dir)
+    asked = submit.Field("question_1", "Do you require sponsorship?", "single", True, "company",
+                         choices=(submit.Choice("Yes", "1"), submit.Choice("No", "0")))  # fmt: skip
+    submit.save(conn, job, submit.Form((asked,)), "api")
+    with conn:
+        conn.execute("UPDATE jobs SET us_location = ? WHERE id = ?", (us_location, job))
+    assert status(conn, data_dir, job, asked.key).status == wanted
+
+
 def test_write_answers_starts_the_writer_unless_busy(client, conn, job, writer, monkeypatch):
+    submit.save(conn, job, submit.Form((WHY,)), "api")  # a form with no AI promise
     woken = []
     monkeypatch.setattr(client.app.state.preparer, "wake", lambda: woken.append(1))
     assert press(client, job, "write").headers["hx-refresh"] == "true"  # the box above says so at once
@@ -370,10 +491,8 @@ def test_write_answers_on_a_form_that_wants_your_own_words_says_so(client, conn,
     own = submit.Field("question_1", "Why Acme?", "long_text", True, "company", help="Answers must be your own.")
     submit.save(conn, job, submit.Form((own,)), "api")
     text = client.get(f"/jobs/{job}/form").text
-    assert (
-        "Write these answers yourself" in text and "to be written by you" in text and "Write answers, above" not in text
-    )
-    assert "write these answers yourself" in press(client, job, "write").text
+    assert "this one is yours to write" in text and "<textarea" in text and "Write answers, above" not in text
+    assert match.NO_AI_WARNING in press(client, job, "write").text
     assert one(conn, "SELECT count(*) FROM preparations WHERE kind = 'answers'")[0] == 0
 
 

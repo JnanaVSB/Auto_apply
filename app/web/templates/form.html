@@ -62,12 +62,17 @@
 
   {% if found.open %}
   <h3>Decision required ({{ found.open }})</h3>
+  {% set suggested = seen | length %}
+  {% if suggested %}{{ post("use-all", "Use all " ~ suggested ~ " suggestion" ~ ("s" if suggested != 1 else ""), {"seen": seen_all}) }}{% endif %}
   <ul class="reasons">
-    {% for line, _ in shown if line.status == "decide" %}
+    {% for line, value in shown if line.status in ("decide", "suggested") %}
     {% set field = line.field %}{% set key = {"field": field.key} %}
-    <li><span class="mark warn">{{ decisions[line.decision] }}</span> {{ field.label }}{% if line.note %} <span class="muted">({{ line.note }})</span>{% endif %}
+    <li><span class="mark warn">{{ decisions[line.decision] or "Suggested" }}</span> {{ field.label }}{% if line.note %} <span class="muted">({{ line.note }})</span>{% endif %}
       {% if field.help %}<br><span class="muted">{{ field.help }}</span>{% endif %}
-      {% if line.decision == "unknown" and field.kind in ("text", "location", "long_text", "single", "multi") %}
+      {% if line.status == "suggested" %}
+      <br>{{ value }} <span class="muted">({{ line.source }})</span> {{ post("use", "Use", {"field": field.key, "seen": seen[field.key]}) }}
+      <details><summary>Answer it another way</summary>{{ answer_box(field) }}</details>
+      {% elif line.decision == "unknown" and field.kind in ("text", "location", "long_text", "single", "multi") %}
       {{ answer_box(field) }}
       {% elif line.decision == "consent" %}
       {{ post("consent", "Accept", {"field": field.key, "choice": "accept"}) }}
@@ -89,13 +94,13 @@
   </ul>
   {% endif %}
 
-  {% set left = shown | selectattr("0.status", "equalto", "left") | list %}
+  {% set left = shown | selectattr("0.status", "equalto", "left") | list %}{% set ticked = ("consent", "single", "multi") %}
   {% if left %}
   <h3>Left for you</h3>
   <ul class="reasons">
     {% for line, _ in left %}
     <li><span class="mark warn">{{ line.note }}</span> {{ line.field.label }}{% if line.field.help %}<br><span class="muted">{{ line.field.help }}</span>{% endif %}
-      <br><span class="muted">{{ "You do this yourself in the window." if line.source == mine else "You tick this yourself in the window." }}</span>
+      <br><span class="muted">{{ "You tick this yourself in the window." if line.source != mine and line.field.kind in ticked else "You do this yourself in the window." }}</span>
       {% if line.source == mine %}{{ post("forget", "Change", {"field": line.field.key}) }}{% endif %}</li>
     {% endfor %}
   </ul>
@@ -103,7 +108,7 @@
 
   {% if longs %}
   <h3>Long questions</h3>
-  {% if own_words %}<p class="muted">Write these answers yourself: this form asks that they be your own.</p>
+  {% if own_words %}<p class="muted">Write these answers yourself: this form has a rule about AI.</p>
   {% elif writing %}{{ writing_line() }}
   {% else %}{{ post("write", "Write answers") }}{% endif %}
   {% if stopped and not writing %}<p class="error">The last Write answers stopped: {{ stopped }}</p>{% endif %}
@@ -132,8 +137,9 @@
       <td>{% if line.status == "fill" %}{{ value }}
         {% elif line.status == "empty" %}<span class="muted">left empty</span>
           {% if line.field.key in askable %}<details><summary>Answer it</summary>{{ answer_box(line.field) }}</details>{% endif %}
-        {% elif line.status == "write" %}<span class="muted">{{ "to be written by you" if own_words else "to be written (Write answers, above)" }}</span>
-        {% elif line.status == "left" %}<span class="muted">{{ "you do this in the window" if line.source == mine else "you tick this yourself" }}</span>
+        {% elif line.status == "suggested" %}{{ value }}<br><span class="muted">suggested: only filled once you press Use</span>
+        {% elif line.status == "write" %}<span class="muted">to be written (Write answers, above)</span>
+        {% elif line.status == "left" %}<span class="muted">{{ "you tick this yourself" if line.source != mine and line.field.kind in ticked else "you do this in the window" }}</span>
         {% else %}<span class="error">{{ decisions[line.decision] }}</span>{% endif %}
         {% if line.note %}<br><span class="muted">{{ line.note }}</span>{% endif %}</td>
       <td class="muted">{{ line.source if line.field.kind != "file" else "" }}

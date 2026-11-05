@@ -44,9 +44,10 @@ SHAPE = {
 }
 DEFAULT_LIMIT = 1_200  # characters, unless the question states its own limit (owner)
 MAX_TEXT, MAX_NOTES = 20_000, 2000  # only against a broken answer
-STATED = re.compile(  # "100 words", "500-character"; group 1, a lower limit, doesn't count; 7 digits at most
-    r"(?:\b(at least|minimum(?: of)?|min|no fewer than|(?<!no )(?<!not )more than|(?<!not )over)\s+)?"
-    r"(?<![\w,])(\d(?:,?\d){0,6})(?![\d,])\s*-?\s*(words?|characters?|chars?)\b",
+STATED = re.compile(  # "100 words", "500-character"; groups 1, 3 and 5, a lower limit, don't count; 7 digits at most
+    r"(?:\b(at least|minimum(?: length)?(?: of)?|min\.?|no fewer than|(?<!no )(?<!not )more than|(?<!not )over)\s+)?"
+    r"(?<![\w,])(\d(?:,?\d){0,6})(?![\d,])(\+?)\s*-?\s*(words?|characters?|chars?)\b"
+    r"(\s+(?:minimum|min\b|at least|or more))?",
     re.IGNORECASE,
 )
 KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
@@ -55,7 +56,7 @@ SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation
     preparation_id = excluded.preparation_id, saved_on = excluded.saved_on, wording = excluded.wording
     WHERE form_answers.given_by = 'writer'"""
 NO_FORM = "Read the form first"
-OWN_WORDS = "This form asks that application materials be your own: write these answers yourself"
+OWN_WORDS = match.NO_AI_WARNING
 NO_QUESTIONS = "This form has no long questions for the Writer"
 
 
@@ -70,9 +71,11 @@ def questions(conn: sqlcipher3.Connection, job_id: int) -> tuple[list[Field], st
     if saved is None:
         return [], NO_FORM
     answers = questionnaire.load(conn)[0]
-    company = conn.execute("SELECT company FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
+    company, us_location = conn.execute("SELECT company, us_location FROM jobs WHERE id = ?", (job_id,)).fetchone()
     kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
-    lines, warnings = match.match(saved[0], answers, company, kept=kept, consents=answers.get("consents") or {})
+    lines, warnings = match.match(
+        saved[0], answers, company, kept=kept, consents=answers.get("consents") or {}, us_job=us_location == "yes"
+    )
     if match.NO_AI_WARNING in warnings:
         return [], OWN_WORDS
     found = [
@@ -92,10 +95,10 @@ def limit(field: Field) -> tuple[int | None, int | None]:
 
 def stated(field: Field) -> tuple[int | None, int | None] | None:
     """The smallest maximums the question states in its wording or help ("in 100 words or less", "maximum 500
-    characters"), never a minimum ("at least 5 words"); None when it states none."""
+    characters"), never a minimum ("at least 5 words", "300 words minimum", "300+ words"); None when it states none."""
     found: dict[str, list[int]] = {"w": [], "c": []}
-    for lower, number, unit in STATED.findall(f"{field.label} {field.help}"):
-        if not lower and (count := int(number.replace(",", ""))):
+    for lower, number, plus, unit, after in STATED.findall(f"{field.label} {field.help}"):
+        if not (lower or plus or after) and (count := int(number.replace(",", ""))):
             found[unit[0].lower()].append(count)
     return (min(found["w"], default=None), min(found["c"], default=None)) if found["w"] or found["c"] else None
 

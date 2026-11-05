@@ -21,7 +21,13 @@ SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address,
 LOAD = "SELECT submitted_on, saved_on, how, address, fields, files FROM submissions WHERE job_id = ?"
 NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
 BY_YOU, LEFT_EMPTY, MISSING = "answered by you on the site", "left empty", "file was missing"
-NO_VALUE = {"decide": BY_YOU, "left": BY_YOU, "write": BY_YOU, "empty": LEFT_EMPTY}  # a line's status -> its "from"
+NO_VALUE = {
+    "decide": BY_YOU,
+    "suggested": BY_YOU,
+    "left": BY_YOU,
+    "write": BY_YOU,
+    "empty": LEFT_EMPTY,
+}  # -> its "from"
 DOCUMENTS = ((runs.KIND, "Resume"), (runs.LETTER, "Cover letter"))
 
 
@@ -48,7 +54,7 @@ def standard(answers: dict) -> list[tuple[str, str]]:
 def shown(line: match.Line) -> str:
     """A line's value as you'd read it: a choice's label (never its value), an upload's version (never its path)."""
     field = line.field
-    if line.status != "fill":
+    if line.status not in ("fill", "suggested"):
         return ""
     if field.kind == "file":
         return line.source
@@ -117,7 +123,8 @@ def moved_back(conn: sqlcipher3.Connection, job_id: int, found: dict) -> str | N
 def _fields(lines: tuple[match.Line, ...]) -> list[dict]:
     """Each question as the app prepared it. What you do yourself on the site is never guessed at: no value."""
     return [
-        {"question": line.field.label, "value": shown(line), "from": NO_VALUE.get(line.status, line.source),
+        {"question": line.field.label, "value": "" if line.status in NO_VALUE else shown(line),
+         "from": NO_VALUE.get(line.status, line.source),
          "note": line.note}
         for line in lines
         if line.status != "hidden"

@@ -35,7 +35,7 @@ def field(label, kind="text", required=False, part="company", key=None, choices=
 def line(asked, answers=ANSWERS, company="Acme", kept=None, **given):
     """The question's line; a kept answer is an answer to today's wording unless it says otherwise."""
     kept = {key: (*row, match.wording(asked))[:3] for key, row in (kept or {}).items()}
-    return match.match(Form((asked,)), answers, company, kept=kept, **given)[0][0]
+    return match.match(Form((asked,)), answers, company, kept=kept, us_job=True, **given)[0][0]
 
 
 def changed(section, **values):
@@ -109,13 +109,33 @@ def test_a_kept_choice_is_matched_and_a_lost_one_is_yours_to_decide():
         ("phone", "Phone", "+1 555 0100"),
         ("location", "Current location", "Austin, TX, United States"),
         ("urls[LinkedIn]", "LinkedIn URL", "https://example.com/in/sam"),
-        ("question_7", "Your GitHub profile", "https://example.com/sam"),  # by its wording
-        ("question_8", "Personal website", "https://example.com"),
     ],
 )
 def test_standard_fields_come_from_the_contact_section(key, label, value):
     found = line(field(label, key=key, part="standard"))
     assert (found.status, found.value, found.source) == ("fill", value, "Questionnaire: Contact")
+
+
+@pytest.mark.parametrize(
+    ("label", "value"),
+    [
+        ("LinkedIn Profile URL", "https://example.com/in/sam"), ("GitHub", "https://example.com/sam"),
+        ("Personal website", "https://example.com"), ("Portfolio link", "https://example.com"),
+    ],
+)  # fmt: skip
+def test_a_text_box_asked_for_a_link_by_its_whole_label_is_filled(label, value):
+    found = line(field(label, key="question_7"))
+    assert (found.status, found.value, found.source) == ("fill", value, "Questionnaire: Contact")
+
+
+@pytest.mark.parametrize(
+    "asked",
+    [field("Your GitHub profile", key="question_7"), field("LinkedIn of your referrer", key="question_7"),
+     field("Portfolio password (if any)", key="question_7"), field("LinkedIn", "long_text", key="question_7")],
+    ids=lambda asked: asked.label,
+)  # fmt: skip
+def test_any_other_wording_near_a_link_gets_no_value(asked):
+    assert line(asked).value == ""
 
 
 def test_first_and_last_name_say_they_were_split():
@@ -188,9 +208,24 @@ def test_known_questions_take_the_questionnaire_answer(label, value, section):
     assert (found.status, found.value, found.source) == ("fill", value, f"Questionnaire: {section}")
 
 
-def test_a_known_question_with_choices_picks_the_one_that_fits():
-    asked = field("Are you legally authorized to work in the US?", "single", choices=("Yes, I am authorized", "No"))
-    assert chosen(line(asked)) == ["Yes, I am authorized"]
+def test_a_legal_question_is_filled_only_on_exactly_yes_and_no():
+    asked = "Are you legally authorized to work in the US?"
+    assert chosen(line(field(asked, "single", choices=YES_NO))) == ["Yes"]
+    found = line(field(asked, "single", choices=("Yes, I am authorized", "No")))
+    assert said(found) == ("decide", "unknown", match.EYE)
+
+
+@pytest.mark.parametrize(
+    ("us_job", "help_", "status"),
+    [(True, "", "fill"), (False, "", "decide"), (True, "This role requires a green card.", "decide")],
+)
+def test_a_legal_question_needs_a_us_job_and_no_help(us_job, help_, status):
+    asked = field("Are you authorized to work?", "single", choices=YES_NO, help=help_)
+    assert match.match(Form((asked,)), ANSWERS, "Acme", us_job=us_job)[0][0].status == status
+
+
+def test_a_plain_fact_may_have_help():
+    assert line(field("What is your GPA?", help="Out of 4.0")).value == "3.9"
 
 
 @pytest.mark.parametrize(
@@ -234,7 +269,7 @@ def test_relocation_that_depends_is_yours_to_decide():
 
 
 def test_two_choices_that_both_fit_are_no_guess():
-    asked = field("Are you at least 18?", "single", choices=("Yes", "yes", "No"))
+    asked = field("What is your highest degree?", "single", choices=("Master's", "master's", "PhD"))
     assert said(line(asked)) == ("decide", "unknown", "your Questionnaire answer is not one of the choices")
 
 
@@ -304,10 +339,10 @@ def test_a_lever_survey_for_other_countries_is_left_empty(country):
     assert said(line(survey("CA"), changed("contact", country="Canada")))[0] == "fill"
 
 
-def test_a_saved_more_answer_fills_the_same_ordinary_question():
+def test_a_saved_more_answer_is_only_suggested_for_the_same_ordinary_question():
     saved = ANSWERS | {"more": [{"question": "Favourite colour?", "answer": "Teal"}]}
     found = line(field("Favourite colour?", required=True), saved)
-    assert (found.status, found.value, found.source) == ("fill", "Teal", "your saved answer")
+    assert (found.status, found.value, found.source) == ("suggested", "Teal", "your saved answer")
 
 
 def test_an_old_row_with_the_company_marker_never_matches():
@@ -325,10 +360,9 @@ def test_an_empty_saved_answer_does_not_count():
         (field("Consent to the privacy notice (GDPR)", "consent", True, "privacy"), "privacy"),
         (field("Consent to keeping your data (GDPR)", "consent", True, "privacy"), "retention"),
         (field("Consent to data processing (GDPR)", "consent", True, "privacy"), "privacy"),
-        (field("I agree to the processing of my personal data", "consent", True), "privacy"),
-        (field("Acme may store my data for future opportunities.", "consent", key="consent[store]"), "retention"),
-        (field("I agree to receive text messages about my application", "single", choices=YES_NO), "texting"),
-        (field("Acme may contact me about future jobs.", "consent", key="consent[marketing]"), "marketing"),
+        (field("I have read and agree to the privacy policy", "consent", True), "privacy"),
+        (field("Do you opt in to receive WhatsApp messages?", "single", choices=YES_NO), "texting"),
+        (field("Acme may contact me about future job opportunities.", "consent", key="consent[x]"), "marketing"),
     ],
 )  # fmt: skip
 def test_a_remembered_consent_is_given_and_otherwise_asked(asked, kind):
@@ -352,17 +386,20 @@ def test_ai_use_and_arbitration_are_always_left_for_you_to_tick(label, kind, nam
 
 
 def test_a_declined_consent_is_left_empty_unless_the_form_requires_it():
-    asked = field("Subscribe to our newsletter", "consent")
-    assert said(line(asked, consents={"marketing": "decline"})) == ("empty", "", "marketing")
-    assert said(line(field("Join our talent community", "consent", True), consents={"marketing": "decline"})) == (
+    wording = "Acme may contact me about future job opportunities"
+    assert said(line(field(wording, "consent"), consents={"marketing": "decline"})) == ("empty", "", "marketing")
+    assert said(line(field(wording, "consent", True), consents={"marketing": "decline"})) == (
         "decide", "consent", "marketing: you decline this, but the form requires it",
     )  # fmt: skip
 
 
-def test_a_consent_of_no_known_kind_is_asked():
-    assert said(line(field("I acknowledge the code of conduct", "consent"), consents={"": "accept"})) == (
-        "decide", "consent", "consent",
-    )  # fmt: skip
+@pytest.mark.parametrize(
+    "wording",
+    ["I acknowledge the code of conduct", "I agree to receive text messages", "Subscribe to our newsletter"],
+)
+def test_a_sentence_off_the_list_is_asked_whatever_is_remembered(wording):
+    remembered = dict.fromkeys(("privacy", "retention", "texting", "marketing", ""), "accept")
+    assert said(line(field(wording, "consent"), consents=remembered)) == ("decide", "consent", "consent")
 
 
 @pytest.mark.parametrize("kind", ["consent", "single"])
@@ -382,8 +419,10 @@ def test_a_saved_answer_never_answers_a_consent():
     assert said(line(asked, saved)) == ("decide", "consent", "consent")
 
 
-def test_a_long_question_on_an_education_answer_is_for_the_writer():
-    assert line(field("Tell us about your graduation project", "long_text", True)).status == "write"
+def test_a_long_question_near_a_fact_is_yours_to_write():
+    assert said(line(field("Tell us about your graduation project", "long_text", True))) == (
+        "decide", "unknown", match.YOURS_TO_WRITE,
+    )  # fmt: skip
 
 
 def test_a_long_box_on_a_legal_question_is_yours_never_the_writers():
@@ -406,7 +445,7 @@ def test_a_long_salary_question_still_gets_the_questionnaire_salary():
 
 def test_a_known_question_naming_a_link_site_gets_no_link():
     found = line(field("How did you hear about us (LinkedIn, a friend, ...)?", key="question_10"))
-    assert (found.value, found.source) == ("Company website", "Questionnaire: Other")
+    assert (found.status, found.value) == ("empty", "")
 
 
 def test_long_free_text_is_for_the_writer_and_anything_else_is_left_or_yours():
@@ -431,12 +470,18 @@ def test_a_form_that_forbids_ai_writing_warns(label, help_):
     assert warnings == (match.NO_AI_WARNING,)
 
 
-def test_an_ai_notetaker_consent_or_a_limit_note_is_no_ai_warning():
-    notetaker = field("Acme uses an AI Notetaker in interviews. Do you consent?", "consent")
-    form = Form((notetaker,), "Candidates may apply at most 3 times in 180 days.")
+def test_a_limit_note_is_no_ai_warning():
+    form = Form((field("Favourite paper?"),), "Candidates may apply at most 3 times in 180 days.")
     assert match.match(form, ANSWERS, "Acme")[1] == (
         "This company limits applications (its words: Candidates may apply at most 3 times in 180 days.)",
     )  # fmt: skip
+
+
+def test_any_ai_promise_on_a_form_stops_the_writer_and_says_so():
+    notetaker = field("Acme uses an AI Notetaker in interviews. Do you consent?", "consent")
+    essay = field("Why do you want to work at Acme?", "long_text", True)
+    lines, warnings = match.match(Form((notetaker, essay)), ANSWERS, "Acme")
+    assert [found.status for found in lines] == ["left", "decide"] and warnings == (match.NO_AI_WARNING,)
 
 
 PREPARATION = """INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on)
@@ -516,8 +561,8 @@ def test_your_choice_for_one_jobs_question_is_kept_as_a_marker(asked, marker, re
 
 
 def test_a_consents_kind_is_the_same_for_the_rule_and_the_page():
-    assert match.consent_kind(field("I agree to receive text messages", "consent")) == ("texting", "texting")
-    assert match.consent_kind(field("I acknowledge the code of conduct", "consent")) == ("", "consent")
+    assert match.consent_kind(field("Do you opt in to WhatsApp messages?", "consent")) == "texting"
+    assert match.consent_kind(field("I acknowledge the code of conduct", "consent")) == ""
     assert match.consent_kind(field("Favourite paper?")) is None
 
 
@@ -547,7 +592,7 @@ def test_a_one_choice_acknowledgment_is_picked_once_you_accept_its_kind():
 
 def test_an_only_choice_that_says_no_is_never_a_consent():
     asked = field("I agree to the privacy policy", "single", True, choices=("No, thanks",))
-    assert said(line(asked, consents=EVERY_CONSENT)) == ("decide", "consent", "privacy")
+    assert said(line(asked, consents=EVERY_CONSENT)) == ("decide", "unknown", "")
 
 
 @pytest.mark.parametrize("label", [AUTHORIZED, SPONSORED])
@@ -633,5 +678,5 @@ def test_a_form_forbidding_ai_warns_about_writer_drafts_kept_from_before():
 def test_a_yes_or_no_question_is_never_answered_with_a_fact(label, choices):
     answers = changed("education", graduation="2027-05")
     assert said(line(field(label, "single" if choices else "text", True, choices=choices), answers)) == (
-        "decide", "unknown", "the wording needs your eye",
+        "decide", "unknown", "",
     )  # fmt: skip

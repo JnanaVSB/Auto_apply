@@ -72,6 +72,15 @@ def test_a_record_keeps_what_was_prepared_and_marks_what_you_did_yourself(conn, 
     ]
 
 
+def test_a_suggestion_you_never_used_is_recorded_as_yours_on_the_site_with_no_value(conn, data_dir):
+    job = made_up(conn, data_dir)
+    lines = (match.Line(HOBBY, "suggested", "Chess", "your saved answer"),)
+    record.submit(conn, data_dir, job, DAY, lines)
+    assert record.recorded(conn, job["id"])["fields"] == [
+        {"question": "Hobby?", "value": "", "from": record.BY_YOU, "note": ""}
+    ]
+
+
 def test_without_a_read_form_the_record_keeps_your_standard_answers(conn, data_dir):
     job = made_up(conn, data_dir)
     questionnaire.save(conn, questionnaire.check(ANSWERS))

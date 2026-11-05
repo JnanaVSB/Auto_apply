@@ -1,7 +1,7 @@
 """The permanent table of question wordings: what the sorting step and the rules must do with each one. Like the 45
 e-mails Gmail's rules are checked against, it stays as the record. Every row says what you would want, not what the code
 happens to do; a wording that doesn't fit a plain form goes to you (allow-list: one more question beats a wrong legal
-answer). A row marked xfail is a known gap another review item closes: it fails until then, and says so if it stops."""
+answer)."""
 
 import pytest
 
@@ -71,13 +71,6 @@ def long(label, **more):
     return q(label, "long_text", **more)
 
 
-N6 = "Phase 10 note"
-
-
-def gap(reason, *row):
-    return pytest.param(*row, marks=pytest.mark.xfail(strict=True, reason=reason))
-
-
 ACKNOWLEDGE = ("Please review and acknowledge Cloudflare's Candidate Privacy Policy "
                "(cloudflare.com/candidate-privacy-notice/).")  # fmt: skip
 POLARITY = (
@@ -139,7 +132,7 @@ ROWS = [
     (q("Class action waiver"), *LEFT),
     # A skill question about AI is ordinary; anything about how you applied is a promise
     (long("Describe your experience with AI"), ORDINARY, "write", "", ""),
-    (long("What AI projects have you built?"), ORDINARY, "write", "", ""),
+    (long("What AI projects have you built?"), *ASKED),
     (long("Describe your experience using AI on this application"), *LEFT),
     (long("What interests you about AI?"), ORDINARY, "write", "", ""),
     (long("What excites you most in generative AI research?"), ORDINARY, "write", "", ""),
@@ -184,11 +177,11 @@ ROWS = [
     (text("Are you willing to obtain a security clearance?"), *EYE),
     (text("Do you require visa sponsorship? If yes, which visa?"), *EYE),
     (text("Have you ever worked with an AI tool"), *OURS),  # "ever worked": this company's, on the safe side
-    gap(N6, text("Please provide the LinkedIn profile of your referrer"), *ASKED),
-    gap(N6, text("Website of your most recent employer"), *ASKED),
-    gap(N6, text("Link to your company's website"), *ASKED),
-    gap(N6, text("What is your blog's name?"), *ASKED),
-    gap(N6, text("Portfolio password (if any)"), *ASKED),
+    (text("Please provide the LinkedIn profile of your referrer"), *ASKED),
+    (text("Website of your most recent employer"), *ASKED),
+    (text("Link to your company's website"), *ASKED),
+    (text("What is your blog's name?"), *ASKED),
+    (text("Portfolio password (if any)"), *ASKED),
     # A fact never answers a yes-or-no question, whatever it is about
     (text("Do you meet the salary requirements?"), *EYE),
     (text("Are you a recent graduate?", answers=GRADUATE), *ASKED),
@@ -200,7 +193,7 @@ ROWS = [
     (text("What are your salary expectations?"), LEGAL, "fill", "120,000-150,000 USD per year", ""),
     (text("Expected graduation date", answers=GRADUATE), ORDINARY, "fill", "May 2027", ""),
     (text("When can you start?"), ORDINARY, "fill", "January 15, 2027", ""),
-    (text("How did you hear about us?"), ORDINARY, "fill", "Company website", ""),
+    (text("How did you hear about us?"), THIS_COMPANY, "fill", "Company website", ""),
     (text("What is your GPA?", answers=GRADUATE), ORDINARY, "fill", "3.9", ""),
     # Long boxes on legal matters are yours to write, never the Writer's
     (long("Are you authorized to work in the US? Please explain your visa status."), *EYE),
@@ -211,16 +204,16 @@ ROWS = [
     (long("Do you certify the above is true?"), *EYE),
     (long("What is your gender and race?"), *EYE),
     (long("Why do you want to relocate?"), *EYE),
-    (long("Tell us about a project you are proud of"), ORDINARY, "write", "", ""),
+    (long("Tell us about a project you are proud of"), THIS_COMPANY, "write", "", ""),
     # The reviewer's m3.py: a remembered accept, on sentences that say the opposite or go further
     (q("I do not agree to receive marketing emails", "consent", consents=EVERY_CONSENT), *CONSENT),
     (q("I do not consent to text messages", consents=EVERY_CONSENT), *CONSENT),
-    (q("Do you opt in to WhatsApp?", choices=("I do not consent",), consents=EVERY_CONSENT), *CONSENT),
-    (q("I consent to the privacy policy", choices=("Decline",), consents=EVERY_CONSENT), *CONSENT),
+    (q("Do you opt in to WhatsApp?", choices=("I do not consent",), consents=EVERY_CONSENT), *EYE),
+    (q("I consent to the privacy policy", choices=("Decline",), consents=EVERY_CONSENT), *EYE),
     (q("I consent to the privacy policy of the third-party vendor and to sharing my data with advertisers",
        consents=EVERY_CONSENT), *CONSENT),  # fmt: skip
-    (q("Please confirm you have read our Privacy Policy", consents=EVERY_CONSENT), LEGAL, "fill", "Yes", ""),
-    (q("I have read the privacy notice", "consent", consents=EVERY_CONSENT), LEGAL, "fill", "ticked", ""),
+    (q("Please confirm you have read our Privacy Policy", consents=EVERY_CONSENT), *CONSENT),
+    (q("I have read the privacy notice", "consent", consents=EVERY_CONSENT), *CONSENT),
     (q("I authorize a background check", consents=EVERY_CONSENT), *CONSENT),
     # m3.py: saved answers across companies, and an answer naming the company that gave it
     (q("Have you worked at Beta before?", company="Beta", answers=SAVED), *OURS),
@@ -229,7 +222,7 @@ ROWS = [
     (q("Do you have a non-compete with Beta?", company="Beta", answers=SAVED), *EYE),
     (q("I authorize a background check", company="Beta", answers=SAVED), *CONSENT),
     (q("Please confirm you have read our Privacy Policy", company="Beta", answers=SAVED), *CONSENT),
-    (text("Which is your favourite robot?", company="Beta", answers=SAVED), ORDINARY, "fill", "The small one", ""),
+    (text("Which is your favourite robot?", company="Beta", answers=SAVED), ORDINARY, "suggested", "The small one", ""),
     (text("What is your favourite colour at work?", company="Beta", answers=SAVED), *ASKED),
     (q("Have you interviewed here before?", company="Beta", answers=SAVED), *OURS),
     # m3.py: your own pick must close the question
@@ -242,7 +235,7 @@ ROWS = [
     (q("Will you require sponsorship?", answers=EMPTY), *EYE),
     (q("Do you have a disability?", answers=EMPTY), *EYE),
     (q("How did you hear about us?", choices=("Company website", "Other"), answers=EMPTY),
-     ORDINARY, "fill", "Company website", ""),
+     THIS_COMPANY, "fill", "Company website", ""),
     (q("Disability status", part="eeo", key="disability_status", answers=EMPTY, required=False,
        choices=("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")),
      LEGAL, "fill", "I don't wish to answer", ""),
@@ -281,7 +274,7 @@ ROWS = [
     (q("Have you ever been employed by Stripe or a Stripe affiliate?", company="Stripe"), *OURS),
     (q("Do you opt-in to receive WhatsApp messages from Stripe Recruiting?", company="Stripe",
        help="Messages will only be sent regarding your candidacy with Stripe."), *CONSENT),
-    (text("If located in the US, in what city and state do you reside?", company="Stripe"), *ASKED),
+    (text("If located in the US, in what city and state do you reside?", company="Stripe"), *OURS),
     (q("Location", "location", key="location", part="location", company="Stripe"),
      ORDINARY, "fill", "Tempe, AZ, United States", ""),
     (q("VeteranStatus", key="veteran_status", part="eeo", required=False, company="Stripe",
@@ -337,15 +330,20 @@ def label_of(row):
     return row["label"][:60] if isinstance(row, dict) else None
 
 
-@pytest.mark.parametrize(("asked", "kind", "status", "value", "decision"), ROWS, ids=label_of)
-def test_every_wording_gets_the_answer_you_would_want(asked, kind, status, value, decision):
+def outcome(asked):
+    """What the app does with a question, on a form for a job in the US: class, status, value shown, decision."""
     choices = tuple(Choice(text_, str(number)) for number, text_ in enumerate(asked["choices"]))
     field = Field(asked["key"], asked["label"], asked["kind"], asked["required"], asked["part"], asked["help"], choices)
     kept = {key: (*row, match.wording(field)) for key, row in (asked["kept"] or {}).items()}
-    line = match.match(Form((field,)), asked["answers"], asked["company"], kept=kept, consents=asked["consents"])[0][0]
-    assert (match.care(field, asked["company"]), line.status, record.shown(line), line.decision) == (
-        kind, status, value, decision,
-    )  # fmt: skip
+    line = match.match(
+        Form((field,)), asked["answers"], asked["company"], kept=kept, consents=asked["consents"], us_job=True
+    )[0][0]
+    return match.care(field, asked["company"]), line.status, record.shown(line), line.decision
+
+
+@pytest.mark.parametrize(("asked", "kind", "status", "value", "decision"), ROWS, ids=label_of)
+def test_every_wording_gets_the_answer_you_would_want(asked, kind, status, value, decision):
+    assert outcome(asked) == (kind, status, value, decision)
 
 
 NO_AI_HELP = [  # the reviewer's m3.py: every way of saying it must warn
@@ -376,7 +374,6 @@ def test_every_way_of_saying_no_ai_warns(help_):
 @pytest.mark.parametrize(
     ("label", "help_", "company"),
     [
-        ("Acme uses an AI Notetaker in interviews. Do you consent?", "", "Acme"),
         ("Why Scale AI?", "Not more than 100 words.", "Scale AI"),
         ("Tell us about your project", "", "Acme"),
     ],

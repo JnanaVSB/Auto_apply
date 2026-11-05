@@ -20,7 +20,7 @@ WHY = Field("question_1", "Why do you want to work at Acme?", "long_text", True,
 PROJECT = Field("question_2", "Describe a project in 100 words or less.", "long_text", False, "company",
                 help="Keep it under 600 characters.")  # fmt: skip
 YOURS = Field("question_3", "What motivates you?", "long_text", True, "company")
-DRAFTED = Field("question_7", "Tell us about a challenge.", "long_text", False, "company")
+DRAFTED = Field("question_7", "Describe a challenge.", "long_text", False, "company")
 FORM = Form((
     Field("first_name", "First Name", "text", True, "standard"), WHY, PROJECT, YOURS,
     Field("question_4", "Preferred name", "text", False, "company"),
@@ -70,7 +70,7 @@ def test_the_writer_answers_the_long_company_questions_left_for_it_and_its_own_d
                     ),
                 )
             ),  # fmt: skip
-            "This form asks that application materials be your own: write these answers yourself",
+            match.NO_AI_WARNING,
         ),
         (
             Form((YOURS, Field("question_4", "Preferred name", "text", False, "company"))),
@@ -109,6 +109,12 @@ def shield():
         ("Over 50 words, no more than 300 words.", (300, None)),
         ("More than 10 words, please.", (None, 1200)),
         ("Not more than 40 words.", (40, None)),
+        ("300 words minimum", (None, 1200)),
+        ("300 words or more", (None, 1200)),
+        ("500 characters min", (None, 1200)),
+        ("300+ words", (None, 1200)),
+        ("minimum length 300 characters", (None, 1200)),
+        ("min. 300 words", (None, 1200)),
         ("9" * 4400 + " words", (None, 1200)),  # not a limit anyone means, and too long a number to read
     ],
 )
@@ -210,7 +216,7 @@ def test_a_form_is_answered_by_the_writer_alone_and_its_drafts_kept(conn, data_d
     assert json.loads(one(conn, "SELECT council FROM preparations WHERE id = ?", version)[0])["members"] == {}
     [call] = flow.advance(conn, config, version)
     assert (call.member, call.shape) == ("writer", answers.SHAPE) and "<questions>" in call.user
-    assert "Q3: Tell us about a challenge." in call.user and "What motivates you?" not in call.user
+    assert "Q3: Describe a challenge." in call.user and "What motivates you?" not in call.user
     finish(conn, call, reply("I trained a robot arm.", "I built a drone.", "A hard bug.", cited=("E2",)))
     assert flow.advance(conn, config, version) == []
     assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == ("done", None)
@@ -262,6 +268,10 @@ def test_the_writer_gets_no_promise_or_legal_question(conn):
     legal = Field(
         "question_8", "Have you ever been convicted of a crime? If so, explain.", "long_text", True, "company"
     )
-    promise = Field("question_9", "How did you use AI when preparing this application?", "long_text", True, "company")
-    job = with_form(conn, Form((WHY, legal, promise)))
+    job = with_form(conn, Form((WHY, legal)))
     assert answers.questions(conn, job) == ([WHY], None)
+
+
+def test_a_form_with_an_ai_promise_has_no_questions_for_the_writer(conn):
+    promise = Field("question_9", "How did you use AI when preparing this application?", "long_text", True, "company")
+    assert answers.questions(conn, with_form(conn, Form((WHY, promise)))) == ([], answers.OWN_WORDS)

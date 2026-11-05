@@ -4,6 +4,7 @@ You answer what is left here, for this job (form_answers, given by you) or for e
 Write answers asks the Writer for the long ones. The app only downloads a form's public questions and never sends
 anything to a job site (owner rule: never a submission without your explicit authorization)."""
 
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ FORGET = "DELETE FROM form_answers WHERE job_id = ? AND field = ? AND given_by =
 GONE = "This question is no longer on the form: read it again"
 NAMES_COMPANY = "This answer names {}, so it is kept for this job only"
 NOT_HERE = "This question isn't answered here: do it in the window"
-PROMISE = "You tick this yourself in the window: the app never answers it"
+PROMISE = "You do this yourself in the window: the app never answers it"
 EMPTY = "Type an answer, or press Leave it empty"
 MARKER = "That text is one the app keeps for itself: write your answer another way"
 INVISIBLE = "The answer holds an invisible character: type it again"
@@ -49,6 +50,7 @@ NOT_A_CHOICE = "Choose from the form's own choices"
 REQUIRED = "This form requires it: decide in the window, or skip this job"
 NOT_OPTIONAL = "This question is required: answer it, or do it in the window"
 NO_YES = "This consent has no single yes choice: decide in the window"
+CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 # worded as app/web/prepare.py's NO_WRITER and BUSY_JOB, which can't be imported here (prepare.py imports this module)
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
 BUSY_JOB = "The Writer is still working on this job: try again when it's done."
@@ -68,7 +70,7 @@ class Preview:
     problem: str | None  # questions that could not be read
     lines: tuple[match.Line, ...]
     warnings: tuple[str, ...]
-    open: int  # decisions required
+    open: int  # decisions required, suggestions included
 
 
 def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview | None:
@@ -78,13 +80,14 @@ def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview
         return None
     form, read_on, read_from, problem = saved
     answers = questionnaire.load(conn)[0]
-    company = conn.execute("SELECT company FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
+    company, us_location = conn.execute("SELECT company, us_location FROM jobs WHERE id = ?", (job_id,)).fetchone()
     kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
     lines, warnings = match.match(
         form, answers, company, kept=kept, consents=answers.get("consents") or {},
-        files=match.documents(conn, data_dir, job_id),
+        files=match.documents(conn, data_dir, job_id), us_job=us_location == "yes",
     )  # fmt: skip
-    return Preview(read_on, read_from, problem, lines, warnings, sum(line.status == "decide" for line in lines))
+    still_open = sum(line.status in ("decide", "suggested") for line in lines)
+    return Preview(read_on, read_from, problem, lines, warnings, still_open)
 
 
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) -> None:
@@ -179,10 +182,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if refused:
             return _part(request, job, failed=refused)
         choice = request.state.form.get("choice")
-        kind = (match.consent_kind(field) or (None,))[0]
+        kind = match.consent_kind(field, job["company"])
         if kind is None or choice not in ("accept", "decline"):
             return _part(request, job, failed=NOT_HERE)
-        if kind and match.plain_consent(field):  # a sentence that goes further is for this job only
+        if kind:  # any other sentence is for this job only
             values, _, problem = questionnaire.load(conn)
             if problem:
                 return _part(request, job, failed=match.BROKEN.format(problem))
@@ -196,6 +199,30 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             return _part(request, job, failed=REQUIRED)
         else:
             _keep(conn, job_id, field, match.LEFT_EMPTY)
+        return _part(request, job)
+
+    @app.post("/jobs/{job_id:int}/form/use")
+    async def use(request: Request, job_id: int) -> Response:
+        """Use: a suggested answer becomes your answer for this job, if it is still the one the page showed."""
+        conn, (job, field, refused) = request.app.state.conn, _asked(request, job_id)
+        if refused:
+            return _part(request, job, failed=refused)
+        line = next(line for line in preview(conn, data_dir, job_id).lines if line.field.key == field.key)
+        if line.status != "suggested" or request.state.form.get("seen") != _seen([line]):
+            return _part(request, job, failed=CHANGED_SUGGESTION)
+        _keep(conn, job_id, field, _suggestion(line))
+        return _part(request, job)
+
+    @app.post("/jobs/{job_id:int}/form/use-all")
+    async def use_all(request: Request, job_id: int) -> Response:
+        """Use all: every suggested answer becomes your answer for this job, if the list is still the one shown."""
+        conn, job = request.app.state.conn, _job(request, job_id)
+        found = preview(conn, data_dir, job_id)
+        lines = [line for line in (found.lines if found else ()) if line.status == "suggested"]
+        if request.state.form.get("seen") != _seen(lines):
+            return _part(request, job, failed=CHANGED_SUGGESTION)
+        for line in lines:
+            _keep(conn, job_id, line.field, _suggestion(line))
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/window")
@@ -289,6 +316,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         flags = (
             {flag["field"]: ", ".join(flag["numbers"]) for flag in json.loads(done["flags"] or "[]")} if done else {}
         )
+        suggested = [line for line in lines if line.status == "suggested"]
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
             (line, _limit(answers.limit(line.field)), flags.get(line.field.key), _over_limit(line))
             for line in lines
@@ -304,10 +332,12 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
             remembered={line.field.key for line in lines if line.decision == "consent"
-                        and (match.consent_kind(line.field) or ("",))[0] and match.plain_consent(line.field)},
-            askable={line.field.key for line in lines if line.askable and _answerable(line.field)},
+                        and match.consent_kind(line.field, job["company"])},
+            askable={line.field.key for line in lines
+                     if line.askable and (line.field.kind == "long_text" or _answerable(line.field))},
             this_job_only={line.field.key for line in lines
                            if match.care(line.field, job["company"]) != match.ORDINARY},
+            seen={line.field.key: _seen([line]) for line in suggested}, seen_all=_seen(suggested),
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
@@ -354,6 +384,21 @@ def _typed(field: Field, form: dict[str, str]) -> str:
     if len(text) > most:
         raise _Refused(f"An answer here is at most {most:,} characters")
     return text
+
+
+def _suggestion(line: match.Line) -> str:
+    """A suggested answer as `_typed` keeps yours: its text, or the labels of its choices, one a line."""
+    if isinstance(line.value, str):
+        return line.value
+    labels = {choice.value: choice.label for choice in line.field.choices}
+    return "\n".join(labels[value] for value in line.value)
+
+
+def _seen(lines: list[match.Line]) -> str:
+    """A fingerprint of suggestions as the page shows them: Use checks it, so a saved answer never goes unseen. A
+    fingerprint, not the text: a browser changes the new lines of a value it sends back."""
+    shown = [(line.field.key, record.shown(line)) for line in lines]
+    return hashlib.sha256(json.dumps(shown).encode()).hexdigest()
 
 
 def _over_limit(line: match.Line) -> str:
