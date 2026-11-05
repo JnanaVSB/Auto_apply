@@ -133,6 +133,16 @@ def test_saving_the_form_keeps_the_export_settings_exactly(client, settings_file
     assert load_config(settings_file).export == ExportSettings(folder=folder, every_days=7)
 
 
+def test_saving_the_form_keeps_the_export_settings_and_the_phone_address_together(client, settings_file):
+    with settings_file.open("a", encoding="utf-8") as file:
+        file.write(yaml.safe_dump({"export": {"folder": "/srv/exports", "every_days": 7},
+                                   "phone_address": "https://laptop.example.ts.net"}))  # fmt: skip
+    assert "Saved." in save(client, collect_every_hours="6").text
+    config = load_config(settings_file)
+    assert config.export == ExportSettings(folder="/srv/exports", every_days=7)
+    assert config.phone_address == "https://laptop.example.ts.net"
+
+
 @pytest.mark.parametrize("section", ["", "export:\n", "export: {}\n"])
 def test_saving_the_form_adds_no_empty_export_section(client, settings_file, section):
     with settings_file.open("a", encoding="utf-8") as file:
