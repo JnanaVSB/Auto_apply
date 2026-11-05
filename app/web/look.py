@@ -31,7 +31,10 @@ def add_routes(app: FastAPI) -> None:
         if choice not in VIEWS:
             raise HTTPException(400, "Choose Table or Cards.")
         response = RedirectResponse(_list_page(request.state.form.get("back", "")), 303)
-        response.set_cookie(VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True)
+        response.set_cookie(
+            VIEW_COOKIE, choice, max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True,
+            secure=request.state.remote,
+        )  # fmt: skip
         return response
 
     @app.post("/look")
@@ -42,8 +45,9 @@ def add_routes(app: FastAPI) -> None:
             raise HTTPException(400, "Choose colours and a mode from the lists.")
         response = RedirectResponse("/settings?look=changed#look", 303)
         response.set_cookie(
-            LOOK_COOKIE, f"{scheme}.{mode}", max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True
-        )
+            LOOK_COOKIE, f"{scheme}.{mode}", max_age=365 * 24 * 60 * 60, path="/", samesite="lax", httponly=True,
+            secure=request.state.remote,
+        )  # fmt: skip
         return response
 
 

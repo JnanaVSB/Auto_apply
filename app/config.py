@@ -1,6 +1,7 @@
 """Load and validate the user's private settings from data/config.yaml."""
 
 import ipaddress
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -33,6 +34,7 @@ PRIVATE_NETWORKS = tuple(
 Price = Annotated[float, Field(ge=0, le=1000)]  # dollars per 1M tokens
 Time = Annotated[str, Field(pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")]  # 24-hour clock, e.g. 22:00
 REVIEWERS = ("truth", "hiring", "editor", "ats", "domain")  # the council's five permanent members, besides the Writer
+PHONE_ADDRESS = re.compile(r"https://(?:[a-z0-9-]+\.){2,}ts\.net(?::[1-9][0-9]{0,4})?")
 
 
 class ConfigError(Exception):
@@ -47,6 +49,16 @@ def _github_file(url: str) -> str:
 
 
 GitHubFile = Annotated[str, AfterValidator(_github_file)]  # a file in a public GitHub repository
+
+
+def _phone_address(address: str | None) -> str:
+    """Pasted from a browser's address bar, so capitals and one last / are cleaned; "" or a blank line is off. Anything
+    but a Tailscale name is refused: the guard in app/web/main.py depends on Tailscale."""
+    address = address or ""
+    cleaned = address.lower().removesuffix("/")
+    if address and (not PHONE_ADDRESS.fullmatch(cleaned) or cleaned.endswith(":443")):
+        raise ValueError("must look like https://<laptop>.<tailnet>.ts.net, as docs/phone-setup.md shows")
+    return cleaned
 
 
 class SimplifyList(BaseModel):
@@ -249,6 +261,7 @@ class Config(BaseModel):
     gmail_every_minutes: Annotated[int, Field(ge=0, le=1440, strict=True)] = 30  # Gmail: sync while open; 0 = off
     gmail_read_all: Annotated[bool, Field(strict=True)] = False  # Gmail: sort every e-mail, not only job-signed ones
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
+    phone_address: Annotated[str | None, AfterValidator(_phone_address)] = ""  # the phone's way in; "" = off
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()
     documents: DocumentSettings = DocumentSettings()
