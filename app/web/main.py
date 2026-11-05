@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import db
+from app.collect import MAX_PASTED
 from app.config import ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
@@ -55,7 +56,12 @@ UPLOAD = "/resume-profile/upload"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_FIELDS = 500
 # The Questionnaire sends up to 300 More answers, two fields each, with up to 3,000 characters a row
-FORM_LIMITS = {UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS), "/questionnaire": (8 * 1024 * 1024, 1000)}
+# /add/job: a job's pasted text, at most 12 bytes a character once a form has encoded it
+FORM_LIMITS = {
+    UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS),
+    "/questionnaire": (8 * 1024 * 1024, 1000),
+    "/add/job": (256 * 1024, MAX_FIELDS),
+}
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 SERVE_MARKS = ("tailscale-user-login", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")  # Serve adds these
 FUNNEL = "tailscale-funnel-request"
@@ -72,7 +78,6 @@ EXPIRED = "This page has expired; reload it and try again."
 SHARED_LINK = re.compile(r"https?://\S+", re.I)
 MAX_SHARED_LINK = 2000  # the Job link box's limit on Add
 MAX_WAY_BACK = 4000
-BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
 SCHEDULE_CHECK_SECONDS = 60
@@ -86,6 +91,7 @@ templates.env.globals |= {
     "LOW_SCORE": LOW_SCORE,
     "SCORE_THESE": SCORE_THESE,
     "SOURCE_LABELS": queries.SOURCE_LABELS,  # the filter form's words, shared with its "Filters" summary
+    "MAX_PASTED": MAX_PASTED,
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
     "SCHEMES": look.SCHEMES,  # the Look form on Settings
@@ -140,7 +146,7 @@ def create_app(
             response = _error(request, refusal.status_code, refusal.detail)
         except Exception as error:  # never a crash report in the browser, nor job data in the terminal
             if isinstance(error, sqlcipher3.OperationalError) and "locked" in str(error):
-                response = _error(request, 503, BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
+                response = _error(request, 503, actions.BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
             else:
                 log.error("Unexpected error: %s", type(error).__name__)
                 response = _error(
@@ -302,7 +308,7 @@ def create_app(
         form = request.state.form
         message, job_id = await run_in_threadpool(  # beside the dashboard: sites can take a while to answer
             actions.add_job, data_dir, request.app.state.collector.fetcher, form.get("link", ""),
-            form.get("company", ""), form.get("title", ""),
+            form.get("company", ""), form.get("title", ""), form.get("job_text", ""),
         )  # fmt: skip
         return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
 
