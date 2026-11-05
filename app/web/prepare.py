@@ -268,7 +268,7 @@ def add_routes(
         preparer = request.app.state.preparer
         free, doubts = not _busy(conn, job_id), _doubts(conn, current, job)
         missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
-        writer = _writer_chosen()
+        writer, answers = _writer_chosen(), runs.latest(conn, job_id, runs.ANSWERS)
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
             files=uploads.offered(conn), **drafts.state(conn, data_dir, job_id),
@@ -277,6 +277,7 @@ def add_routes(
             letter=drafts.letter(conn, data_dir, job_id), prepare_problem=prepare_problem,
             can_letter=free and not missing and writer, missing=missing, doubts=doubts,
             confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY, **drafts.council(conn, job_id),
+            writing_answers=answers is not None and answers["status"] == "writing",
         )  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/sources")

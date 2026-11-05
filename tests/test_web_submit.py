@@ -7,9 +7,10 @@ from helpers import add_job, csrf, log_in, one
 from test_submit_greenhouse import REPLY, question
 from test_submit_lever import PAGE
 
-from app import questionnaire, submit
+from app import config, questionnaire, submit
+from app.council import answers
 from app.documents import pdf
-from app.submit import greenhouse
+from app.submit import greenhouse, match
 from app.web import submit as form_part
 
 GREENHOUSE = "https://job-boards.greenhouse.io/acme/jobs/123"
@@ -161,3 +162,158 @@ def test_an_ai_use_promise_is_left_for_you_and_never_an_open_decision(client, co
     found = form_part.preview(conn, data_dir, job)
     assert ([line.status for line in found.lines], found.open) == (["left"], 0)
     assert "Decision required" not in client.get(f"/jobs/{job}/form").text
+
+
+PAPER = submit.Field("question_1", "What do you like about Acme?", "text", True, "company")
+ROBOTICS = submit.Choice("Robotics <script>x</script>", "7")
+TEAM = submit.Field(
+    "question_2", "Which team?", "single", True, "company", choices=(ROBOTICS, submit.Choice("Search", "8"))
+)
+TOOLS = submit.Field("question_3", "Which tools?", "multi", False, "company",
+                     choices=(submit.Choice("Python", "p"), submit.Choice("Rust", "r")))  # fmt: skip
+WHY = submit.Field("question_4", "Why Acme? In 100 words or less.", "long_text", True, "company")
+CONDUCT = submit.Field("question_5", "I acknowledge the code of conduct", "consent", False, "privacy")
+RULES = submit.Field("question_6", "I acknowledge the house rules", "consent", True, "privacy")
+TEXTS = submit.Field("question_7", "I agree to receive text messages", "consent", True, "privacy")
+AI = submit.Field("question_8", "I consent to Acme's use of AI tools", "consent", True, "privacy")
+SAMPLE = submit.Field("question_9", "Writing sample", "file", True, "company")
+HOBBY = submit.Field("question_10", "Hobby?", "text", False, "company")
+QUESTIONS = (PAPER, TEAM, TOOLS, WHY, CONDUCT, RULES, TEXTS, AI, SAMPLE, HOBBY)
+KEPT_ROW = "SELECT answer, given_by FROM form_answers WHERE job_id = ? AND field = ?"
+
+
+@pytest.fixture
+def job(conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    submit.save(conn, job, submit.Form(QUESTIONS), "api")
+    return job
+
+
+def press(client, job, action, **fields):
+    return client.post(f"/jobs/{job}/form/{action}", data=fields | {"csrf_token": csrf(client)})
+
+
+def status(conn, data_dir, job, key):
+    return next(line for line in form_part.preview(conn, data_dir, job).lines if line.field.key == key)
+
+
+def test_a_short_answer_is_kept_for_the_job_and_with_save_for_every_form(client, conn, data_dir, job):
+    press(client, job, "answer", field=PAPER.key, answer="  The robots.  ")
+    assert one(conn, KEPT_ROW, job, PAPER.key) == ("The robots.", "you") and questionnaire.load(conn)[0]["more"] == []
+    press(client, job, "answer", field=PAPER.key, answer="The robots, again.", save="1")
+    assert [(row["question"], row["answer"]) for row in questionnaire.load(conn)[0]["more"]] == [
+        ("What do you like about [company]?", "The robots, again."),
+    ]  # fmt: skip
+    assert status(conn, data_dir, job, PAPER.key).status == "fill"
+
+
+def test_choices_are_kept_as_their_labels_and_filled_by_the_rules(client, conn, data_dir, job):
+    text = press(client, job, "answer", field=TEAM.key, answer="7").text
+    assert one(conn, KEPT_ROW, job, TEAM.key)[0] == "Robotics <script>x</script>"
+    assert status(conn, data_dir, job, TEAM.key).value == ("7",)
+    assert "Robotics &lt;script&gt;x&lt;/script&gt;" in text and "<script>x" not in text
+    press(client, job, "answer", field=TOOLS.key, **{"choice.0": "p", "choice.1": "r"})
+    assert one(conn, KEPT_ROW, job, TOOLS.key)[0] == "Python\nRust"
+    assert status(conn, data_dir, job, TOOLS.key).value == ("p", "r")
+
+
+@pytest.mark.parametrize(
+    ("fields", "problem"),
+    [
+        ({"field": "question_99", "answer": "x"}, "This question is no longer on the form: read it again"),
+        ({"field": TEAM.key, "answer": "9"}, "Choose from the form&#39;s own choices"),
+        ({"field": TOOLS.key}, "Choose from the form&#39;s own choices"),
+        ({"field": PAPER.key, "answer": "x" * 2001}, "An answer here is at most 2,000 characters"),
+        ({"field": WHY.key, "answer": "word " * 101}, "This question allows at most 100 words"),
+        ({"field": PAPER.key, "answer": "Hi\x07there"}, "The answer holds an invisible character"),
+        ({"field": PAPER.key, "answer": match.IN_WINDOW}, "That text is one the app keeps for itself"),
+        ({"field": PAPER.key, "answer": "   "}, "Type an answer, or press Leave it empty"),
+        ({"field": SAMPLE.key, "answer": "x"}, "This question isn&#39;t answered here"),
+        ({"field": AI.key, "answer": "yes"}, "You tick this yourself in the window: the app never answers it"),
+    ],
+)
+def test_an_answer_that_cant_be_kept_says_why_and_saves_nothing(client, conn, job, fields, problem):
+    assert problem in press(client, job, "answer", **fields).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+
+
+def test_a_known_consent_is_remembered_for_every_form(client, conn, data_dir, job):
+    press(client, job, "consent", field=TEXTS.key, choice="accept")
+    assert questionnaire.load(conn)[0]["consents"]["texting"] == "accept"
+    with conn:
+        other = add_job(conn, "Data Intern", apply_url=LEVER)
+    submit.save(conn, other, submit.Form((TEXTS,)), "api")
+    found = status(conn, data_dir, other, TEXTS.key)
+    assert (found.status, found.source) == ("fill", "remembered consent")
+
+
+def test_a_consent_of_no_known_kind_is_for_this_job_only(client, conn, data_dir, job):
+    press(client, job, "consent", field=CONDUCT.key, choice="accept")
+    assert one(conn, KEPT_ROW, job, CONDUCT.key) == (match.TICKED, "you")
+    press(client, job, "consent", field=CONDUCT.key, choice="decline")
+    assert status(conn, data_dir, job, CONDUCT.key).status == "empty"
+    assert "This form requires it: decide in the window" in press(client, job, "consent", field=RULES.key,
+                                                                    choice="decline").text  # fmt: skip
+    assert "the app never answers it" in press(client, job, "consent", field=AI.key, choice="accept").text
+    assert questionnaire.load(conn)[0]["consents"] == {
+        k: "ask" for k in ("privacy", "retention", "texting", "marketing")
+    }
+
+
+def test_in_the_window_and_leave_it_empty_close_a_decision_and_change_brings_it_back(client, conn, data_dir, job):
+    before = form_part.preview(conn, data_dir, job).open
+    text = press(client, job, "window", field=SAMPLE.key).text
+    assert status(conn, data_dir, job, SAMPLE.key).status == "left" and "You do this yourself in the window." in text
+    press(client, job, "empty", field=HOBBY.key)
+    assert status(conn, data_dir, job, HOBBY.key).note == "you chose to leave it empty"
+    assert "This question is required" in press(client, job, "empty", field=PAPER.key).text
+    assert form_part.preview(conn, data_dir, job).open == before - 1  # Hobby? was optional: left empty already
+    press(client, job, "forget", field=SAMPLE.key)
+    assert status(conn, data_dir, job, SAMPLE.key).status == "decide"
+
+
+def test_your_edit_of_a_writer_draft_is_yours_and_a_later_draft_leaves_it(client, conn, data_dir, job):
+    with conn:
+        conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then')", (job, WHY.key))
+    text = client.get(f"/jobs/{job}/form").text
+    assert "(up to 100 words; Writer draft)" in text and ">A draft.</textarea>" in text
+    press(client, job, "answer", field=WHY.key, answer="My own words.\r\nTwo lines.")
+    with conn:
+        answers.save(conn, job, 6, {"answers": [{"field": WHY.key, "text": "A newer draft."}]})
+    assert one(conn, KEPT_ROW, job, WHY.key) == ("My own words.\nTwo lines.", "you")
+
+
+def test_write_answers_needs_a_writer(client, job):
+    assert "Choose the Writer&#39;s model" in press(client, job, "write").text
+
+
+@pytest.fixture
+def writer(tmp_path, data_dir, monkeypatch):
+    path = tmp_path / "config.yaml"
+    path.write_text(f"data_dir: {data_dir}\nai:\n  writer:\n    model: gemma4:26b-a4b-it-q8_0\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_PATH", path)
+
+
+def test_write_answers_starts_the_writer_unless_busy(client, conn, job, writer, monkeypatch):
+    woken = []
+    monkeypatch.setattr(client.app.state.preparer, "wake", lambda: woken.append(1))
+    press(client, job, "write")
+    assert one(conn, "SELECT kind, status FROM preparations WHERE kind = 'answers'") == ("answers", "writing")
+    assert woken == [1] and "The Writer is writing these answers" in client.get(f"/jobs/{job}/form").text
+    assert "The Writer is still working on this job" in press(client, job, "write").text
+    assert "The Writer is writing" in client.get(f"/jobs/{job}/form/writing").text
+    with conn:
+        conn.execute(
+            "UPDATE preparations SET status = 'stopped', problem = 'Read the form first' WHERE kind = 'answers'"
+        )
+    assert client.get(f"/jobs/{job}/form/writing").headers["hx-refresh"] == "true"  # done: the page reloads
+    assert "The last Write answers stopped: Read the form first" in client.get(f"/jobs/{job}/form").text
+
+
+def test_write_answers_on_a_form_that_wants_your_own_words_says_so(client, conn, data_dir, writer):
+    job = made_up_job(conn, data_dir)
+    own = submit.Field("question_1", "Why Acme?", "long_text", True, "company", help="Answers must be your own.")
+    submit.save(conn, job, submit.Form((own,)), "api")
+    assert "Write these answers yourself" in client.get(f"/jobs/{job}/form").text
+    assert "write these answers yourself" in press(client, job, "write").text
+    assert one(conn, "SELECT count(*) FROM preparations WHERE kind = 'answers'")[0] == 0

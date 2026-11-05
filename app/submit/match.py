@@ -23,6 +23,7 @@ DECISIONS = {  # the "Decision required" reasons, as the preview words them
 WORDS = re.compile(r"[^\W_]+")  # a run of letters or digits
 COMPANY = "[company]"  # stands for the company's name, so a saved answer fits the same question from any company
 TICKED = "yes"  # a consent box to tick
+IN_WINDOW, LEFT_EMPTY = "[in the window]", "[left empty]"  # your choice for one job's question, kept as its answer
 FILL = "fill {} in your Questionnaire first"
 NOT_A_CHOICE = "your {} is not one of the choices"
 KEYS = {  # the sites' own fields, by key: (Questionnaire section, answer)
@@ -185,10 +186,12 @@ class _Matcher:
     def line(self, field: Field) -> Line:
         if field.kind == "hidden":
             return Line(field, "hidden")
+        words = clean(field.label, self.company)
+        if found := self._kept(field, words):
+            return found
         if field.kind == "unknown":  # a kind of field the app can't fill
             return _other(field)
-        words = clean(field.label, self.company)
-        for rule in (self._kept, self._standard, self._upload, self._known, self._eeo, self._saved, self._consent):
+        for rule in (self._standard, self._upload, self._known, self._eeo, self._saved, self._consent):
             if found := rule(field, words):
                 return found
         if field.kind == "long_text" and field.part == "company":
@@ -200,6 +203,10 @@ class _Matcher:
         if not answer.strip():
             return None
         source = "your answer for this job" if given_by == "you" else "Writer draft"
+        if answer == IN_WINDOW:
+            return Line(field, "left", source=source, note="you do this in the window")
+        if answer == LEFT_EMPTY:
+            return Line(field, "empty", source=source, note="you chose to leave it empty")
         return self._given(field, answer, source, "your saved answer is no longer one of the choices")
 
     def _standard(self, field: Field, words: str) -> Line | None:
@@ -285,11 +292,10 @@ class _Matcher:
         answer = None if any(pattern.search(about) for pattern in PROMISES) else self.saved.get(words)
         return self._given(field, answer, "your saved answer", NOT_A_CHOICE.format("saved answer")) if answer else None
 
-    def _consent(self, field: Field, words: str) -> Line | None:
-        if field.kind != "consent" and field.part != "privacy" and not CONSENT_WORDS.search(words):
+    def _consent(self, field: Field, _: str) -> Line | None:
+        if (found := consent_kind(field, self.company)) is None:
             return None
-        about = f"{clean(field.key)} {words}"
-        kind, name = next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(about)), ("", "consent"))
+        kind, name = found
         if kind in ALWAYS_ASK:  # an AI-use promise or an arbitration agreement: you tick it yourself, never the app
             return Line(field, "left", note=name)
         choice = self.consents.get(kind, "ask") if kind else "ask"  # "": no known kind
@@ -326,7 +332,7 @@ class _Matcher:
         one choice."""
         chosen = []
         for wanted in filter(None, (clean(text, self.company) for text in answer.splitlines() or [answer])):
-            found = [choice.value for choice in field.choices if _fits(clean(choice.label, self.company), wanted)]
+            found = [choice.value for choice in field.choices if fits(clean(choice.label, self.company), wanted)]
             if len(found) != 1:
                 return ()
             chosen.append(found[0])
@@ -353,7 +359,17 @@ def _other(field: Field, note: str = "") -> Line:
     return Line(field, "decide", decision="unknown", note=note) if field.required else Line(field, "empty", note=note)
 
 
-def _fits(label: str, wanted: str) -> bool:
+def consent_kind(field: Field, company: str = "") -> tuple[str, str] | None:
+    """A consent's kind (a CONSENTS kind, "" for none known) and its name as the preview says it; None for a field
+    that is no consent."""
+    words = clean(field.label, company)
+    if field.kind != "consent" and field.part != "privacy" and not CONSENT_WORDS.search(words):
+        return None
+    about = f"{clean(field.key)} {words}"
+    return next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(about)), ("", "consent"))
+
+
+def fits(label: str, wanted: str) -> bool:
     """A choice (cleaned) names the answer: the same words, or for yes or no, a choice starting with it."""
     return label == wanted or (wanted in ("yes", "no") and label.startswith(f"{wanted} "))
 

@@ -19,7 +19,9 @@
 {% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
-  {% if working %}
+  {% if writing_answers %}
+  <p role="status">The Writer is writing this job's form answers…</p>
+  {% elif working %}
   <p role="status">{{ council_status or "The Writer is working on it" }} (version {{ latest.version if latest and latest.status == "writing" else "new" }})…</p>
   {% if latest and latest.status == "writing" and latest.mode == "half" and normal_cost is not none %}{{ button("normal-price", "Now, normal price (about $%.2f)" | format(normal_cost), "Send the rest of this job now at the normal price, about $%.2f? It counts in your limits." | format(normal_cost)) }}{% endif %}
   {% elif latest and latest.status == "done" and not outdated %}

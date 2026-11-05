@@ -310,3 +310,14 @@ def test_a_jobs_open_form_decisions_show_on_the_ready_page(client, conn, data_di
     assert f'href="/jobs/{jobs["Fresh"]}#form-part">Decision required (1)</a>' in text
     assert form_part.preview(conn, data_dir, jobs["Fresh"]).open == 1
     assert text.count("Decision required") == 1  # none for a job whose form was never read
+
+
+def test_the_box_says_when_the_writer_writes_the_jobs_form_answers(client, conn, ready_job):
+    with conn:
+        conn.execute(
+            "INSERT INTO preparations (job_id, kind, version, sources, writer, status, created_on) VALUES "
+            "(?, 'answers', 1, '[]', '{}', 'writing', 'now')", (ready_job,),
+        )  # fmt: skip
+    text = client.get(f"/jobs/{ready_job}/preparation").text
+    assert "The Writer is writing this job's form answers…" in text and 'hx-trigger="every 3s"' in text
+    assert "The Writer is working on it" not in text and "(version new)" not in text

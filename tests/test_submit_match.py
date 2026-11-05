@@ -488,3 +488,22 @@ def test_remember_changes_nothing_when_the_saved_answers_break_a_rule(conn):
     ):
         match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
     assert json.loads(conn.execute("SELECT answers FROM questionnaire").fetchone()[0]) == stored
+
+
+@pytest.mark.parametrize(
+    ("asked", "marker", "result"),
+    [
+        (field("Favourite paper?", required=True), match.IN_WINDOW, ("left", "", "you do this in the window")),
+        (field("Writing sample", "unknown", True), match.IN_WINDOW, ("left", "", "you do this in the window")),
+        (field("Hobby?"), match.LEFT_EMPTY, ("empty", "", "you chose to leave it empty")),
+    ],
+)
+def test_your_choice_for_one_jobs_question_is_kept_as_a_marker(asked, marker, result):
+    found = line(asked, kept={asked.key: (marker, "you")})
+    assert (*said(found), found.source) == (*result, "your answer for this job")
+
+
+def test_a_consents_kind_is_the_same_for_the_rule_and_the_page():
+    assert match.consent_kind(field("I agree to receive text messages", "consent")) == ("texting", "texting")
+    assert match.consent_kind(field("I acknowledge the code of conduct", "consent")) == ("", "consent")
+    assert match.consent_kind(field("Favourite paper?")) is None
