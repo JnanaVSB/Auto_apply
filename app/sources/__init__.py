@@ -19,6 +19,7 @@ BOARD_HOSTS = {
 }
 BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")  # also keeps the name safe to put into an API address
 JOB_ID = re.compile(r"[A-Za-z0-9-]+")
+SAFE_HOST = re.compile(r"[a-z0-9._:-]*")  # what a host can hold once read; a browser refuses anything else
 # LinkedIn, Handshake, and Indeed with its country sites (indeed.co.uk, indeed.com.au, ...), with any subdomain
 CLOSED_SITE = re.compile(
     r"(.+\.)?(linkedin\.(com|cn)|lnkd\.in|joinhandshake\.(com|co\.uk)|indeed\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2}))"
@@ -91,7 +92,8 @@ def host_of(url: str) -> str | None:
     a backslash is a slash, and percent signs, full-width letters and other full stops still spell the same name."""
     try:
         host = urlsplit(url.strip().replace("\\", "/")).hostname or ""
-        return unquote(host).encode("idna").decode().rstrip(".")  # "simplify.jobs." reaches the same site
+        host = unquote(host).encode("idna").decode().rstrip(".").lower()  # "simplify.jobs." reaches the same site
+        return host if SAFE_HOST.fullmatch(host) else None
     except (ValueError, UnicodeError):
         return None
 
