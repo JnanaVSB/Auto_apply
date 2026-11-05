@@ -69,6 +69,9 @@ NOT_TAILNET = (
     "Open this from a phone signed in to your Tailscale. On the laptop itself, use the address shown in the terminal."
 )
 EXPIRED = "This page has expired; reload it and try again."
+SHARED_LINK = re.compile(r"https?://\S+", re.I)
+MAX_SHARED_LINK = 2000  # the Job link box's limit on Add
+MAX_WAY_BACK = 4000
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
@@ -155,11 +158,12 @@ def create_app(
 
     @app.get("/login")
     async def login_page(request: Request) -> Response:
-        return _page(request, "login.html")
+        return _page(request, "login.html", after=_after_login(request, request.query_params.get("next", "")))
 
     @app.post("/login")
     async def log_in(request: Request) -> Response:
         logins: security.Logins = request.app.state.logins
+        after = _after_login(request, request.state.form.get("next", ""))
         if not logins.locked_minutes():
             row = request.app.state.conn.execute("SELECT password_hash FROM dashboard_login").fetchone()
             if row is None:
@@ -167,13 +171,13 @@ def create_app(
             # the slow password check runs beside the server's own thread, so other pages keep answering
             token = await run_in_threadpool(logins.log_in, request.state.form.get("password", ""), row[0])
             if token:
-                response, remote = RedirectResponse("/", 303), request.state.remote
+                response, remote = RedirectResponse(after, 303), request.state.remote
                 name = security.cookie_name(remote)
                 response.set_cookie(name, token, httponly=True, samesite="strict", path="/", secure=remote)
                 return response
         minutes = logins.locked_minutes()
         error = f"Too many wrong passwords. Try again in {minutes} minute(s)." if minutes else "Wrong password."
-        return _page(request, "login.html", 429 if minutes else 401, error=error)
+        return _page(request, "login.html", 429 if minutes else 401, error=error, after=after)
 
     @app.post("/logout")
     async def log_out(request: Request) -> Response:
@@ -291,7 +295,7 @@ def create_app(
 
     @app.get("/add")
     async def add_page(request: Request) -> Response:
-        return _page(request, "add.html", form={})
+        return _page(request, "add.html", form={"link": _shared_link(request)})
 
     @app.post("/add/job")
     async def add_job(request: Request) -> Response:
@@ -544,7 +548,25 @@ def _to_job(job_id: int, form: dict[str, str]) -> Response:
 def _to_login(request: Request) -> Response:
     if request.headers.get("hx-request"):  # HTMX swaps answers into the page, so it is told to load the login page
         return Response(status_code=204, headers={"HX-Redirect": "/login"})
+    query = request.scope["query_string"].decode("latin-1")
+    if request.state.remote and request.method == "GET" and request.scope["path"] == "/add" and query:
+        return RedirectResponse(f"/login?next={quote(f'/add?{query}', safe='')}", 303)  # a share, kept through login
     return RedirectResponse("/login", 303)
+
+
+def _after_login(request: Request, address: str) -> str:
+    """Only back to a shared link on Add, on the phone, else the first page."""
+    wanted = request.state.remote and address.startswith("/add?") and len(address) <= MAX_WAY_BACK
+    return address if wanted else "/"
+
+
+def _shared_link(request: Request) -> str:
+    """What an Android share sent, on the phone only: the link, else the first in the text. It only fills the box."""
+    if not request.state.remote:
+        return ""
+    params = request.query_params
+    found = SHARED_LINK.search(f"{params.get('link', '')} {params.get('text', '')}")
+    return found[0][:MAX_SHARED_LINK] if found else ""
 
 
 def _page(request: Request, name: str, status: int = 200, **values) -> HTMLResponse:

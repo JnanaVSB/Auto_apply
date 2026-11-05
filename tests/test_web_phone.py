@@ -5,7 +5,7 @@ import re
 import stat
 from contextlib import ExitStack
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 import httpx
 import pytest
@@ -814,3 +814,140 @@ def test_the_laptop_keeps_the_job_list_in_the_page_with_the_setting_on_or_empty(
         '      <option value="" selected disabled>Choose…</option>\n'
     ) in text
     nothing_inline(text)
+
+
+SHARED = "https://jobs.example.com/1"
+
+
+def job_box(response):
+    return html.unescape(re.search(r'<input name="link"[^>]* value="([^"]*)"', response.text)[1])
+
+
+def jobs_saved(conn):
+    return conn.execute("SELECT count(*) FROM jobs").fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    ("params", "filled"),
+    [
+        ({"link": SHARED}, SHARED),
+        ({"text": f"Look at this {SHARED} role"}, SHARED),
+        ({"link": SHARED, "text": "Other https://other.example/2"}, SHARED),
+        ({"text": f"HTTPS://JOBS.EXAMPLE.COM/1 and {SHARED}"}, "HTTPS://JOBS.EXAMPLE.COM/1"),
+        ({"link": "javascript:alert(1)"}, ""),
+        ({"link": "ftp://jobs.example.com/1"}, ""),
+        ({"text": "A job with no link in it"}, ""),
+        ({"link": "", "text": ""}, ""),
+        ({}, ""),
+    ],
+)
+def test_a_shared_link_fills_the_box_on_the_phone_and_saves_nothing(phone, conn, params, filled):
+    cookie, _ = phone_login(phone)
+    before = jobs_saved(conn)
+    response = phone.get("/add", params=params, headers=cookie)
+    assert (response.status_code, job_box(response)) == (200, filled)
+    assert jobs_saved(conn) == before
+
+
+def test_a_shared_link_is_cut_at_the_box_s_limit_and_escaped(phone):
+    cookie, _ = phone_login(phone)
+    long = phone.get("/add", params={"link": f"{SHARED}/{'a' * 3000}"}, headers=cookie)
+    assert len(job_box(long)) == 2000
+    hostile = f'{SHARED}/"><script>alert(1)</script>'
+    response = phone.get("/add", params={"link": hostile}, headers=cookie)
+    assert job_box(response) == hostile and "<script>alert" not in response.text
+
+
+def test_add_job_after_a_share_goes_through_the_usual_rules(phone, conn):
+    cookie, session = phone_login(phone)
+    link = job_box(phone.get("/add", params={"link": "https://simplify.jobs/p/1"}, headers=cookie))
+    before = jobs_saved(conn)
+    data = {"link": link, "csrf_token": session.csrf}
+    response = phone.post("/add/job", data=data, headers=cookie | ORIGIN)
+    assert job_box(response) == "https://simplify.jobs/p/1" and jobs_saved(conn) == before
+    assert re.search(r'class="result" role="status">[^<]*simplify', response.text)
+
+
+def test_the_laptop_ignores_a_shared_link_with_the_setting_on_or_empty(either):
+    log_in(either)
+    assert job_box(either.get("/add", params={"link": SHARED, "text": SHARED})) == ""
+
+
+def test_a_share_on_the_phone_comes_back_to_add_through_login(phone):
+    gone = phone.get("/add", params={"link": SHARED}, follow_redirects=False)
+    assert gone.status_code == 303
+    address, _, sent = gone.headers["location"].partition("?next=")
+    assert (address, unquote(sent)) == ("/login", f"/add?link={quote(SHARED, safe='')}")
+    page = phone.get(gone.headers["location"])
+    wanted = f'<input type="hidden" name="next" value="{html.escape(unquote(sent))}">'
+    assert wanted in page.text or wanted.replace("&#x27;", "&#39;") in page.text
+    response = phone.post(
+        "/login", data={"password": PASSWORD, "next": unquote(sent)}, headers=ORIGIN, follow_redirects=False
+    )
+    assert (response.status_code, response.headers["location"]) == (303, unquote(sent))
+    cookie = {"Cookie": response.headers["Set-Cookie"].split(";")[0]}
+    assert job_box(phone.get(response.headers["location"], headers=cookie)) == SHARED
+
+
+def test_the_way_back_stays_through_a_wrong_password_and_a_lock_out(phone):
+    field = 'name="next" value="/add?link=x"'
+    data = {"password": "wrong guess", "next": "/add?link=x"}
+    for status in [401] * (security.MAX_WRONG - 1) + [429, 429]:
+        response = phone.post("/login", data=data, headers=ORIGIN)
+        assert (response.status_code, field in response.text) == (status, True)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "https://evil.example",
+        "//evil.example",
+        "/settings",
+        "/add",
+        "/addx?a=1",
+        "/\\evil.example",
+        "/add?" + "a" * 3996,
+        "",
+    ],
+)
+def test_after_login_the_phone_goes_only_back_to_add(phone, address):
+    assert 'name="next"' not in phone.get("/login", params={"next": address}).text
+    sent = {"password": PASSWORD, "next": address}
+    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == "/"
+
+
+def test_the_longest_way_back_is_kept(phone):
+    address = "/add?" + "a" * 3995
+    sent = {"password": PASSWORD, "next": address}
+    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == address
+
+
+@pytest.mark.parametrize("address", ["/add?a=%0d%0aSet-Cookie:x=1", "/add?a=\r\nSet-Cookie:x=1"])
+def test_the_way_back_can_add_no_header(phone, address):
+    sent = {"password": PASSWORD, "next": address}
+    response = phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False)
+    assert not re.search(r"[\r\n]", response.headers["location"])
+    assert [name for name, _ in response.headers.multi_items()].count("set-cookie") == 1
+    assert "x=1" not in response.headers["Set-Cookie"]
+
+
+def test_a_way_back_is_escaped_in_the_login_page(phone):
+    address = '/add?a="><script>alert(1)</script>'
+    assert "<script>alert" not in phone.get("/login", params={"next": address}).text
+
+
+def test_the_laptop_has_no_way_back_with_the_setting_on_or_empty(either):
+    assert either.get("/add", params={"link": "x"}, follow_redirects=False).headers["location"] == "/login"
+    assert 'name="next"' not in either.get("/login", params={"next": "/add?link=x"}).text
+    sent = {"password": PASSWORD, "next": "/add?link=x"}
+    assert either.post("/login", data=sent, follow_redirects=False).headers["location"] == "/"
+
+
+def test_only_a_plain_visit_to_add_with_a_query_is_kept(phone):
+    answer = phone.get("/add", params={"link": "x"}, headers={"HX-Request": "true"}, follow_redirects=False)
+    assert (answer.status_code, answer.headers["HX-Redirect"]) == (204, "/login")
+    assert phone.get("/add", follow_redirects=False).headers["location"] == "/login"
+    sent = phone.post("/add/job?link=x", headers=ORIGIN, follow_redirects=False)
+    assert sent.headers["location"] == "/login"
+    assert phone.get("/addx?link=x", follow_redirects=False).headers["location"] == "/login"
+    assert phone.post("/add?link=x", headers=ORIGIN, follow_redirects=False).headers["location"] == "/login"
