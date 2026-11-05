@@ -29,6 +29,8 @@ sources:
   # The phone book also reads the company boards linked from Hacker News' monthly "Who is hiring?" threads.
   # Only board names are kept, never what people wrote. false = off.
   hacker_news: true
+  # Job lists read as one file on every collection, after the boards. Leave a name out to switch that feed off.
+  feeds: [remoteok]
 
 # While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
 collect_every_hours: 0

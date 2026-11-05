@@ -61,11 +61,12 @@ nothing personal is ever stored in this repository.
 python -m app.collect
 ```
 Reads Simplify's two public job lists on GitHub, then every Greenhouse, Lever and Ashby board the app knows (the
-"phone book", below, plus your `extra_boards`). Each site has its own queue and all sites are read at the same time,
-at most `requests_per_second` new requests to each site (1 by default). It keeps only US jobs matching your
-`roles` and stores each job once. Jobs are never deleted or hidden: a job its board or list drops becomes
-"no longer available" with the reason ("removed from its board", "board shut down", "company stopped hiring",
-"removed from Simplify" or "inactive on Simplify"), and a saved job later judged to be outside the US keeps its
+"phone book", below, plus your `extra_boards`), then the job feeds that are switched on. Each site has its own queue
+and all sites are read at the same time, at most `requests_per_second` new requests to each site (1 by default). It
+keeps only US jobs matching your `roles` and stores each job once. Jobs are never deleted or hidden: a job its board,
+list or feed drops becomes "no longer available" with the reason ("removed from its board", "board shut down",
+"company stopped hiring", "removed from Simplify", "inactive on Simplify", "no longer in the feed" or
+"feed turned off"), and a saved job later judged to be outside the US keeps its
 label and gets a "please check location" mark. A run takes about one second per board on the site with the most
 boards (about 5 minutes for 700 boards, 1–1.5 hours for 10,000); its first line says how long. Running it again is
 safe.
@@ -95,6 +96,14 @@ To see one saved job's status and every board or list it appears on (changes not
 ```bash
 python -m app.collect show "<job link>"
 ```
+
+### Job feeds
+A feed is a job list read as one file, not a company board: [Remote OK](https://remoteok.com)'s public feed of its
+newest jobs is the first, on unless you switch it off in Settings. A job on a feed and on a company board is one job,
+matched by company and title, and the board decides: its details, its link, and whether the job is open. A job only on
+feeds is decided by them. Switching a feed off marks the jobs only it lists "feed turned off" at the next collection,
+and switching it on again reopens what it still lists; a job on your Tracker is left as it is. A job you add yourself
+is never merged into a job that is only on a feed. Each job from Remote OK links back to its listing on the job page.
 
 ## Phone book of company boards
 ```bash
@@ -148,9 +157,9 @@ password). Press Ctrl+C in the terminal to stop it.
   afterwards. While the dashboard is open, it can collect every few hours and start a new phone-book round every few
   days (monthly unless you change it; see Settings), counted from when the last round began. A round that was paused
   or stopped continues at the next chance; one that a failing site left unfinished continues the next day.
-- **Settings:** roles, Simplify lists, extra boards, phone-book lists, Hacker News' hiring threads, the automatic
-  collection and phone-book refresh, and requests per second to each job site. Saving checks them with the same rules
-  as the file and rewrites `data/config.yaml` (comments in that file are not kept).
+- **Settings:** roles, Simplify lists, extra boards, phone-book lists, Hacker News' hiring threads, job feeds, the
+  automatic collection and phone-book refresh, and requests per second to each job site. Saving checks them with the
+  same rules as the file and rewrites `data/config.yaml` (comments in that file are not kept).
 
 Forgot the dashboard password? Stop the dashboard and run:
 ```bash
@@ -303,6 +312,9 @@ The app never opens these sites: you browse them yourself, as usual, and their l
   true before running it on a cloud computer; nothing in it is built.
 
 ## Credits
+Jobs marked "via Remote OK" come from [Remote OK](https://remoteok.com)'s public feed, and each links back to its
+listing there, as the feed's terms ask.
+
 US and foreign place names (used to decide whether a job is in the US) come from
 [GeoNames](https://www.geonames.org), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.

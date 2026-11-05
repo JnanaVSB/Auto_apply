@@ -102,6 +102,7 @@ def test_the_example_settings_are_valid():
     assert config.roles.keywords
     assert [listing.level for listing in config.sources.simplify_lists] == ["intern", "new grad"]
     assert config.sources.hacker_news is True
+    assert config.sources.feeds == ["remoteok"]
 
 
 def test_a_feed_the_app_does_not_have_is_named_in_the_error(tmp_path):
