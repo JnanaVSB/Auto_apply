@@ -63,6 +63,18 @@ SAVE_ENTRY = """INSERT INTO job_sources (source, source_job_id, job_id, listed, 
         ELSE job_sources.unlisted_on END"""  # the day it stopped being listed is kept on later runs
 UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
     unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
+# Only another source's job: one source's separate postings with the same title stay separate. A job you add stays
+# yours beside a job only on feeds, whose places are often empty just as yours are.
+SAME_PLACES = """SELECT id FROM jobs j WHERE match_key = ?
+    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?) AND (? != 'manual'
+        OR EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%'))"""
+# The oldest job with a company and title, whatever its places (see _same_name): for a feed, one it doesn't list yet;
+# for anything else, one on feeds and nothing else. By a range on match_key, so the index finds it.
+FEED_JOINS = """SELECT id FROM jobs WHERE match_key >= ? AND match_key < ?
+    AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY id LIMIT 1"""
+JOINS_A_FEED = """SELECT id FROM jobs j WHERE match_key >= ? AND match_key < ?
+    AND NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = j.id AND source NOT LIKE 'feed:%') ORDER BY id LIMIT 1"""
+ONLY_ON_FEEDS = "SELECT NOT EXISTS (SELECT 1 FROM job_sources WHERE job_id = ? AND source NOT LIKE 'feed:%')"
 # A feed's listed entries, but for jobs on the Tracker: switching a feed off must not turn a card closed.
 OFF_THE_TRACKER = """SELECT source_job_id FROM job_sources s WHERE source = ? AND listed = 1
     AND NOT EXISTS (SELECT 1 FROM tracker WHERE job_id = s.job_id)
@@ -176,13 +188,13 @@ def clean_url(link: str) -> str | None:
     return clean_link(Job(source="manual", source_job_id=link, company="", title="", url=link, locations=[]))
 
 
+def _squash(text: str) -> str:
+    return "".join(char for char in text.lower() if char.isalnum())
+
+
 def match_key(job: Job) -> str:
     """Company + title + locations, ignoring capitals, spaces and punctuation."""
-
-    def squash(text: str) -> str:
-        return "".join(char for char in text.lower() if char.isalnum())
-
-    return "|".join((squash(job.company), squash(job.title), ",".join(sorted(map(squash, job.locations)))))
+    return "|".join((_squash(job.company), _squash(job.title), ",".join(sorted(map(_squash, job.locations)))))
 
 
 def save(
@@ -253,6 +265,9 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
         "date_posted": job.date_posted,
     }
     new = job_id is None
+    if not new and _leads(job, url) and conn.execute(ONLY_ON_FEEDS, (job_id,)).fetchone()[0]:
+        # the application form is read from the company's own link, so a feed's link gives way
+        conn.execute("UPDATE jobs SET apply_url = ? WHERE id = ?", (url, job_id))
     if new:
         if not (job.listed and (chosen or wanted(job, roles))):
             return
@@ -289,20 +304,36 @@ def _save_one(conn: sqlcipher3.Connection, job: Job, roles: Roles, now: str, cou
     counts.updated += merged != old or (added, check) != (old_added, old_check)
 
 
+def _leads(job: Job, url: str) -> bool:
+    """Whether this entry's link replaces a feed's: never a feed's own, a job you added, or a link on simplify.jobs."""
+    return job.listed and job.source != "manual" and not job.source.startswith("feed:") and not is_simplify_site(url)
+
+
+def _same_name(conn: sqlcipher3.Connection, job: Job) -> int | None:
+    """The same company and title when a feed is one of the two: feeds rarely name the board's places."""
+    company, title = _squash(job.company), _squash(job.title)
+    if not (company and title and job.listed) or job.source == "manual":
+        return None
+    first, last = f"{company}|{title}|", f"{company}|{title}}}"  # } is the character after |
+    if job.source.startswith("feed:"):
+        row = conn.execute(FEED_JOINS, (first, last, job.source)).fetchone()
+    else:
+        row = conn.execute(JOINS_A_FEED, (first, last)).fetchone()
+    return row[0] if row else None
+
+
 def _find(conn: sqlcipher3.Connection, job: Job, url: str) -> int | None:
-    """The stored copy of this job: same source id, else same link, else same company/title/places elsewhere."""
+    """The stored copy of this job: same source id, else same link, else same company/title/places elsewhere, else
+    (see _same_name) same company and title."""
     for sql, values in (
         ("SELECT job_id FROM job_sources WHERE source = ? AND source_job_id = ?", (job.source, job.source_job_id)),
         ("SELECT id FROM jobs WHERE apply_url = ?", (url,)),
-        (  # only another source's job: one source's separate postings with the same title stay separate
-            "SELECT id FROM jobs WHERE match_key = ? AND id NOT IN (SELECT job_id FROM job_sources WHERE source = ?)",
-            (match_key(job), job.source),
-        ),
+        (SAME_PLACES, (match_key(job), job.source, job.source)),
     ):
         row = conn.execute(sql, values).fetchone()
         if row:
             return row[0]
-    return None
+    return _same_name(conn, job)
 
 
 def _status(entries: list[_Entry]) -> tuple[str, str | None]:
