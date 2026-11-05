@@ -127,7 +127,7 @@ the next refresh continues where it stopped. Nothing is ever deleted.
 ```bash
 python -m app.web
 ```
-Opens the jobs dashboard in your browser at http://127.0.0.1:8765. It works on this computer only. The first time,
+Opens the jobs dashboard in your browser at http://127.0.0.1:8765. It works on this computer only, unless you set up your phone: see [docs/phone-setup.md](docs/phone-setup.md). The first time,
 it asks you to choose a dashboard password in the terminal (12+ characters; use a different one from your master
 password). Press Ctrl+C in the terminal to stop it.
 - **Jobs:** every saved job, 50 per page, with filters (source, level, US location, remote, date posted, role category,
@@ -299,6 +299,8 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 - The Laptop council sends nothing anywhere. A paid council sends the job ad and your resume and Profile text to
   Anthropic or OpenAI, with your name and contact details replaced by placeholders first; they are put back only
   on this computer, when the PDF is built.
+- The app runs on your own computer. [docs/cloud-checklist.md](docs/cloud-checklist.md) lists what would have to be
+  true before running it on a cloud computer; nothing in it is built.
 
 ## Credits
 US and foreign place names (used to decide whether a job is in the US) come from
