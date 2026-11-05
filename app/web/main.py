@@ -42,6 +42,7 @@ from app.web import (
     security,
     submit,
     tracker,
+    usajobs_settings,
     writer_settings,
 )
 from app.web.collector import Collector
@@ -393,6 +394,7 @@ def create_app(
     gmail_settings.add_routes(app, _page)
     export_settings.add_routes(app, _page, data_dir)
     phone_settings.add_routes(app, _page)
+    usajobs_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
@@ -487,7 +489,7 @@ async def _settings_page(
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
         rows=rows, stopped=queries.stopped_boards(request.app.state.conn), ollama_line=ollama_line,
-        feeds={name: feed.LABEL for name, feed in FEEDS.items()},
+        feeds={name: feed.LABEL for name, feed in FEEDS.items()}, needs_usajobs_key=usajobs_settings.needs_key(config),
     )  # fmt: skip
 
 

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}USAJobs key{% endblock %}
+{% block content %}
+<h1>USAJobs key</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if notice %}<p class="result" role="status">{{ notice }}</p>{% endif %}
+<p>USAJobs is read only when you tick it in Settings and save your own key and e-mail here. Each person asks for their
+  own free key at <a href="https://developer.usajobs.gov/apirequest/" target="_blank" rel="noopener noreferrer">USAJobs' key page</a>.</p>
+<p>Key: {{ "saved" if key else "not saved" }}<br>E-mail: {{ "saved" if email else "not saved" }}</p>
+<form method="post" action="/settings/usajobs" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Key <input name="key" type="password" maxlength="500" autocomplete="off" spellcheck="false"></label>
+  <label>E-mail <input name="email" type="email" maxlength="254" autocomplete="off" spellcheck="false"></label>
+  <p class="hint">USAJobs asks for your e-mail with every request; the app sends it to USAJobs only. Leave a box empty to
+    keep what is saved.</p>
+  <p><button type="submit">Save</button></p>
+</form>
+{% if key or email %}
+<form method="post" action="/settings/usajobs/remove">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <p><button type="submit">Remove</button></p>
+</form>
+{% endif %}
+{% endblock %}

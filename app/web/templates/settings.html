@@ -49,7 +49,10 @@
   <p class="hint">Read on every collection. Switching one off closes the jobs only it lists, until you switch it on again.</p>
   {% for name, label in feeds.items() %}
   <input type="hidden" name="feed_{{ name }}" value="off">
-  <label class="tick"><input type="checkbox" name="feed_{{ name }}" value="on"{% if form["feed_" ~ name] == "on" %} checked{% endif %}> {{ label }}</label>
+  <label class="tick"><input type="checkbox" name="feed_{{ name }}" value="on"{% if form["feed_" ~ name] == "on" %} checked{% endif %}> {{ label }}{% if name == "usajobs" %} (needs your own free key; almost all jobs need US citizenship){% endif %}</label>
+  {% if name == "usajobs" %}
+  <p class="hint">{% if remote %}Change your USAJobs key on the laptop.{% else %}Your key: <a href="/settings/usajobs">Settings → USAJobs key</a>.{% endif %}{% if needs_usajobs_key %} <strong>Ticked, but no key is saved yet, so USAJobs is skipped.</strong>{% endif %}</p>
+  {% endif %}
   {% endfor %}
 
   <h2>Automatic collection and phone book</h2>

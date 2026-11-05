@@ -22,8 +22,9 @@ from app.config import PROJECT_DIR, Config, load_config
 from app.fetch import Fetcher
 from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
 from app.keychain import get_secret, set_secret
+from app.sources import usajobs
 from app.web import __main__ as web_command
-from app.web import gmail_settings, main, preparer, security
+from app.web import gmail_settings, main, preparer, security, usajobs_settings
 
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
@@ -628,6 +629,31 @@ def press_connect(client):
     reply = client.get(CONNECT, follow_redirects=False)
     assert urlsplit(reply.headers["location"]).netloc == "accounts.google.com"
     return parse_qs(urlsplit(reply.headers["location"]).query)["state"][0]
+
+
+def test_the_usajobs_key_page_is_refused_on_the_phone_and_saves_nothing(phone):
+    cookie, session = phone_login(phone)
+    page = phone.get(usajobs_settings.PAGE, headers=cookie)
+    assert (page.status_code, usajobs_settings.ON_THE_LAPTOP in words(page)) == (403, True)
+    set_secret(usajobs.KEY, "fake-key-1234")
+    form = {"key": "fake-key-5678", "email": "sam.fake@example.com", "csrf_token": session.csrf}
+    for address in (usajobs_settings.PAGE, usajobs_settings.PAGE + "/remove"):
+        response = phone.post(address, data=form, headers=cookie | ORIGIN, follow_redirects=False)
+        assert (response.status_code, usajobs_settings.ON_THE_LAPTOP in words(response)) == (403, True)
+    assert get_secret(usajobs.KEY) == "fake-key-1234"  # neither changed nor removed
+    assert get_secret(usajobs.EMAIL) is None
+
+
+def test_settings_on_the_phone_says_where_to_change_the_usajobs_key(phone, settings):
+    cookie, _ = phone_login(phone)
+    page = phone.get("/settings", headers=cookie)
+    assert usajobs_settings.ON_THE_LAPTOP in words(page)
+    assert f'href="{usajobs_settings.PAGE}"' not in page.text
+
+
+def test_the_usajobs_key_page_still_opens_on_the_laptop(laptop):
+    log_in(laptop)
+    assert laptop.get(usajobs_settings.PAGE).status_code == 200
 
 
 def test_connect_is_refused_on_the_phone_before_anything_is_kept(phone):

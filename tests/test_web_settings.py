@@ -8,8 +8,9 @@ import pytest
 import yaml
 from helpers import LIST, FakeWeb, csrf, log_in
 
-from app import config, db, fetch, phonebook
+from app import config, db, fetch, keychain, phonebook
 from app.config import ExportSettings, load_config
+from app.sources import usajobs
 from app.web import actions
 
 ORIGINAL = """# my own comment
@@ -270,6 +271,32 @@ def test_a_feeds_box_leaves_the_other_sources_as_they_are(client, settings_file)
 def test_a_refused_save_keeps_a_feeds_box_as_you_left_it(client):
     text = save(client, feed_remoteok="off", extra_boards="not a board").text
     assert "Not saved" in text and f"{FEED_BOX}>" in text
+
+
+USAJOBS_BOX = '<input type="checkbox" name="feed_usajobs" value="on"'
+
+
+def test_usajobs_is_off_until_you_tick_it_and_the_page_says_what_it_needs(client):
+    page = " ".join(client.get("/settings").text.split())
+    assert f"{USAJOBS_BOX}>" in page and f"{USAJOBS_BOX} checked" not in page
+    assert "(needs your own free key; almost all jobs need US citizenship)" in page
+    assert 'href="/settings/usajobs"' in page
+    assert NO_USAJOBS_KEY not in page
+
+
+NO_USAJOBS_KEY = "Ticked, but no key is saved yet, so USAJobs is skipped."
+
+
+def test_ticked_with_no_key_says_so(client):
+    assert NO_USAJOBS_KEY in save(client, feed_usajobs=TICKED).text
+
+
+def test_ticked_with_a_key_says_nothing_more(client):
+    keychain.set_secret(usajobs.KEY, "fake-key-1234")
+    keychain.set_secret(usajobs.EMAIL, "sam.fake@example.com")
+    text = save(client, feed_usajobs=TICKED).text
+    assert NO_USAJOBS_KEY not in text
+    assert "fake-key-1234" not in text
 
 
 def test_adding_and_removing_simplify_lists(client, settings_file):
