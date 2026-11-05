@@ -16,6 +16,7 @@ MAX_SESSION_SECONDS = 12 * 60 * 60
 MAX_WRONG = 5  # wrong passwords in a row before login is locked
 LOCKOUT_SECONDS = 15 * 60
 COOKIE = "auto_apply_session"  # not the common "session": cookies are shared by every web program on 127.0.0.1
+PHONE_COOKIE = "__Host-auto_apply_session"  # the browser itself keeps this name to https and this exact address
 SAFETY_HEADERS = {
     # only the dashboard's own files; no inline scripts, nothing from the internet, never inside another site's page
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
@@ -98,6 +99,10 @@ class Logins:
 
     def log_out(self, token: str | None) -> None:
         self.sessions.pop(token or "", None)
+
+
+def cookie_name(remote: bool) -> str:
+    return PHONE_COOKIE if remote else COOKIE
 
 
 def token_matches(sent: str | None, session: Session) -> bool:

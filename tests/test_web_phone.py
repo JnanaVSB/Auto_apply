@@ -7,7 +7,7 @@ from contextlib import ExitStack
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADDRESS, PASSWORD, log_in
+from helpers import ADDRESS, PASSWORD, csrf, log_in
 
 from app.config import Config
 from app.fetch import Fetcher
@@ -244,3 +244,96 @@ def test_the_start_command_passes_the_address_on_and_stays_on_this_computer(
     app, options = served[0]
     assert app.state.phone_host == host
     assert (options["host"], options["proxy_headers"]) == ("127.0.0.1", False)
+
+
+def phone_login(phone):
+    """The cookie as a header, by hand: a real cookie jar won't send a Secure cookie over Serve's plain http."""
+    cookie = log_in_with(phone, PASSWORD, ORIGIN).headers["Set-Cookie"].split(";")[0]
+    return {"Cookie": cookie}, phone.app.state.logins.sessions[cookie.partition("=")[2]]
+
+
+def test_the_phone_gets_a_cookie_only_https_and_this_exact_address_can_hold(phone):
+    response = log_in_with(phone, PASSWORD, ORIGIN)
+    assert (response.status_code, response.headers["location"]) == (303, "/")
+    assert re.fullmatch(
+        r"__Host-auto_apply_session=[\w-]+; HttpOnly; Path=/; SameSite=strict; Secure", response.headers["Set-Cookie"]
+    )
+
+
+def test_the_phones_cookie_opens_pages_and_a_change_needs_its_token(phone):
+    cookie, session = phone_login(phone)
+    page = phone.get("/", headers=cookie)
+    assert (page.status_code, "<h1>Jobs</h1>" in page.text) == (200, True)
+    assert page.headers["Cache-Control"] == "no-store"
+    form = {"view": "table", "back": "/"}
+    sent = phone.post(
+        "/view", data=form | {"csrf_token": session.csrf}, headers=cookie | ORIGIN, follow_redirects=False
+    )
+    assert sent.status_code == 303
+    refused = phone.post("/view", data=form, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (refused.status_code, EXPIRED in words(refused)) == (403, True)
+
+
+def test_a_laptop_cookie_opens_nothing_on_the_phone_address(laptop, phone):
+    log_in(laptop)
+    token = laptop.cookies[security.COOKIE]
+    cookie = {"Cookie": f"{security.COOKIE}={token}"}
+    assert phone.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+    token_sent = {"X-CSRF-Token": csrf(laptop)} | cookie | ORIGIN
+    assert phone.post("/logout", headers=token_sent, follow_redirects=False).headers["location"] == "/login"
+    assert token in laptop.app.state.logins.sessions  # the phone's address can't end the laptop's login
+
+
+def test_a_phone_cookie_opens_nothing_on_the_laptop_address(either):
+    log_in(either)
+    token = either.cookies[security.COOKIE]
+    either.cookies.clear()
+    cookie = {"Cookie": f"__Host-auto_apply_session={token}"}
+    assert either.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_logging_out_on_the_phone_ends_the_login_and_clears_the_cookie(phone):
+    cookie, session = phone_login(phone)
+    response = phone.post("/logout", headers=cookie | ORIGIN | {"X-CSRF-Token": session.csrf}, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    assert re.fullmatch(
+        r'__Host-auto_apply_session=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax; Secure',
+        response.headers["Set-Cookie"],
+    )
+    assert not phone.app.state.logins.sessions
+    assert phone.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_the_phone_is_logged_out_after_being_idle_like_the_laptop(phone, clock):
+    cookie, _ = phone_login(phone)
+    clock.now += security.IDLE_SECONDS - 60
+    assert phone.get("/", headers=cookie).status_code == 200
+    clock.now += security.IDLE_SECONDS + 1
+    assert phone.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+    assert not phone.app.state.logins.sessions
+
+
+def test_view_and_look_cookies_are_secure_on_the_phone_and_as_today_on_the_laptop(laptop, phone):
+    view, look = {"view": "table", "back": "/"}, {"scheme": "E", "mode": "dark"}
+    year = "HttpOnly; Max-Age=31536000; Path=/; SameSite=lax"
+    cookie, session = phone_login(phone)
+    token = {"csrf_token": session.csrf}
+    sent = cookie | ORIGIN
+    reply = phone.post("/view", data=view | token, headers=sent, follow_redirects=False)
+    assert reply.headers["Set-Cookie"] == f"auto_apply_view=table; {year}; Secure"
+    reply = phone.post("/look", data=look | token, headers=sent, follow_redirects=False)
+    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark; {year}; Secure"
+    log_in(laptop)
+    token = {"csrf_token": csrf(laptop)}
+    reply = laptop.post("/view", data=view | token, follow_redirects=False)
+    assert reply.headers["Set-Cookie"] == f"auto_apply_view=table; {year}"
+    reply = laptop.post("/look", data=look | token, follow_redirects=False)
+    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark; {year}"
+
+
+def test_the_laptops_logout_cookie_is_as_today(either):
+    log_in(either)
+    response = either.post("/logout", headers={"X-CSRF-Token": csrf(either)}, follow_redirects=False)
+    assert re.fullmatch(
+        rf'{security.COOKIE}=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax', response.headers["Set-Cookie"]
+    )

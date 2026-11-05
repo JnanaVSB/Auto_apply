@@ -166,8 +166,9 @@ def create_app(
             # the slow password check runs beside the server's own thread, so other pages keep answering
             token = await run_in_threadpool(logins.log_in, request.state.form.get("password", ""), row[0])
             if token:
-                response = RedirectResponse("/", 303)
-                response.set_cookie(security.COOKIE, token, httponly=True, samesite="strict", path="/")
+                response, remote = RedirectResponse("/", 303), request.state.remote
+                name = security.cookie_name(remote)
+                response.set_cookie(name, token, httponly=True, samesite="strict", path="/", secure=remote)
                 return response
         minutes = logins.locked_minutes()
         error = f"Too many wrong passwords. Try again in {minutes} minute(s)." if minutes else "Wrong password."
@@ -175,9 +176,11 @@ def create_app(
 
     @app.post("/logout")
     async def log_out(request: Request) -> Response:
-        request.app.state.logins.log_out(request.cookies.get(security.COOKIE))
+        remote = request.state.remote
+        name = security.cookie_name(remote)
+        request.app.state.logins.log_out(request.cookies.get(name))
         response = RedirectResponse("/login", 303)
-        response.delete_cookie(security.COOKIE, path="/")
+        response.delete_cookie(name, path="/", secure=remote)
         return response
 
     @app.get("/")
@@ -495,7 +498,7 @@ async def _checked(request: Request, call_next) -> Response:
     # Everything else needs a login. Google sends you back to the Gmail callback without the login cookie (it is
     # SameSite=Strict); the one-time state is the check there.
     if path not in ("/login", gmail_settings.CALLBACK) and not path.startswith("/static/"):
-        request.state.session = request.app.state.logins.session(request.cookies.get(security.COOKIE))
+        request.state.session = request.app.state.logins.session(request.cookies.get(security.cookie_name(remote)))
         if request.state.session is None:
             return _to_login(request)
     if post:
