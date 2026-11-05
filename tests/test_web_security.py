@@ -228,6 +228,19 @@ def test_a_huge_form_sent_in_pieces_is_refused_before_it_fills_memory(client):
     assert response.status_code == 413
 
 
+def test_logging_everyone_out_leaves_wrong_passwords_and_a_lock_alone(clock):
+    logins, stored = security.Logins(clock=clock), security.hash_password(PASSWORD)
+    logins.log_in(PASSWORD, stored), logins.log_in(PASSWORD, stored)
+    logins.log_in("wrong guess", stored)
+    logins.log_out_all()
+    assert (logins.sessions, logins.wrong) == ({}, 1)
+    for _ in range(security.MAX_WRONG):
+        logins.log_in("wrong guess", stored)
+    locked = logins.locked_until
+    logins.log_out_all()
+    assert logins.locked_until == locked and logins.locked_minutes() == 15
+
+
 def test_guesses_sent_all_at_once_still_lock_login(clock):
     logins, stored = security.Logins(clock=clock), security.hash_password(PASSWORD)
     guesses = [threading.Thread(target=logins.log_in, args=("wrong guess", stored)) for _ in range(20)]

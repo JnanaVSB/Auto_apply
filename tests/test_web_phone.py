@@ -5,18 +5,25 @@ import re
 import stat
 from contextlib import ExitStack
 from types import SimpleNamespace
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from helpers import ADDRESS, PASSWORD, csrf, log_in
+from helpers import ADDRESS, PASSWORD, add_job, csrf, log_in
 from starlette.exceptions import HTTPException
+from test_gmail_client import FakeGoogle
+from test_tracker import version
+from test_web_emails import email
+from test_web_tracker import APPLIED_CARD
 
-from app import config
-from app.config import Config, load_config
+from app import collect, config, tracker
+from app.config import PROJECT_DIR, Config, load_config
 from app.fetch import Fetcher
+from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
+from app.keychain import get_secret, set_secret
 from app.web import __main__ as web_command
-from app.web import main, preparer, security
+from app.web import gmail_settings, main, preparer, security
 
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
@@ -39,6 +46,10 @@ NOT_TAILNET = (
 EXPIRED = "This page has expired; reload it and try again."
 RESTART = "Saved. Restart the dashboard to use it."
 SETTINGS = "/settings/phone"
+CONNECT = "/settings/gmail/connect"
+GMAIL_ON_THE_LAPTOP = "Connect Gmail on the laptop: Google sends you back to the laptop's own address."
+LASTING = "made-up-lasting-sign-in"
+LOG_OUT_ALL = "/settings/phone/log-out-all"
 REFUSED_ROUTES = [
     {"Host": HOST} | FUNNEL,
     {"Host": HOST} | IDENTITY | FORWARDED | FUNNEL,
@@ -603,3 +614,440 @@ def test_the_schedule_runs_from_the_laptops_check_whatever_a_phone_is_doing(phon
     exporter._begin = begun.append
     exporter.tick(conn)
     assert begun == [None]
+
+
+def fake_google(client):
+    set_secret(CLIENT_ID, "123-made-up.apps.googleusercontent.com")
+    set_secret(CLIENT_SECRET, "made-up-secret")
+    answers = {"/token": [{"refresh_token": LASTING, "access_token": "a", "scope": SCOPE}]}
+    client.app.state.gmail_transport = httpx.MockTransport(FakeGoogle(answers))
+
+
+def press_connect(client):
+    """Press Connect on the laptop; the one-time state Google would be sent."""
+    reply = client.get(CONNECT, follow_redirects=False)
+    assert urlsplit(reply.headers["location"]).netloc == "accounts.google.com"
+    return parse_qs(urlsplit(reply.headers["location"]).query)["state"][0]
+
+
+def test_connect_is_refused_on_the_phone_before_anything_is_kept(phone):
+    fake_google(phone)
+    cookie, _ = phone_login(phone)
+    response = phone.get(CONNECT, headers=cookie, follow_redirects=False)
+    assert (response.status_code, GMAIL_ON_THE_LAPTOP in words(response)) == (403, True)
+    assert "location" not in response.headers and "127.0.0.1" not in response.text
+    assert phone.app.state.gmail_pending is None
+
+
+def test_googles_answer_on_the_phone_is_refused_and_leaves_the_laptops_connect_waiting(laptop, phone):
+    fake_google(laptop)
+    log_in(laptop)
+    state = press_connect(laptop)
+    laptop.cookies.clear()
+    answer = {"state": state, "code": "made-up-one-time-code"}
+    refused = phone.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (refused.status_code, GMAIL_ON_THE_LAPTOP in words(refused)) == (403, True)
+    assert laptop.app.state.gmail_pending["state"] == state and get_secret(REFRESH) is None
+    done = laptop.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (done.status_code, "Gmail connected." in done.text, get_secret(REFRESH)) == (200, True, LASTING)
+
+
+def test_gmail_settings_on_the_phone_say_where_to_connect_and_keep_the_rest(phone):
+    set_secret(REFRESH, LASTING)  # connected
+    cookie, session = phone_login(phone)
+    page = phone.get("/settings/gmail", headers=cookie)
+    assert (page.status_code, "Connect Gmail on the laptop" in page.text) == (200, True)
+    assert f'href="{CONNECT}"' not in page.text
+    for form in (
+        "/settings/gmail/sync",
+        "/settings/gmail/disconnect",
+        "/settings/gmail/period",
+        "/settings/gmail/client",
+    ):
+        assert f'action="{form}"' in page.text
+    data = {"csrf_token": session.csrf}
+    assert (
+        phone.post("/settings/gmail/sync", data=data, headers=cookie | ORIGIN, follow_redirects=False).status_code
+        == 303
+    )
+
+
+def test_connect_on_the_laptop_is_as_today_with_the_setting_on_or_empty(either):
+    fake_google(either)
+    log_in(either)
+    page = either.get("/settings/gmail")
+    assert f'href="{CONNECT}"' in page.text and "Connect Gmail on the laptop" not in page.text
+    state = press_connect(either)
+    assert either.app.state.gmail_pending["redirect"] == f"{ADDRESS}{gmail_settings.CALLBACK}"
+    either.cookies.clear()  # Google's redirect comes without the login cookie
+    answer = {"state": state, "code": "made-up-one-time-code"}
+    done = either.get(gmail_settings.CALLBACK, params=answer, follow_redirects=False)
+    assert (done.status_code, get_secret(REFRESH)) == (200, LASTING)
+
+
+def test_log_out_all_on_the_phone_ends_the_laptop_too_and_clears_the_phones_cookie(laptop, phone):
+    log_in(laptop)
+    cookie, session = phone_login(phone)
+    data = {"csrf_token": session.csrf}
+    response = phone.post(LOG_OUT_ALL, data=data, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    assert re.fullmatch(
+        r'__Host-auto_apply_session=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax; Secure',
+        response.headers["Set-Cookie"],
+    )
+    assert not phone.app.state.logins.sessions
+    assert laptop.get("/", follow_redirects=False).headers["location"] == "/login"
+
+
+def test_log_out_all_on_the_laptop_ends_the_phone_too_and_clears_todays_cookie(laptop, phone):
+    cookie, _ = phone_login(phone)
+    log_in(laptop)
+    response = laptop.post(LOG_OUT_ALL, data={"csrf_token": csrf(laptop)}, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/login")
+    assert re.fullmatch(
+        rf'{security.COOKIE}=""; expires=[^;]+; Max-Age=0; Path=/; SameSite=lax', response.headers["Set-Cookie"]
+    )
+    assert phone.get("/", headers=cookie, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_log_out_all_needs_a_login_the_token_and_a_post(laptop, phone):
+    cookie, session = phone_login(phone)
+    assert laptop.post(LOG_OUT_ALL, follow_redirects=False).headers["location"] == "/login"
+    no_token = phone.post(LOG_OUT_ALL, headers=cookie | ORIGIN, follow_redirects=False)
+    assert (no_token.status_code, EXPIRED in words(no_token)) == (403, True)
+    another_site = {"csrf_token": session.csrf}
+    sent = cookie | {"Origin": "https://attacker.example"}
+    assert phone.post(LOG_OUT_ALL, data=another_site, headers=sent, follow_redirects=False).status_code == 403
+    assert phone.get(LOG_OUT_ALL, headers=cookie).status_code == 405
+    assert len(phone.app.state.logins.sessions) == 1
+
+
+def test_pressing_log_out_all_twice_is_harmless(phone):
+    cookie, session = phone_login(phone)
+    data = {"csrf_token": session.csrf}
+    for _ in range(2):
+        response = phone.post(LOG_OUT_ALL, data=data, headers=cookie | ORIGIN, follow_redirects=False)
+        assert (response.status_code, response.headers["location"]) == (303, "/login")
+
+
+@pytest.mark.parametrize(
+    ("running", "saved", "shown"), [(PHONE, PHONE, True), (PHONE, "", True), ("", PHONE, False), ("", "", False)]
+)
+def test_the_log_out_all_button_shows_while_a_phone_can_be_logged_in(serve, settings, running, saved, shown):
+    write(settings, saved)
+    dashboard = serve(running)
+    log_in(dashboard)
+    assert (f'action="{LOG_OUT_ALL}"' in dashboard.get(SETTINGS).text) is shown
+    assert "log-out-all" not in dashboard.get("/settings").text
+
+
+def test_the_phone_has_the_log_out_all_button_with_its_hint(phone, settings):
+    write(settings, PHONE)
+    cookie, _ = phone_login(phone)
+    text = words(phone.get(SETTINGS, headers=cookie))
+    assert f'action="{LOG_OUT_ALL}"' in text
+    assert (
+        "If you lose your phone, first remove it in Tailscale, then press this. You'll log in again here too." in text
+    )
+
+
+def applied_cards(conn, count):
+    with conn:
+        for _ in range(count):
+            job = add_job(conn, "Robotics Intern")
+            conn.execute(
+                "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, 'applied', '2026-11-01', ?)",
+                (job, collect.now()),
+            )
+
+
+def test_the_phone_pages_a_full_lane_with_a_link_to_the_next_100(phone, conn):
+    applied_cards(conn, 230)
+    cookie, _ = phone_login(phone)
+    first, second, third = (
+        phone.get(f"/tracker?all=applied&page={number}", headers=cookie).text for number in (1, 2, 3)
+    )
+    assert [len(APPLIED_CARD.findall(text)) for text in (first, second, third)] == [100, 100, 30]
+    assert '<a href="/tracker?all=applied&amp;page=2#lane-applied">Show the next 100</a>' in first
+    assert '<a href="/tracker?all=applied&amp;page=3#lane-applied">Show the next 100</a>' in second
+    assert "Show the next" not in third
+    assert not set(APPLIED_CARD.findall(first)) & set(APPLIED_CARD.findall(second))
+
+
+@pytest.mark.parametrize(
+    ("number", "cards"),
+    [("abc", 100), ("-1", 100), ("0", 100), ("²", 100), ("9" * 10, 100), ("999999999", 30), ("", 100)],
+)
+def test_a_wrong_page_number_on_the_phone_never_breaks_the_lane(phone, conn, number, cards):
+    applied_cards(conn, 130)
+    cookie, _ = phone_login(phone)
+    response = phone.get("/tracker", params={"all": "applied", "page": number}, headers=cookie)
+    assert (response.status_code, len(APPLIED_CARD.findall(response.text))) == (200, cards)
+
+
+def test_the_phone_s_normal_board_is_as_before(phone, conn):
+    applied_cards(conn, 130)
+    cookie, _ = phone_login(phone)
+    text = phone.get("/tracker?page=2", headers=cookie).text
+    assert len(APPLIED_CARD.findall(text)) == 30 and "Show all 130" in text and "Show the next" not in text
+
+
+def test_the_laptop_shows_a_full_lane_whole_whatever_the_page_with_the_setting_on_or_empty(either, conn):
+    applied_cards(conn, 130)
+    log_in(either)
+    text = either.get("/tracker?all=applied&page=2").text
+    assert len(APPLIED_CARD.findall(text)) == 130 and "Show the next" not in text
+
+
+PICKER = "/tracker/emails/abc123/picker"
+JOB_SELECT = '<select name="job" required>'
+LOADING = '<p class="hint">Loading the job list… If nothing comes, reload this page.</p>'
+HTMX = {"HX-Request": "true"}
+
+
+def many_cards(conn, count):
+    with conn:
+        for number in range(count):
+            job = add_job(conn, "Robotics Intern", company=f"Company {number}")
+            version(conn, job)
+
+
+def two_cards(conn):
+    with conn:
+        found = [
+            add_job(conn, title, company=company)
+            for company, title in (("Acme", "ML Intern"), ("Globex", "Data Scientist"))
+        ]
+        for job in found:
+            version(conn, job)
+    return found
+
+
+def nothing_inline(text):
+    assert not re.search(r"<script(?![^>]* src=)|<style| style=| on[a-z]+=", text)
+
+
+def test_the_phone_gets_the_list_without_the_job_lists(phone, conn):
+    many_cards(conn, 400)
+    for number in range(20):
+        email(conn, f"message{number}")
+    cookie, _ = phone_login(phone)
+    text = phone.get("/tracker/emails", headers=cookie).text
+    assert JOB_SELECT not in text and "Robotics Intern</option>" not in text
+    assert text.count('hx-trigger="toggle once"') == 20
+    opens = 'hx-get="/tracker/emails/message7/picker" hx-trigger="toggle once" hx-target="find p" hx-swap="outerHTML"'
+    assert f"<details {opens}>" in text
+    assert text.count(LOADING) == 20  # a failed fetch leaves these words
+    nothing_inline(text)
+
+
+def test_the_phone_s_picker_brings_the_job_list_of_that_e_mail(phone, conn):
+    many_cards(conn, 3)
+    email(conn, "abc123")
+    cookie, _ = phone_login(phone)
+    response = phone.get(PICKER, headers=cookie | HTMX)
+    assert (response.status_code, response.headers["Cache-Control"]) == (200, "no-store")
+    text = response.text
+    assert text.lstrip().startswith("<form") and "<html" not in text
+    assert 'action="/tracker/emails/abc123/link"' in text and "Which job" in text
+    assert JOB_SELECT in text and text.count("Robotics Intern</option>") == 3
+    nothing_inline(text)
+
+
+def test_the_picker_says_another_job_when_likely_cards_are_shown(phone, conn):
+    jobs = two_cards(conn)
+    email(conn, "abc123", candidates=f"[{jobs[0]}]")
+    cookie, _ = phone_login(phone)
+    page = phone.get("/tracker/emails", headers=cookie).text
+    assert "<summary>Another job</summary>" in page and "This is Acme · ML Intern" in page
+    assert "Another job" in phone.get(PICKER, headers=cookie).text
+
+
+def test_the_picker_answers_only_for_an_e_mail_waiting_on_the_list(phone, conn):
+    email(conn, "abc123", to_check=0)
+    cookie, _ = phone_login(phone)
+    for address in (PICKER, "/tracker/emails/nothing/picker", "/tracker/emails/not%20an%20id/picker"):
+        assert phone.get(address, headers=cookie).status_code == 404
+
+
+def test_the_picker_needs_a_login_like_every_page(phone, conn):
+    email(conn, "abc123")
+    assert phone.get(PICKER, follow_redirects=False).headers["location"] == "/login"
+    answer = phone.get(PICKER, headers=HTMX, follow_redirects=False)
+    assert (answer.status_code, answer.headers["HX-Redirect"]) == (204, "/login")
+
+
+def test_the_form_from_the_picker_links_the_e_mail_on_the_phone(phone, conn):
+    jobs = two_cards(conn)
+    email(conn, "abc123")
+    cookie, _ = phone_login(phone)
+    token = re.search(r'name="csrf_token" value="([^"]+)"', phone.get(PICKER, headers=cookie).text)[1]
+    form = {"job": str(jobs[0]), "label": "interview", "csrf_token": token}
+    reply = phone.post("/tracker/emails/abc123/link", data=form, headers=cookie | ORIGIN, follow_redirects=False)
+    assert reply.headers["location"] == "/tracker/emails?done=moved" and tracker.stage(conn, jobs[0]) == "interview"
+
+
+def test_the_laptop_keeps_the_job_list_in_the_page_with_the_setting_on_or_empty(either, conn):
+    two_cards(conn)
+    email(conn, "abc123")
+    log_in(either)
+    text = either.get("/tracker/emails").text
+    assert "Globex · Data Scientist</option>" in text
+    assert "/picker" not in text and "toggle once" not in text and LOADING not in text
+    assert (
+        '  <form method="post" action="/tracker/emails/abc123/link" class="stacked">\n'
+        f'    <input type="hidden" name="csrf_token" value="{csrf(either)}">\n'
+        '    <label>Which job <select name="job" required>\n'
+        '      <option value="" selected disabled>Choose…</option>\n'
+    ) in text
+    nothing_inline(text)
+
+
+SHARED = "https://jobs.example.com/1"
+
+
+def job_box(response):
+    return html.unescape(re.search(r'<input name="link"[^>]* value="([^"]*)"', response.text)[1])
+
+
+def jobs_saved(conn):
+    return conn.execute("SELECT count(*) FROM jobs").fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    ("params", "filled"),
+    [
+        ({"link": SHARED}, SHARED),
+        ({"text": f"Look at this {SHARED} role"}, SHARED),
+        ({"link": SHARED, "text": "Other https://other.example/2"}, SHARED),
+        ({"text": f"HTTPS://JOBS.EXAMPLE.COM/1 and {SHARED}"}, "HTTPS://JOBS.EXAMPLE.COM/1"),
+        ({"link": "javascript:alert(1)"}, ""),
+        ({"link": "ftp://jobs.example.com/1"}, ""),
+        ({"text": "A job with no link in it"}, ""),
+        ({"link": "", "text": ""}, ""),
+        ({}, ""),
+    ],
+)
+def test_a_shared_link_fills_the_box_on_the_phone_and_saves_nothing(phone, conn, params, filled):
+    cookie, _ = phone_login(phone)
+    before = jobs_saved(conn)
+    response = phone.get("/add", params=params, headers=cookie)
+    assert (response.status_code, job_box(response)) == (200, filled)
+    assert jobs_saved(conn) == before
+
+
+def test_a_shared_link_is_cut_at_the_box_s_limit_and_escaped(phone):
+    cookie, _ = phone_login(phone)
+    long = phone.get("/add", params={"link": f"{SHARED}/{'a' * 3000}"}, headers=cookie)
+    assert len(job_box(long)) == 2000
+    hostile = f'{SHARED}/"><script>alert(1)</script>'
+    response = phone.get("/add", params={"link": hostile}, headers=cookie)
+    assert job_box(response) == hostile and "<script>alert" not in response.text
+
+
+def test_add_job_after_a_share_goes_through_the_usual_rules(phone, conn):
+    cookie, session = phone_login(phone)
+    link = job_box(phone.get("/add", params={"link": "https://simplify.jobs/p/1"}, headers=cookie))
+    before = jobs_saved(conn)
+    data = {"link": link, "csrf_token": session.csrf}
+    response = phone.post("/add/job", data=data, headers=cookie | ORIGIN)
+    assert job_box(response) == "https://simplify.jobs/p/1" and jobs_saved(conn) == before
+    assert re.search(r'class="result" role="status">[^<]*simplify', response.text)
+
+
+def test_the_laptop_ignores_a_shared_link_with_the_setting_on_or_empty(either):
+    log_in(either)
+    assert job_box(either.get("/add", params={"link": SHARED, "text": SHARED})) == ""
+
+
+def test_a_share_on_the_phone_comes_back_to_add_through_login(phone):
+    gone = phone.get("/add", params={"link": SHARED}, follow_redirects=False)
+    assert gone.status_code == 303
+    address, _, sent = gone.headers["location"].partition("?next=")
+    assert (address, unquote(sent)) == ("/login", f"/add?link={quote(SHARED, safe='')}")
+    page = phone.get(gone.headers["location"])
+    wanted = f'<input type="hidden" name="next" value="{html.escape(unquote(sent))}">'
+    assert wanted in page.text or wanted.replace("&#x27;", "&#39;") in page.text
+    response = phone.post(
+        "/login", data={"password": PASSWORD, "next": unquote(sent)}, headers=ORIGIN, follow_redirects=False
+    )
+    assert (response.status_code, response.headers["location"]) == (303, unquote(sent))
+    cookie = {"Cookie": response.headers["Set-Cookie"].split(";")[0]}
+    assert job_box(phone.get(response.headers["location"], headers=cookie)) == SHARED
+
+
+def test_the_way_back_stays_through_a_wrong_password_and_a_lock_out(phone):
+    field = 'name="next" value="/add?link=x"'
+    data = {"password": "wrong guess", "next": "/add?link=x"}
+    for status in [401] * (security.MAX_WRONG - 1) + [429, 429]:
+        response = phone.post("/login", data=data, headers=ORIGIN)
+        assert (response.status_code, field in response.text) == (status, True)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "https://evil.example",
+        "//evil.example",
+        "/settings",
+        "/add",
+        "/addx?a=1",
+        "/\\evil.example",
+        "/add?" + "a" * 3996,
+        "",
+    ],
+)
+def test_after_login_the_phone_goes_only_back_to_add(phone, address):
+    assert 'name="next"' not in phone.get("/login", params={"next": address}).text
+    sent = {"password": PASSWORD, "next": address}
+    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == "/"
+
+
+def test_the_longest_way_back_is_kept(phone):
+    address = "/add?" + "a" * 3995
+    sent = {"password": PASSWORD, "next": address}
+    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == address
+
+
+@pytest.mark.parametrize("address", ["/add?a=%0d%0aSet-Cookie:x=1", "/add?a=\r\nSet-Cookie:x=1"])
+def test_the_way_back_can_add_no_header(phone, address):
+    sent = {"password": PASSWORD, "next": address}
+    response = phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False)
+    assert not re.search(r"[\r\n]", response.headers["location"])
+    assert [name for name, _ in response.headers.multi_items()].count("set-cookie") == 1
+    assert "x=1" not in response.headers["Set-Cookie"]
+
+
+def test_a_way_back_is_escaped_in_the_login_page(phone):
+    address = '/add?a="><script>alert(1)</script>'
+    assert "<script>alert" not in phone.get("/login", params={"next": address}).text
+
+
+def test_the_laptop_has_no_way_back_with_the_setting_on_or_empty(either):
+    assert either.get("/add", params={"link": "x"}, follow_redirects=False).headers["location"] == "/login"
+    assert 'name="next"' not in either.get("/login", params={"next": "/add?link=x"}).text
+    sent = {"password": PASSWORD, "next": "/add?link=x"}
+    assert either.post("/login", data=sent, follow_redirects=False).headers["location"] == "/"
+
+
+def test_only_a_plain_visit_to_add_with_a_query_is_kept(phone):
+    answer = phone.get("/add", params={"link": "x"}, headers={"HX-Request": "true"}, follow_redirects=False)
+    assert (answer.status_code, answer.headers["HX-Redirect"]) == (204, "/login")
+    assert phone.get("/add", follow_redirects=False).headers["location"] == "/login"
+    sent = phone.post("/add/job?link=x", headers=ORIGIN, follow_redirects=False)
+    assert sent.headers["location"] == "/login"
+    assert phone.get("/addx?link=x", follow_redirects=False).headers["location"] == "/login"
+    assert phone.post("/add?link=x", headers=ORIGIN, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_the_phone_guide_exists_warns_first_and_gives_no_way_to_turn_funnel_on():
+    page = (main.HERE / "templates" / "phone_settings.html").read_text(encoding="utf-8")
+    guide = (PROJECT_DIR / re.search(r"<code>(docs/[\w.-]+)</code>", page)[1]).read_text(encoding="utf-8")
+    assert "tailscale funnel --bg" not in guide
+    assert guide.index("nobody can erase") < guide.index("tailscale serve")
+
+
+def test_the_guides_name_only_the_made_up_address():
+    for name in ("phone-setup.md", "cloud-checklist.md"):
+        text = (PROJECT_DIR / "docs" / name).read_text(encoding="utf-8")
+        assert set(re.findall(r"[\w.-]+\.ts\.net", text)) <= {HOST}

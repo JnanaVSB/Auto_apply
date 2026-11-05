@@ -3,6 +3,9 @@
 {% block content %}
 <h1>auto_apply dashboard</h1>
 <form method="post" action="/login" class="login">
+  {%- if after != "/" %}
+  <input type="hidden" name="next" value="{{ after }}">
+  {%- endif %}
   <label for="password">Dashboard password</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
   <button type="submit">Log in</button>

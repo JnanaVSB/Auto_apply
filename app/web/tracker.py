@@ -33,7 +33,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         except ConfigError:  # shown on the Settings page; the default meanwhile
             stale_days = Config.model_fields["tracker_stale_days"].default
         local, conn = datetime.now().astimezone(), request.app.state.conn
-        lanes = tracker.board(conn, local, stale_days, request.query_params.get("all"))
+        number = request.query_params.get("page", "")
+        number = max(1, int(number)) if queries.PAGE_NUMBER.fullmatch(number) else 1
+        page_size = tracker.LANE_PAGE if request.state.remote else None  # the phone's page stays light
+        lanes = tracker.board(conn, local, stale_days, request.query_params.get("all"), page_size, number)
         try:  # "Add as an application" from E-mails to check: the e-mail's day
             values.setdefault("add_on", date.fromisoformat(request.query_params.get("applied", "")))
         except ValueError:

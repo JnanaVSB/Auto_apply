@@ -1,6 +1,7 @@
 """The Tracker (Phase 5): where each job with a finished resume version is on the board, Ready to Offer or Rejected,
 and every move. A move made by hand is recorded as yours, so Phase 6 (Gmail) can leave it alone."""
 
+import math
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -21,6 +22,7 @@ STAGES = {  # board order
 ROUNDS = {"1": "Round 1", "2": "Round 2", "3": "Round 3", "4": "Round 4", "5": "Round 5", "final": "Final"}
 WAITING = ("applied", "assessment", "interview")  # the stages whose cards go grey with no change and no e-mail
 LANE_CARDS = 30  # cards a lane shows before "Show all"
+LANE_PAGE = 100  # on the phone a full lane comes this many at a time
 BAD_DATE = "Choose the date you applied: not later than tomorrow, not before 2000."
 STALE = "Already moved in another tab: the board shows where it is now."
 # A job, its card (t) and its newest finished resume version (f), for the board and the job page alike.
@@ -155,11 +157,18 @@ def stage(conn: sqlcipher3.Connection, job_id: int) -> str | None:
     return row[0] if row else None
 
 
-def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all: str | None = None) -> list[dict]:
-    """The lanes in board order, each {"stage", "name", "full", "cards", "count", "more", "grey_hidden"}; a lane shows
-    its newest LANE_CARDS cards and counts the grey cards that leaves out, or, when it is `show_all`, all of them with
-    the grey ones first. `now` is this computer's local time, aware: the day counter counts local dates, and a
-    waiting card goes grey after `stale_days` with no change and no e-mail."""
+def board(
+    conn: sqlcipher3.Connection,
+    now: datetime,
+    stale_days: int,
+    show_all: str | None = None,
+    page_size: int | None = None,
+    page: int = 1,
+) -> list[dict]:
+    """The lanes in board order, each {"stage", "name", "full", "cards", "count", "more", "grey_hidden", "next_page"}; a
+    lane shows its newest LANE_CARDS cards and counts the grey cards that leaves out, or, when it is `show_all`, all of
+    them with the grey ones first, `page_size` at a time if given. `now` is this computer's local time, aware: the day
+    counter counts local dates, and a waiting card goes grey after `stale_days` with no change and no e-mail."""
     today, cutoff = now.date(), now - timedelta(days=stale_days)
     lanes = {stage: [] for stage in STAGES}
     rows = conn.execute(BOARD)
@@ -180,8 +189,16 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
     shown_lanes = []
     for stage_, name in STAGES.items():
         cards = lanes[stage_]
-        full = show_all == stage_  # the whole lane, its grey cards (the ones to check) first
-        shown = sorted(cards, key=lambda card: not card["stale"]) if full else cards[:LANE_CARDS]
+        full = show_all == stage_
+        shown, next_page = cards[:LANE_CARDS], None
+        if full:  # the whole lane, its grey cards (the ones to check) first
+            shown = sorted(cards, key=lambda card: not card["stale"])
+        if full and page_size:
+            last = max(1, math.ceil(len(cards) / page_size))  # past the end shows the last page, never an empty lane
+            at = min(page, last)
+            shown = shown[(at - 1) * page_size : at * page_size]
+            if at < last:
+                next_page = at + 1
         shown_lanes.append(
             {
                 "stage": stage_,
@@ -189,8 +206,10 @@ def board(conn: sqlcipher3.Connection, now: datetime, stale_days: int, show_all:
                 "full": full,
                 "cards": shown,
                 "count": len(cards),
-                "more": len(cards) > len(shown),
-                "grey_hidden": sum(card["stale"] for card in cards[len(shown) :]),  # so a grey card is never missed
+                "more": not full and len(cards) > len(shown),
+                # so a grey card is never missed
+                "grey_hidden": 0 if full else sum(card["stale"] for card in cards[len(shown) :]),
+                "next_page": next_page,
             }
         )
     return shown_lanes

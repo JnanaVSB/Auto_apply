@@ -26,13 +26,18 @@ DONE = {  # ?done=…: fixed words only
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.get(PAGE)
     async def emails_page(request: Request) -> Response:
-        conn = request.app.state.conn
-        cards = {card["id"]: card for card in match.cards(conn)}
-        found = apply.to_check(conn)
-        for email in found:  # a card no longer on the board isn't offered
-            email["candidates"] = [cards[job] for job in email["candidates"] if job in cards]
-        return page(request, "emails.html", emails=found, cards=list(cards.values()), labels=classify.LABELS,
+        found, cards = _to_check(request.app.state.conn)
+        return page(request, "emails.html", emails=found, cards=cards, labels=classify.LABELS,
                     notice=DONE.get(request.query_params.get("done", "")))  # fmt: skip
+
+    @app.get(PAGE + "/{message_id}/picker")
+    async def picker(request: Request, message_id: str) -> Response:
+        """The "Which job" form, fetched when opened on the phone: every card in every e-mail would be a heavy page."""
+        conn = request.app.state.conn
+        _check(conn, message_id)
+        found, cards = _to_check(conn)
+        email = next(email for email in found if email["id"] == message_id)
+        return page(request, "email_picker.html", email=email, cards=cards, labels=classify.LABELS)
 
     @app.post(PAGE + "/{message_id}/link")
     async def link(request: Request, message_id: str) -> Response:
@@ -51,6 +56,15 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
         _check(request.app.state.conn, message_id)
         apply.dismiss(request.app.state.conn, message_id)
         return RedirectResponse(f"{PAGE}?done=dismissed", 303)
+
+
+def _to_check(conn: sqlcipher3.Connection) -> tuple[list[dict], list[dict]]:
+    """The e-mails on the list, and the cards on the board."""
+    cards = {card["id"]: card for card in match.cards(conn)}
+    found = apply.to_check(conn)
+    for email in found:  # a card no longer on the board isn't offered
+        email["candidates"] = [cards[job] for job in email["candidates"] if job in cards]
+    return found, list(cards.values())
 
 
 def _check(conn: sqlcipher3.Connection, message_id: str) -> None:

@@ -167,6 +167,65 @@ def test_a_long_lane_shows_its_newest_cards_until_show_all(conn):
     assert (len(whole["cards"]), whole["count"], whole["more"]) == (31, 31, False)
 
 
+def paged(conn, page=1, show_all="applied", stage="applied"):
+    lanes = tracker.board(conn, NOW, 21, show_all, page_size=100, page=page)
+    return next(lane for lane in lanes if lane["stage"] == stage)
+
+
+def test_a_full_lane_comes_a_page_at_a_time_grey_cards_first(conn):
+    with conn:
+        grey = {place(conn, "applied", days_ago=30) for _ in range(120)}
+        fresh = {place(conn, "applied") for _ in range(110)}
+    pages = [paged(conn, number) for number in (1, 2, 3)]
+    assert [(len(lane["cards"]), lane["next_page"], lane["count"]) for lane in pages] == [
+        (100, 2, 230),
+        (100, 3, 230),
+        (30, None, 230),
+    ]
+    shown = [card["id"] for lane in pages for card in lane["cards"]]
+    assert set(shown[:120]) == grey and set(shown[120:]) == fresh and len(set(shown)) == 230
+    assert all((lane["more"], lane["grey_hidden"]) == (False, 0) for lane in pages)
+
+
+def test_a_page_past_the_end_shows_the_last_page(conn):
+    with conn:
+        for _ in range(130):
+            place(conn, "applied")
+    assert [(len(lane["cards"]), lane["next_page"]) for lane in (paged(conn, 3), paged(conn, 10**9))] == [
+        (30, None)
+    ] * 2
+
+
+def test_exactly_one_page_has_no_next_and_an_empty_lane_stays_empty(conn):
+    assert (paged(conn)["cards"], paged(conn)["next_page"]) == ([], None)
+    with conn:
+        for _ in range(100):
+            place(conn, "applied")
+    assert (len(paged(conn)["cards"]), paged(conn)["next_page"]) == (100, None)
+
+
+def test_without_a_page_size_a_full_lane_is_whole_as_before(conn):
+    with conn:
+        for _ in range(130):
+            place(conn, "applied", days_ago=30)
+    whole = lane(conn, "applied", show_all="applied")
+    assert (len(whole["cards"]), whole["more"], whole["grey_hidden"], whole["next_page"]) == (130, False, 0, None)
+    assert set(whole) == {"stage", "name", "full", "cards", "count", "more", "grey_hidden", "next_page"}
+    assert tracker.board(conn, NOW, 21, "applied", page=3) == tracker.board(conn, NOW, 21, "applied")
+
+
+def test_a_page_size_changes_only_the_lane_shown_in_full(conn):
+    with conn:
+        for _ in range(tracker.LANE_CARDS + 1):
+            place(conn, "applied", days_ago=30)
+            place(conn, "interview", days_ago=30, round_="1")
+    other = paged(conn, stage="interview")
+    assert other == lane(conn, "interview", show_all="applied")
+    assert (len(other["cards"]), other["more"], other["grey_hidden"], other["next_page"]) == (30, True, 1, None)
+    cut = paged(conn, show_all=None)
+    assert (len(cut["cards"]), cut["more"], cut["grey_hidden"], cut["next_page"]) == (30, True, 1, None)
+
+
 def test_the_site_is_the_link_s_host_without_www(conn):
     with conn:
         place(conn, "applied", apply_url="https://www.careers.acme.example/jobs/1")

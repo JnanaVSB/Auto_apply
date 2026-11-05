@@ -103,6 +103,10 @@ class Logins:
     def log_out(self, token: str | None) -> None:
         self.sessions.pop(token or "", None)
 
+    def log_out_all(self) -> None:
+        """Every device, for a lost phone; wrong passwords and a lock-out stay as they are."""
+        self.sessions.clear()
+
 
 def cookie_name(remote: bool) -> str:
     return PHONE_COOKIE if remote else COOKIE

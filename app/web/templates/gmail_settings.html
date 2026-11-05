@@ -59,5 +59,9 @@
 <p class="hint">How far back the first sync reads and how often it syncs: the Gmail numbers on
   <a href="/settings">Settings</a>.</p>
 
+{% if remote %}
+<p class="hint">Connect Gmail on the laptop.</p>
+{% else %}
 <p><a class="button primary" href="/settings/gmail/connect">{{ "Connect again" if connected else "Connect" }}</a></p>
+{% endif %}
 {% endblock %}
