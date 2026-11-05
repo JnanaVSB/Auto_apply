@@ -57,6 +57,9 @@ def test_returns_data_and_version_tag_and_says_who_it_is():
         "https://www.remoteok.com/api",  # the feed's own address only: a redirect there isn't followed either
         "https://remoteok.com.evil.example/api",
         "http://remoteok.com/api",
+        "http://data.usajobs.gov/api/search",
+        "https://data.usajobs.gov.evil.example/api/search",
+        "https://www.usajobs.gov/GetJob/ViewDetails/1",  # the listing pages are yours to open, never the app's
     ],
 )
 def test_only_https_to_the_allowed_hosts(url):
@@ -82,6 +85,68 @@ def test_a_feed_may_be_read_but_is_no_collection_site():
     fetcher, requests = fake_web(httpx.Response(200, json=[]))
     assert fetcher.get_json("https://remoteok.com/api")[0] == []
     assert len(requests) == 1 and not fetch.FEED_HOSTS & fetch.COLLECT_HOSTS
+
+
+USAJOBS = "https://data.usajobs.gov/api/search?Keyword=ML"
+SECRET_KEY, SECRET_MAIL = "fake-key-1234", "sam.fake@example.com"
+SECRETS = {"Authorization-Key": SECRET_KEY, "User-Agent": SECRET_MAIL}
+
+
+def test_a_requests_own_headers_replace_the_apps_for_that_request_only():
+    fetcher, requests = fake_web(httpx.Response(200, json={}), httpx.Response(200, json={}))
+    fetcher.get_json(USAJOBS, headers=SECRETS)
+    fetcher.get_json(USAJOBS)
+    assert (requests[0].headers["Authorization-Key"], requests[0].headers["User-Agent"]) == (SECRET_KEY, SECRET_MAIL)
+    assert "Authorization-Key" not in requests[1].headers and requests[1].headers["User-Agent"] == fetch.USER_AGENT
+
+
+def test_guarded_passes_headers_and_a_version_tag_goes_with_them():
+    fetcher, requests = fake_web(httpx.Response(200, json={}))
+    fetch.Guarded(fetcher, lambda: None).get_json(USAJOBS, "tag", headers=SECRETS)
+    assert requests[0].headers["If-None-Match"] == "tag"
+    assert requests[0].headers["Authorization-Key"] == SECRET_KEY
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        httpx.Response(401),
+        httpx.Response(403),
+        httpx.Response(404),
+        httpx.Response(429),
+        httpx.Response(500),
+        httpx.Response(301, headers={"Location": "https://elsewhere.example/"}),
+        httpx.ReadTimeout("slow"),
+        httpx.ConnectError("no route"),
+    ],
+)
+def test_no_failure_says_the_key_or_the_e_mail_and_no_address_holds_them(reply):
+    fetcher, requests = fake_web(*[reply] * 5)
+    with pytest.raises(fetch.FetchError) as error:
+        fetcher.get_json(USAJOBS, headers=SECRETS)
+    assert SECRET_KEY not in str(error.value) and SECRET_MAIL not in str(error.value)
+    assert not [request for request in requests if SECRET_KEY in str(request.url) or SECRET_MAIL in str(request.url)]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_refusal_of_who_is_asking_has_its_own_kind(status):
+    fetcher, _ = fake_web(httpx.Response(status))
+    with pytest.raises(fetch.Refused, match=f"refused \\(status {status}\\)"):
+        fetcher.get_json(USAJOBS)
+
+
+def test_a_redirect_never_carries_the_key_to_another_host():
+    fetcher, requests = fake_web(httpx.Response(302, headers={"Location": "https://elsewhere.example/"}))
+    with pytest.raises(fetch.Moved):
+        fetcher.get_json(USAJOBS, headers=SECRETS)
+    assert [request.url.host for request in requests] == ["data.usajobs.gov"]
+
+
+def test_usajobs_may_be_read_but_is_no_collection_site():
+    fetcher, requests = fake_web(httpx.Response(200, json={}))
+    fetcher.get_json(USAJOBS)
+    assert len(requests) == 1 and "data.usajobs.gov" in fetch.FEED_HOSTS
+    assert "data.usajobs.gov" not in fetch.COLLECT_HOSTS
 
 
 def test_redirect_is_reported_not_followed():

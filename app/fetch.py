@@ -15,7 +15,8 @@ COMMON_CRAWL = "index.commoncrawl.org"  # only the phone-book refresh reads it, 
 HN_API = "hacker-news.firebaseio.com"  # Hacker News' official API, only for the refresh too; not news.ycombinator.com
 COLLECT_HOSTS = frozenset({"raw.githubusercontent.com", "boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"})
 FORM_HOSTS = frozenset({"jobs.lever.co"})  # public application pages, read for a job's form questions (Phase 7)
-FEED_HOSTS = frozenset({"remoteok.com"})  # read only when switched on, so a collection's start never knocks on them
+# read only when switched on, so a collection's start never knocks on them
+FEED_HOSTS = frozenset({"remoteok.com", "data.usajobs.gov"})
 ALLOWED_HOSTS = COLLECT_HOSTS | {COMMON_CRAWL, HN_API} | FORM_HOSTS | FEED_HOSTS
 # Files job scoring downloads once (download_file): only these downloads may follow a redirect, and only between these
 # hosts. huggingface.co hands its large files to its storage address, us.aws.cdn.hf.co.
@@ -41,6 +42,10 @@ class FetchError(Exception):
 
 class NotFound(FetchError):
     """The site says the address does not exist (404), e.g. a company closed its job board."""
+
+
+class Refused(FetchError):
+    """The site refuses who is asking (401 or 403), e.g. a key it no longer accepts."""
 
 
 class Moved(FetchError):
@@ -79,9 +84,12 @@ class Fetcher:
             return False
         return True
 
-    def get_json(self, url: str, etag: str | None = None) -> tuple[Any, str | None] | None:
-        """Return (data, version tag), or None when the file is unchanged since `etag`."""
-        result = self._get(url, etag)
+    def get_json(
+        self, url: str, etag: str | None = None, headers: dict[str, str] | None = None
+    ) -> tuple[Any, str | None] | None:
+        """Return (data, version tag), or None when the file is unchanged since `etag`. `headers` go with this request
+        only, in place of the app's own; they never reach an address, an error or another host."""
+        result = self._get(url, etag, headers)
         return None if result is None else (_parse_json(result[0]), result[1])
 
     def get_text(self, url: str) -> str:
@@ -140,9 +148,9 @@ class Fetcher:
                 return digest.hexdigest()
         raise FetchError(f"sent on more than {MAX_REDIRECTS} times, so it was refused")
 
-    def _get(self, url: str, etag: str | None) -> tuple[bytes, str | None] | None:
+    def _get(self, url: str, etag: str | None, extra: dict[str, str] | None = None) -> tuple[bytes, str | None] | None:
         host = _allowed_host(url)
-        headers = {"If-None-Match": etag} if etag else {}
+        headers = ({"If-None-Match": etag} if etag else {}) | (extra or {})
         retry_waits = COMMON_CRAWL_RETRY_WAITS if host == COMMON_CRAWL else RETRY_WAITS
         waits = iter(retry_waits)
         while True:
@@ -191,9 +199,11 @@ class Guarded:
         self._check()
         return self._fetcher.reachable(host)
 
-    def get_json(self, url: str, etag: str | None = None) -> tuple[Any, str | None] | None:
+    def get_json(
+        self, url: str, etag: str | None = None, headers: dict[str, str] | None = None
+    ) -> tuple[Any, str | None] | None:
         self._check()
-        return self._fetcher.get_json(url, etag)
+        return self._fetcher.get_json(url, etag, headers)
 
     def get_text(self, url: str) -> str:
         self._check()
@@ -208,7 +218,7 @@ def _allowed_host(url: str) -> str:
     if parsed is None or parsed.scheme != "https" or parsed.host not in ALLOWED_HOSTS or parsed.userinfo:
         raise FetchError(
             "address not allowed (only https to the job lists, job-board APIs, Lever's application pages, Common "
-            "Crawl's index, Hacker News' API and Remote OK's feed)"
+            "Crawl's index, Hacker News' API and the job feeds)"
         )
     return parsed.host
 
@@ -226,6 +236,8 @@ def _setup_host(url: str) -> None:
 def _refusal(status: int) -> FetchError:
     if 300 <= status < 400:
         return Moved(f"moved to another address (status {status})")
+    if status in (401, 403):
+        return Refused(f"refused (status {status})")
     return FetchError(f"refused (status {status})")
 
 
