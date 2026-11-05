@@ -25,6 +25,8 @@ PAGES = re.compile(r"Output written on .*?\((\d+) pages?")
 MISSING = re.compile(r"Missing character: There is no (.) ")
 LATEX_ERROR = re.compile(r"^error: [^\n]*?\.tex:(\d+): (.{1,100})", re.M)
 NO_DOWNLOAD = re.compile(r"download|connect|network|resolve|fullyjustified|https?://", re.I)
+KEPT = " (kept with its log in "  # the end of a failed build's words: without_path takes it off
+WRITING_IN = re.compile(r"(Could not .*?\bin ).* \(")
 NO_NAME = "Fill in the Questionnaire's Contact section first: the PDF's header comes from there."
 NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)  # created readable by you only
 _building = threading.Lock()  # one build at a time
@@ -140,8 +142,7 @@ def _failed(output: str, work: Path, folder: Path) -> PdfError:
         shutil.rmtree(kept, ignore_errors=True)
         shutil.copytree(work, kept, ignore=shutil.ignore_patterns("*.pdf"))  # keeps the private folder's 700
         return PdfError(
-            f"The PDF could not be built: {error[2].strip()}, line {error[1]} of the generated file "
-            f"(kept with its log in {kept})."
+            f"The PDF could not be built: {error[2].strip()}, line {error[1]} of the generated file{KEPT}{kept})."
         )
     if NO_DOWNLOAD.search(output):
         return PdfError(
@@ -149,6 +150,12 @@ def _failed(output: str, work: Path, folder: Path) -> PdfError:
             "connection and try again. If it keeps failing, that address may have changed; an app update fixes it."
         )
     return PdfError(f"The PDF could not be built: Tectonic stopped without saying why. Check it runs: {INSTALL}")
+
+
+def without_path(text: str) -> str:
+    """A build's words with no path in them, for a phone: a full path holds your name. Beside the sentences it knows."""
+    words, kept, _ = text.partition(KEPT)
+    return WRITING_IN.sub(r"\1the data folder (", words) + ("." if kept else "")
 
 
 def _write(path: Path, data: bytes) -> None:

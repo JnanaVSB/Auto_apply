@@ -258,3 +258,7 @@ def test_the_resume_and_the_letter_are_printed_as_before():
     assert latex.escape(text) == text
     letter = latex.cover_letter(CONTACT, "ML", "Acme", "5 Nov", [text])
     assert text in letter and r"\textquote" not in letter and r"\textasciigrave" not in letter
+
+
+def test_nothing_after_the_rule_can_be_read_as_part_of_it():
+    assert "\\hrule\\relax\n" in latex.report("T", [("", "Height")])

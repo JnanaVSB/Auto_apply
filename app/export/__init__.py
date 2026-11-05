@@ -26,6 +26,7 @@ NOT_FINISHED = "UPDATE exported SET finished_on = NULL WHERE job_id = ?"
 LEFT = f"SELECT count(*) FROM exported WHERE finished_on IS NULL AND job_id IN (SELECT job_id FROM ({APPLIED}))"  # noqa: S608
 DOCUMENT_FILES = {runs.KIND: "resume.pdf", runs.LETTER: "cover_letter.pdf"}
 ANSWERS_PDF, POSTING_PDF, NOTES_PDF = "filled_answers.pdf", "job_description.pdf", "council_notes.pdf"
+NEXT_RUN = "the next scheduled run or an Export"
 NONE_BETWEEN, NONE_YET = "No applications between those dates", "No applications to export yet"
 STOP_AFTER = 5  # failures in a row: a broken Tectonic or a closed folder gives one message, not hundreds
 ODD_ITEM = (
@@ -46,13 +47,13 @@ class Result:
     files: int = 0
     refreshed: int = 0
     beside: int = 0
-    unfinished: int = 0  # the next export tries them again
+    unfinished: int = 0  # the next scheduled run, or an Export over their dates, tries them again
     none_chosen: str = ""  # the words when none were chosen; on a schedule, none needed
     problems: list[str] = field(default_factory=list)  # each names an application: for the page only, never saved
     stopped: str | None = None
 
     def summary(self) -> str:
-        """Counts only, in plain words: this is what is saved."""
+        """Counts only, in plain words."""
         words = self._counts()
         if self.selected == 0 and self.none_chosen:
             return "; ".join(filter(None, (self.none_chosen, words)))
@@ -71,8 +72,8 @@ class Result:
             _count(self.refreshed, "status history refreshed", "status histories refreshed"),
             _count(self.beside, "status history left alone (it no longer matches: the new one is beside it)",
                    "status histories left alone (they no longer match: the new ones are beside them)"),
-            _count(self.unfinished, "application not finished: the next export tries it again",
-                   "applications not finished: the next export tries them again"),
+            _count(self.unfinished, f"application not finished: {NEXT_RUN} over its date tries it again",
+                   f"applications not finished: {NEXT_RUN} over their dates tries them again"),
         )))  # fmt: skip
 
 
@@ -139,19 +140,40 @@ class _Run:
     again: bool = False  # the application at hand has something a later run could put right
 
     def export_all(self, chosen: list[tuple[int, str]], step: Callable[[int, int], None]) -> None:
-        done = 0
+        """Each application, then every other status history. Failures in a row stop the applications but not the
+        histories, which need no build; a stop of the disk ends everything. The first reason is the one said."""
+        visited: set[int] = set()
+        done, stopped = 0, None
         step(done, len(chosen))
         try:
-            for job_id, day in chosen:
-                self.again = False
-                self._safely(self._application, job_id, day, name=f"Application {job_id}", file="its details")
-                self._finish(job_id)
-                done += 1
-                step(done, len(chosen))
-            self._refresh({job_id for job_id, _ in chosen})
+            try:
+                for job_id, day in chosen:
+                    visited.add(job_id)
+                    self._one(job_id, day)
+                    done += 1
+                    step(done, len(chosen))
+            except _Stopped as reason:
+                stopped, self.failed = reason, 0
+            try:
+                self._refresh(visited)
+            except _Stopped as reason:
+                stopped = stopped or reason
         except OSError as error:
-            raise _Stopped(f"{error.strerror or type(error).__name__}: stopped after {done} of {len(chosen)} "
-                           "applications; what's done stays") from None  # fmt: skip
+            reason = error.strerror or type(error).__name__
+            raise stopped or _Stopped(
+                f"{reason}: stopped after {done} of {len(chosen)} applications; what's done stays"
+            ) from None
+        if stopped:
+            raise stopped
+
+    def _one(self, job_id: int, day: str) -> None:
+        self.again = False
+        try:
+            self._safely(self._application, job_id, day, name=f"Application {job_id}", file="its details")
+        except _Stopped:
+            self._finish(job_id)  # the one a stop lands on is as unfinished as the ones before it
+            raise
+        self._finish(job_id)
 
     def _finish(self, job_id: int) -> None:
         """Only here, at the end of an application: a run stopped or closed earlier leaves things as they were."""
@@ -329,7 +351,9 @@ class _Run:
         """One thing in the way, such as a file closed to you: this application waits and the next one goes on."""
         reason = error.strerror or type(error).__name__
         self._failed(
-            name, f"{reason}: the next export tries this application again", f"{reason}: check the export folder"
+            name,
+            f"{reason}: {NEXT_RUN} over its date tries this application again",
+            f"{reason}: check the export folder",
         )
 
     def _failed(self, name: str, line: str, reason: str) -> None:
@@ -350,6 +374,7 @@ class _Run:
         name = _name(self._job(job_id))
         try:
             self._history(folder.enter(self.root, relative), job_id, self._read_record(job_id)[0], name)
+            self.failed = 0
         except folder.Refused as refusal:
             self._problem(name, str(refusal))
         except ODD_ITEM as error:

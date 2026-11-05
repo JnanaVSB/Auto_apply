@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.config import ConfigError, ExportSettings, load_config
+from app.documents import pdf
 from app.export import folder, papers
 from app.web import actions, security
 from app.web.exporter import Exporter
@@ -116,7 +117,10 @@ def _status(request: Request) -> dict:
     """What the status part shows: the run in progress, or the last result, this dashboard's words first."""
     exporter = request.app.state.exporter
     tried_on, last_result = request.app.state.conn.execute(RUNS).fetchone() or (None, None)
-    return {"exporter": exporter, "result": exporter.notice or last_result, "tried_on": tried_on}
+    shown = pdf.without_path if request.state.remote else str
+    result = exporter.notice or last_result
+    return {"exporter": exporter, "result": result and shown(result), "tried_on": tried_on,
+            "problems": [shown(line) for line in exporter.problems]}  # fmt: skip
 
 
 def _view(request: Request, page: Callable[..., HTMLResponse], status: int = 200, **values) -> HTMLResponse:

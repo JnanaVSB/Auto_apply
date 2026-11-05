@@ -1051,3 +1051,28 @@ def test_the_guides_name_only_the_made_up_address():
     for name in ("phone-setup.md", "cloud-checklist.md"):
         text = (PROJECT_DIR / "docs" / name).read_text(encoding="utf-8")
         assert set(re.findall(r"[\w.-]+\.ts\.net", text)) <= {HOST}
+
+
+FAILED_LINE = "The PDF could not be built: Undefined, line 9 of the generated file"
+KEPT_AT = " (kept with its log in /home/sam lee (old)/data/documents/export/failed-build)."
+
+
+@pytest.mark.parametrize("address", [EXPORT, f"{EXPORT}/status"])
+def test_the_phone_is_shown_a_failed_build_with_no_path_and_the_laptop_with_it(phone, laptop, settings, address):
+    exporter = laptop.app.state.exporter
+    exporter.notice = f"1 file added. {FAILED_LINE}{KEPT_AT}"
+    exporter.problems = [f"Acme, ML: job_description.pdf: {FAILED_LINE}{KEPT_AT}"]
+    cookie, _ = phone_login(phone)
+    text = words(phone.get(address, headers=cookie))
+    assert "/home/sam" not in text and f"1 file added. {FAILED_LINE}." in text
+    assert f"Acme, ML: job_description.pdf: {FAILED_LINE}." in text
+    log_in(laptop)
+    assert "/home/sam lee (old)" in words(laptop.get(address))
+    exporter.notice, exporter.problems = None, []
+
+
+def test_the_phone_is_shown_a_saved_result_with_no_path(phone, laptop, settings, conn):
+    with conn:
+        conn.execute("INSERT INTO export_runs (id, last_result) VALUES (1, ?)", (f"{FAILED_LINE}{KEPT_AT}",))
+    cookie, _ = phone_login(phone)
+    assert "/home/sam" not in words(phone.get(f"{EXPORT}/status", headers=cookie))

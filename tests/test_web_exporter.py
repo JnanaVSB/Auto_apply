@@ -2,6 +2,7 @@
 a scratch folder and a stand-in for the PDF build."""
 
 import logging
+import subprocess
 import threading
 import time
 from contextlib import closing
@@ -11,6 +12,7 @@ import pytest
 import sqlcipher3
 from helpers import one
 from test_export import built, by_hand, root  # noqa: F401 (fixtures)
+from test_pdf import CACHED
 
 from app import collect, config, db, export, tracker
 from app.documents import pdf
@@ -508,7 +510,8 @@ def test_a_paper_that_failed_is_tried_again_when_the_window_has_moved_on(
     settings(str(root), every_days)
     built.fail = lambda number: number == 1
     words = scheduled(exporter)
-    assert "1 application not finished: the next export tries it again" in words and exporter.problems
+    assert "1 application not finished: the next scheduled run or an Export over its date tries it again" in words
+    assert exporter.problems
     assert saved(conn)[0][2] == words and saved(conn)[0][1]  # said in last_result, and good_on keeps its meaning
     assert scheduled(exporter) == "1 file added"
     assert papers_of(conn, root) == [ALL_OF_THEM] and one(conn, "SELECT finished_on FROM exported")[0]
@@ -571,3 +574,22 @@ def test_a_damaged_record_is_said_on_each_scheduled_run(conn, data_dir, settings
     settings(str(root), 1)
     for _ in range(2):
         assert "1 application not finished" in scheduled(exporter) and len(exporter.problems) == 1
+
+
+@pytest.mark.skipif(not CACHED, reason="Tectonic or its downloaded LaTeX files are not on this computer yet")
+@pytest.mark.parametrize("company", ["Height", "Width.ai", "width 0pt Quiet Co"])
+def test_a_company_with_a_name_latex_could_mistake_gets_all_its_papers(
+    conn, data_dir, settings, exporter, root, company,  # noqa: F811
+):  # fmt: skip
+    by_hand(conn, data_dir, company=company)
+    settings(str(root), 1)
+    assert scheduled(exporter) == "1 new folder, 5 files added" and exporter.problems == []
+    assert papers_of(conn, root) == [ALL_OF_THEM] and one(conn, "SELECT finished_on FROM exported")[0]
+    (place,) = (path for path in root.glob("*/*"))
+    done = subprocess.run(  # noqa: S603 (fixed arguments, no shell)
+        ["pdftotext", "-layout", str(place / "filled_answers.pdf"), "-"],  # noqa: S607 (a test on the real tool)
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert company in [line.strip() for line in done.stdout.splitlines()]

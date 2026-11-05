@@ -836,8 +836,8 @@ def test_a_run_stopped_with_nothing_done_says_the_reason_alone():
 
 
 @pytest.mark.parametrize(("count", "words"), [
-    (1, "1 application not finished: the next export tries it again"),
-    (2, "2 applications not finished: the next export tries them again"),
+    (1, "1 application not finished: the next scheduled run or an Export over its date tries it again"),
+    (2, "2 applications not finished: the next scheduled run or an Export over their dates tries them again"),
 ])  # fmt: skip
 def test_what_isnt_finished_is_said_and_nothing_new_never_stands_alone(count, words):
     assert export.Result(selected=1, unfinished=count).summary() == words
@@ -1034,3 +1034,110 @@ def test_five_odd_items_in_a_row_stop_the_run(conn, data_dir, root, built):
     for job in jobs[:5]:
         in_the_way(conn, root, job)
     assert "File exists" in run(conn, data_dir, root).stopped
+
+
+STUCK = ("Stuck",)
+
+
+def scheduled_run(conn, data_dir, root):
+    return run(conn, data_dir, root, date(2026, 11, 1), None, unfinished=True)
+
+
+def history_of(conn, root, job):
+    return (where(conn, root, job) / "status_history.txt").read_text(encoding="utf-8")
+
+
+def test_a_stop_on_failed_builds_still_refreshes_the_histories_and_says_why_it_stopped(conn, data_dir, root, built):
+    fine = by_hand(conn, data_dir, "Fine", on=date(2026, 1, 1))
+    run(conn, data_dir, root)
+    for number in range(3):
+        by_hand(conn, data_dir, f"Stuck {number}", on=date(2026, 1, 2 + number))
+    built.refused = STUCK
+    run(conn, data_dir, root)
+    tracker.move(conn, fine, "applied", "rejected", ON)
+    result = scheduled_run(conn, data_dir, root)
+    assert result.stopped == "The PDF could not be built: a made-up reason." and result.refreshed == 1
+    assert "Rejected" in history_of(conn, root, fine) and "a made-up reason" in result.words()
+
+
+def test_a_chosen_application_the_stop_never_reached_is_refreshed(conn, data_dir, root, built):
+    jobs = [by_hand(conn, data_dir, f"Job {day}", on=date(2026, 10, day)) for day in (1, 2, 3)]
+    run(conn, data_dir, root)
+    for job in jobs[:2]:
+        for name in ("council_notes.pdf", "job_description.pdf", "filled_answers.pdf"):
+            (where(conn, root, job) / name).unlink()
+    tracker.move(conn, jobs[2], "applied", "offer", ON)
+    built.clear()
+    built.fail = lambda number: True
+    result = run(conn, data_dir, root)
+    assert result.stopped and len(built) == 5 and "Offer" in history_of(conn, root, jobs[2])
+
+
+def test_when_the_refresh_stops_too_the_first_reason_is_the_one_said(conn, data_dir, root, built):
+    done = [by_hand(conn, data_dir, f"Done {day}", on=date(2026, 1, day)) for day in range(1, 6)]
+    run(conn, data_dir, root)
+    for number in range(3):
+        by_hand(conn, data_dir, f"Stuck {number}", on=date(2026, 10, 1 + number))
+    built.fail = lambda number: True
+    closed = [where(conn, root, job) / "status_history.txt" for job in done]
+    for path in closed:
+        path.chmod(0)
+    try:
+        result = run(conn, data_dir, root, date(2026, 10, 1), None)
+    finally:
+        for path in closed:
+            path.chmod(0o600)
+    assert result.stopped == "The PDF could not be built: a made-up reason."
+
+
+def test_a_disk_stopped_during_the_refresh_after_a_build_stop_still_says_the_first_reason(
+    conn, data_dir, root, built, monkeypatch
+):
+    fine = by_hand(conn, data_dir, "Fine", on=date(2026, 1, 1))
+    run(conn, data_dir, root)
+    for number in range(3):
+        by_hand(conn, data_dir, f"Stuck {number}", on=date(2026, 10, 1 + number))
+    tracker.move(conn, fine, "applied", "rejected", ON)
+    built.fail = lambda number: True
+    real = folder.history
+
+    def full(where_, text, today):
+        if "Rejected" in text:
+            raise OSError(28, "No space left on device")
+        return real(where_, text, today)
+
+    monkeypatch.setattr(folder, "history", full)
+    result = run(conn, data_dir, root, date(2026, 10, 1), None)
+    assert result.stopped == "The PDF could not be built: a made-up reason."
+
+
+def closed_histories(conn, root, jobs):
+    return [where(conn, root, job) / "status_history.txt" for job in jobs]
+
+
+@pytest.mark.parametrize(("pick", "stops"), [(slice(None, 10, 2), False), (slice(0, 5), True)])
+def test_five_closed_histories_stop_the_refresh_only_in_a_row(conn, data_dir, root, built, pick, stops):
+    jobs = exported_jobs(conn, data_dir, root, 12)
+    closed = closed_histories(conn, root, jobs[pick])
+    for path in closed:
+        path.chmod(0)
+    try:
+        result = run(conn, data_dir, root, date(2026, 11, 1), None)
+    finally:
+        for path in closed:
+            path.chmod(0o600)
+    assert bool(result.stopped) is stops and len(result.problems) == 5
+
+
+def test_the_application_a_stop_lands_on_is_left_unfinished(conn, data_dir, root, built):
+    jobs = exported_jobs(conn, data_dir, root, 3)
+    for job in jobs:
+        for name in ("council_notes.pdf", "job_description.pdf"):
+            (where(conn, root, job) / name).unlink()
+    built.fail = lambda number: True
+    assert run(conn, data_dir, root).stopped
+    assert [finished_on(conn, job) for job in jobs] == [None, None, None]
+    built.fail = lambda number: False
+    scheduled_run(conn, data_dir, root)
+    assert all(finished_on(conn, job) for job in jobs)
+    assert all((where(conn, root, job) / "council_notes.pdf").is_file() for job in jobs)

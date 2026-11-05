@@ -5,7 +5,8 @@
 \setlength{\parskip}{0.5em}
 \sloppy
 \begin{document}
-\textbf{<< title >>}\par\vspace{2pt}\hrule
+<# \relax: \hrule reads on for "height", "width" or "depth", in any case, and the next thing printed can be a company's name. #>
+\textbf{<< title >>}\par\vspace{2pt}\hrule\relax
 <% for heading, lines in sections %>
 <% if heading %>
 \vspace{0.5em}\textbf{<< heading >>}\par

@@ -5,8 +5,8 @@
   <p class="hint">Closing the dashboard stops it; pressing Export again carries on.</p>
   {% else %}
   {% if result %}<p class="result" role="status">{{ result }}</p>{% endif %}
-  {% if exporter.problems %}
-  <ul>{% for line in exporter.problems %}<li class="error">{{ line }}</li>{% endfor %}</ul>
+  {% if problems %}
+  <ul>{% for line in problems %}<li class="error">{{ line }}</li>{% endfor %}</ul>
   {% endif %}
   {% endif %}
 </div>

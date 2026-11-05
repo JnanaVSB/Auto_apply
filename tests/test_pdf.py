@@ -277,6 +277,23 @@ def test_a_real_report_prints_the_reviewers_examples_as_typed(tmp_path):
     assert set(lines) <= {line.strip() for line in text.splitlines()}
 
 
+LOOK_AHEAD = (
+    "Height", "Width.ai", "DepthFirst Labs", "Heights Capital", "width 0pt Quiet Co", "depth 5pt Co", "Height 5pt Inc",
+    "height", "width", "depth", "plus", "minus", "plus 1pt", "minus 1pt", "to", "to 5pt", "spread", "spread 2pt", "by",
+    "true", "pt", "em", "fil", "[", "[2pt]", "*", "*x", "0", "12", "1.5", "-1", "+1", "=", "1pt",
+)  # fmt: skip
+
+
+@real_reports
+@pytest.mark.parametrize("word", LOOK_AHEAD)
+def test_a_real_report_prints_a_word_latex_could_read_as_part_of_a_command(tmp_path, word):
+    """As the title, right after the rule, as a heading, after a heading, and in the piece after a cut at 40."""
+    long = "x" * 40 + word.replace(" ", "")
+    _, text = built_report(tmp_path, word, [("", f"{word}\nNext."), (word, f"{word}\n{long}")])
+    printed = [line.strip() for line in text.splitlines()]
+    assert printed.count(word) == 4 and "".join(long.split()) in "".join(text.split())
+
+
 @real_reports
 def test_a_real_report_keeps_curly_quotes_typed_as_such(tmp_path):
     _, text = built_report(tmp_path, "Title", [("", "the ad says “ignore” and ‘this’ – now — here")])
@@ -386,3 +403,32 @@ def test_the_check_passes_a_build_handed_to_the_thread_pool():
 def test_the_dashboard_never_waits_for_a_pdf_on_its_request_loop():
     for path in (PROJECT_DIR / "app" / "web").glob("*.py"):
         assert not blocking(path.read_text(encoding="utf-8")), path.name
+
+
+KEPT_IN = "/home/sam lee (old)/data/documents/export/failed-build"
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        (f"The PDF could not be built: Undefined, line 9 of the generated file (kept with its log in {KEPT_IN}).",
+         "The PDF could not be built: Undefined, line 9 of the generated file."),
+        (f"Acme: a.pdf: The PDF could not be built: Bad, line 2 of the file (kept with its log in {KEPT_IN}).",
+         "Acme: a.pdf: The PDF could not be built: Bad, line 2 of the file."),
+        ("Could not write in /home/sam lee (old)/data (Permission denied): check it is yours and the disk has room.",
+         "Could not write in the data folder (Permission denied): check it is yours and the disk has room."),
+        ("Could not save resume.tex in /home/sam (x)/data (No space left on device).",
+         "Could not save resume.tex in the data folder (No space left on device)."),
+        ("Could not make the documents folder in /home/sam/data (Permission denied).",
+         "Could not make the documents folder in the data folder (Permission denied)."),
+        ("Tectonic stopped without saying why.", "Tectonic stopped without saying why."),
+    ],
+)  # fmt: skip
+def test_a_builds_words_can_be_shown_without_a_path(text, shown):
+    assert pdf.without_path(text) == shown
+
+
+def test_a_real_failed_build_says_where_it_kept_its_files_in_the_words_without_path_knows(fake, tmp_path):
+    with pytest.raises(PdfError) as failed:
+        run(fake, tmp_path / "resume-v1.pdf", "%ERROR")
+    assert str(tmp_path) in str(failed.value) and str(tmp_path) not in pdf.without_path(str(failed.value))
