@@ -14,7 +14,7 @@ from app import questionnaire, submit
 from app.council import answers, flow, runs
 from app.council.writer import BadAnswer
 from app.documents import privacy
-from app.submit import Choice, Field, Form
+from app.submit import Choice, Field, Form, match
 
 WHY = Field("question_1", "Why do you want to work at Acme?", "long_text", True, "company")
 PROJECT = Field("question_2", "Describe a project in 100 words or less.", "long_text", False, "company",
@@ -28,8 +28,8 @@ FORM = Form((
     Field("comments", "Additional information", "long_text", False, "standard"),
     Field("question_6", "What are your salary expectations?", "long_text", True, "company"), DRAFTED,
 ))  # fmt: skip
-KEPT = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on)
-    VALUES (?, ?, ?, ?, ?, 'then')"""
+KEPT = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
+    VALUES (?, ?, ?, ?, ?, 'then', ?)"""
 ROWS = "SELECT field, answer, given_by, preparation_id FROM form_answers ORDER BY field"
 AD = "We build pretend robots in 3 cities."
 
@@ -39,8 +39,8 @@ def with_form(conn, form=FORM, company="Acme"):
     job = add_job(conn, "Robot Learning Intern", company=company)
     submit.save(conn, job, form, "api")
     with conn:
-        conn.execute(KEPT, (job, "question_3", "I like robots.", "you", None))
-        conn.execute(KEPT, (job, "question_7", "An old draft.", "writer", 99))
+        conn.execute(KEPT, (job, "question_3", "I like robots.", "you", None, match.wording(YOURS)))
+        conn.execute(KEPT, (job, "question_7", "An old draft.", "writer", 99, match.wording(DRAFTED)))
     return job
 
 
@@ -123,8 +123,12 @@ def test_good_answers_are_kept_by_field_with_new_numbers_flagged():
     draft, flags = answers.checked(text, [WHY, PROJECT], entries, AD)
     assert draft == {
         "answers": [
-            {"field": "question_1", "text": "I trained a robot arm to 90% success in 12 labs."},
-            {"field": "question_2", "text": "I built a drone."},
+            {
+                "field": "question_1",
+                "text": "I trained a robot arm to 90% success in 12 labs.",
+                "wording": match.wording(WHY),
+            },
+            {"field": "question_2", "text": "I built a drone.", "wording": match.wording(PROJECT)},
         ],
         "from": [{"source": "profile", "tile_id": "proj-1"}, {"source": "profile", "tile_id": "exp-1"}],
         "notes": "Robots first.",
@@ -179,7 +183,7 @@ def job(conn, data_dir):
     job = made_up_job(conn, data_dir)
     submit.save(conn, job, FORM, "api")
     with conn:
-        conn.execute(KEPT, (job, "question_3", "I like robots.", "you", None))
+        conn.execute(KEPT, (job, "question_3", "I like robots.", "you", None, match.wording(YOURS)))
     return job
 
 
@@ -230,3 +234,19 @@ def test_a_form_read_again_while_the_writer_writes_stops_the_version(conn, data_
         conn.execute("UPDATE forms SET read_on = '2999-01-01T00:00:00+00:00'")  # read after the version started
     assert flow.advance(conn, config, version) == []
     assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == ("stopped", flow.FORM_READ)
+
+
+def test_your_own_words_leaves_the_writer_available_and_your_own_answers_do_not(conn):
+    essay = Field("question_1", "Why Acme?", "long_text", True, "company", "In your own words, please.")
+    assert answers.questions(conn, with_form(conn, Form((essay,)))) == ([essay], None)
+    own = Field("question_1", "Why Acme?", "long_text", True, "company", "Answers must be your own.")
+    assert answers.questions(conn, with_form(conn, Form((own,)))) == ([], answers.OWN_WORDS)
+
+
+def test_the_writer_gets_no_promise_or_legal_question(conn):
+    legal = Field(
+        "question_8", "Have you ever been convicted of a crime? If so, explain.", "long_text", True, "company"
+    )
+    promise = Field("question_9", "How did you use AI when preparing this application?", "long_text", True, "company")
+    job = with_form(conn, Form((WHY, legal, promise)))
+    assert answers.questions(conn, job) == ([WHY], None)

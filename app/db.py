@@ -661,6 +661,8 @@ UPGRADES = (
     CREATE UNIQUE INDEX preparations_writing ON preparations (job_id, kind, coalesce(lineup, ''))
         WHERE status = 'writing';
     """,
+    # What each answer answered: a reworded question is asked again ('' counts as changed). Your words stay.
+    "ALTER TABLE form_answers ADD COLUMN wording TEXT NOT NULL DEFAULT '';",
 )
 SCHEMA_VERSION = len(UPGRADES)
 

@@ -1,10 +1,15 @@
 """Each form field matched to an answer for the preview (Phase 7): what you kept for this job, your Questionnaire,
 your saved More answers, your remembered consents and the job's newest PDFs. The first rule that fits wins, and
-nothing is guessed: a choice is picked only when exactly one fits, else the field is yours to decide."""
+nothing is guessed: a choice is picked only when exactly one fits, else the field is yours to decide.
+
+Before any rule answers a question, `care` sorts it, and everything that fills, saves or writes asks that one step.
+An allow-list: the safe mistake is the default, so one more question to you beats a wrong legal answer. A wording that
+doesn't fit a plain form below goes to you; never widen a form to make a real wording pass."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 import sqlcipher3
@@ -21,7 +26,7 @@ DECISIONS = {  # the "Decision required" reasons, as the preview words them
     "consent": "A promise or consent", "cover_letter": "Cover letter required",
 }  # fmt: skip
 WORDS = re.compile(r"[^\W_]+")  # a run of letters or digits
-COMPANY = "[company]"  # stands for the company's name, so a saved answer fits the same question from any company
+OLD_MARKER = "[company]"  # in a More answers row from before questions naming a company became this-job-only
 TICKED = "yes"  # a consent box to tick
 IN_WINDOW, LEFT_EMPTY = "[in the window]", "[left empty]"  # your choice for one job's question, kept as its answer
 FILL = "fill {} in your Questionnaire first"
@@ -47,7 +52,6 @@ KNOWN = {  # a known question, by its cleaned wording
     "heard": r"\b(?:how did you hear|where did you hear|how did you find|referral source)\b",
 }  # fmt: skip
 KNOWN = {name: re.compile(pattern) for name, pattern in KNOWN.items()}
-DEPENDS = re.compile(r"\byou selected\b|\bprevious (?:response|answer|question)\b")  # points at another answer
 NOW, FUTURE = re.compile(r"\b(?:current|currently|now)\b"), re.compile(r"\bfuture\b")
 US_NAMES = frozenset({"united states", "usa", "us"})
 SURVEY_COUNTRIES = re.compile(r"\(for candidates in: ([^)]*)\)$")  # how app/submit/lever.py words a survey's help
@@ -61,9 +65,11 @@ DECLINE = re.compile(  # "do not want": the US disability form's own words
 )
 GENDERS = {"Male": r"\b(?:male|man)\b", "Female": r"\b(?:female|woman)\b", "Non-binary": r"\bnon ?binary\b"}
 GENDERS = {answer: re.compile(pattern) for answer, pattern in GENDERS.items()}
-CONSENT_WORDS = re.compile(r"\b(?:consent\w*|agree|acknowledge|attest|certify|opt in)\b")
+CONSENT_WORDS = re.compile(
+    r"\b(?:agree|agrees|agreed|acknowledg\w*|attest\w*|certify|certifies|consent\w*|opt in|have read|confirm)\b"
+    r"|\bauthori[sz]e\b(?! to work)"
+)
 CONSENTS = (  # kind, as the preview names it, and its wording: the first that fits
-    ("ai", "AI use", r"\b(?:ai|artificial intelligence|attest)\b"), ("arbitration", "arbitration", r"\barbitrat"),
     ("privacy", "privacy", r"\bprivacy (?:notice|policy)\b|\bdata processing\b"
      r"|\bprocessing of (?:my|your) (?:personal )?data\b"),
     ("retention", "retention", r"\b(?:retain|retention|gdpr|store)\b"),  # store: Lever's consent[store]
@@ -71,17 +77,76 @@ CONSENTS = (  # kind, as the preview names it, and its wording: the first that f
     ("marketing", "marketing", r"\b(?:marketing|newsletter|talent community)\b"),
 )  # fmt: skip
 CONSENTS = tuple((kind, name, re.compile(pattern)) for kind, name, pattern in CONSENTS)
-ALWAYS_ASK = frozenset({"ai", "arbitration"})  # never answered from a remembered consent or a saved answer
-PROMISES = tuple(pattern for kind, _, pattern in CONSENTS if kind in ALWAYS_ASK)
-FREE_TEXT = frozenset({"salary", "start", "notice", "heard"})  # known questions a long-text box may ask
-NO_AI = re.compile(  # on cleaned wording: "must be your own", "not AI-generated", "use of AI ... is prohibited"
-    r"\b(?:must|should) be (?:entirely |solely )?(?:your|the applicant s|the candidate s) own\b"
-    r"|\bnot (?:be )?(?:ai|artificial intelligence) (?:generated|written)\b"
-    r"|\b(?:ai|artificial intelligence)\b(?: \w+){0,5} (?:is |are )?"
-    r"(?:prohibited|not permitted|not allowed|forbidden)\b"
+NOT_PLAIN = re.compile(  # a consent that says no, or goes further than its kind: never from a remembered accept
+    r"\b(?:not|don t|never|decline|opt out|withdraw|unsubscribe|refuse|reject"
+    r"|share|sharing|third part\w*|advertis\w*|affiliate\w*|sell|partner\w*)\b"
 )
+FREE_TEXT = frozenset({"salary", "start", "notice", "heard"})  # known questions a long-text box may ask
+
+# The four classes of `care`: who may answer a question.
+PROMISE = "promise"  # AI-use and arbitration: nothing answers it, you tick it in the window
+LEGAL = "legal"  # law and personal facts: a plain form below, or an answer for this job; never saved, never the Writer
+THIS_COMPANY = "company"  # names or is about this company: an answer for this job, or the Writer's; never saved
+ORDINARY = ""  # the usual rules
+
+ARBITRATION = re.compile(r"\b(?:arbitrat\w*|dispute resolution|class action)\b")
+AI_WORD = r"ai|a i|artificial intelligence|genai|gen ai|generative|chatgpt|gpt|copilot|llms?|large language models?"
+AI = re.compile(rf"\b(?:{AI_WORD})\b")
+SKILL = re.compile(  # a mention of AI is a promise unless it is positively about your skills, with none of PROCESS
+    r"\b(?:experience|projects?|skills?|background|familiar\w*|expertise|research|worked (?:on|with)|built"
+    r"|interests? you|excites? you|passionate)\b"
+)
+PROCESS = re.compile(
+    r"\b(?:application|applying|interview\w*|assessment|materials|resume|cover letter|answers?|responses?|submission"
+    r"|form|prepar\w*|polic\w*|guidelines?|attest\w*|agree\w*|acknowledg\w*|certif\w*|confirm\w*|promise"
+    r"|prohibit\w*|use of|using|usage)\b"
+)
+LEGAL_TOPICS = ("work", "sponsorship", "relocation", "over_18", "clearance")  # KNOWN questions filled only on PLAIN
+LEGAL_WORDS = re.compile(
+    r"\b(?:convict\w*|criminal|felon\w*|misdemeanou?r|arrest\w*|background check|drug (?:test|screen)\w*|non compete"
+    r"|non solicit\w*|visa|citizen\w*|immigration|sponsor\w*|work authori\w*|right to work|gender|race|ethnic\w*"
+    r"|disabilit\w*|veteran\w*|military|sexual orientation|date of birth|social security|ssn|passport|salary"
+    r"|compensation|agreements?)\b"
+)
+ABOUT_THIS_COMPANY = re.compile(
+    r"\b(?:worked (?:here|for us|with us|at)|previously (?:worked|employed|applied|interviewed)"
+    r"|ever (?:worked|applied|interviewed)|interviewed (?:here|with us|at|before)|related to|relatives?"
+    r"|family member|know anyone|referred by)\b"
+)
+US = r"(?:us|u s|usa|united states(?: of america)?)"
+PLAIN = {  # the only wordings a legal topic is answered on: the whole cleaned label, US forms only
+    "work": rf"(?:are|do) you(?: currently| legally)* (?:authorized|eligible|permitted|have the (?:legal )?right)"
+            rf" to work(?: in the {US})?",
+    "sponsorship": rf"(?:will|do|would) you(?: now or in the future| now| currently| in the future)* (?:need|require)"
+                   rf"(?: now or in the future)?(?: (?:visa|immigration|employment|work))? sponsorship"
+                   rf"(?: for employment visa status)?(?: e g h 1b(?: visa)?(?: status)?)?(?: to work in the {US})?",
+    "relocation": r"(?:are you|would you be) (?:open|willing|able) to relocat(?:e|ion)"
+                  r"(?: for this (?:role|position|job))?",
+    "over_18": r"are you(?: at least| over)? 18(?: years(?: of age| old)?)?(?: or older)?",
+    "clearance": r"do you(?: currently)? (?:hold|have)(?: an active| a)?(?: security)? clearance"
+                 r"|security clearance(?: level)?",
+}  # fmt: skip
+PLAIN = {topic: re.compile(pattern) for topic, pattern in PLAIN.items()}
+LABEL_TAIL = re.compile(r"(?: yes no| required| please select)+$")  # ignored after a plain form
+TWIST = re.compile(  # in a plain form's help: its meaning may not be the usual one
+    r"\b(?:without|not|unable|cannot|unrestricted|restriction|permanent|any employer|acknowledge|understand|country"
+    r"|location|assistance|under|if yes|which)\b"
+)
+YES_OR_NO = re.compile(r"(?:(?:do|are|can|have|will|would|did) you|is your)\b")  # at the start of a cleaned label
+EYE = "the wording needs your eye"
+YOURS_TO_WRITE = "this one is yours to write"
+CHANGED = "the question changed since you answered it"
+
+NO_WORD = r"not|no|never|refrain\w*|prohibit\w*|reject\w*|avoid\w*|without|discourag\w*|forbid\w*|unacceptable"
+NO_AI = re.compile(  # on cleaned wording: when unsure, warn
+    rf"\b(?:{AI_WORD})\b(?: \w+){{0,7}} (?:{NO_WORD})\b|\b(?:{NO_WORD})\b(?: \w+){{0,7}} (?:{AI_WORD})\b"
+    r"|\b(?:own work|my own|your own(?! words)|the candidate s own|the applicant s own|written by you)\b"
+)
+YOUR_WORDS = re.compile(r"\byour own words\b")  # common essay wording, no AI ban: a warning that blocks nothing
 NO_AI_WARNING = ("This form asks that application materials be your own and not AI-written: write the long answers "
                  "yourself")  # fmt: skip
+DRAFTS_WARNING = "This form has Writer drafts: replace them with your own words"
+YOUR_WORDS_WARNING = "This form asks for your own words: think about writing the long answers yourself"
 LIMIT_WARNING = "This company limits applications (its words: {})"
 FULL = f"More answers is full ({MAX_PAIRS} rows): delete some on the Questionnaire page"
 BROKEN = "Your saved Questionnaire breaks a rule; fix it on the Questionnaire page first: {}"
@@ -97,16 +162,60 @@ class Line:
     source: str = ""  # where the value came from, e.g. "Questionnaire: Work authorization", "Resume v3"
     decision: str = ""  # a DECISIONS key when status is "decide"
     note: str = ""  # e.g. "split from your full name"
-    askable: bool = False  # optional and left empty only because no rule answers it: you may still answer it
+    askable: bool = False  # optional and left empty only because no rule answers it (never a promise): you still may
 
 
-def clean(text: str, company: str = "") -> str:
-    """Wording to compare: lower case, the company's name (or a written [company]) as [company], every run of other
-    characters one space."""
-    cleaned = f" {COMPANY} ".join(" ".join(WORDS.findall(part)) for part in text.lower().split(COMPANY))
-    if name := " ".join(WORDS.findall(company.lower())):
-        cleaned = re.sub(rf"(?<!\S){re.escape(name)}(?!\S)", COMPANY, cleaned)
-    return " ".join(cleaned.split())
+def clean(text: str) -> str:
+    """Wording to compare: lower case, every run of other characters one space."""
+    return " ".join(WORDS.findall(text.lower()))
+
+
+def names(text: str, company: str) -> bool:
+    """Whether the text holds the company's name, as whole words."""
+    name = clean(company)
+    return bool(name) and f" {name} " in f" {clean(text)} "
+
+
+def wording(field: Field) -> str:
+    """What an answer is an answer to: a changed question is asked again."""
+    return clean(f"{field.label} {field.help}")
+
+
+@lru_cache(maxsize=2048)
+def care(field: Field, company: str = "") -> str:
+    """The question's class: who may answer it. Reads the label, help and key, with the company's name left in, so a
+    company called Visa can't hide a word. The one exception is the AI check, in `_promise`."""
+    if _promise(field, company):
+        return PROMISE
+    said = _said(field)
+    legal = any(KNOWN[topic].search(said) for topic in LEGAL_TOPICS) or LEGAL_WORDS.search(said)
+    if legal or consent_kind(field) is not None:
+        return LEGAL
+    return THIS_COMPANY if names(said, company) or ABOUT_THIS_COMPANY.search(said) else ORDINARY
+
+
+@lru_cache(maxsize=2048)
+def _promise(field: Field, company: str) -> str:
+    """An AI-use promise's or an arbitration agreement's name as the preview says it, else "". The choices count too.
+    The company's name is left out of the AI check when that stays honest: "Why Scale AI?" is no promise, but a company
+    called just AI or GPT hides nothing."""
+    said = " ".join([_said(field), *(clean(choice.label) for choice in field.choices)])
+    if ARBITRATION.search(said):
+        return "arbitration"
+    text = _without_name(said, company)
+    return "AI use" if AI.search(text) and (not SKILL.search(text) or PROCESS.search(text)) else ""
+
+
+def _without_name(said: str, company: str) -> str:
+    name = clean(company)
+    if not name or (" " not in name and AI.fullmatch(name)):
+        return said
+    return re.sub(rf"(?<!\S){re.escape(name)}(?!\S)", " ", said)
+
+
+def _said(field: Field) -> str:
+    """The question's words. A survey's country list is ours, not the form's: "AI" there is Anguilla."""
+    return clean(f"{field.label} {SURVEY_COUNTRIES.sub('', field.help)} {field.key}")
 
 
 def match(
@@ -114,15 +223,16 @@ def match(
     answers: dict,
     company: str,
     *,
-    kept: dict[str, tuple[str, str]] | None = None,
+    kept: dict[str, tuple[str, str, str]] | None = None,
     consents: dict[str, str] | None = None,
     files: dict[str, tuple[str, Path] | None] | None = None,
 ) -> tuple[tuple[Line, ...], tuple[str, ...]]:
     """Every field's line, and the warnings (not blocking). `answers` as questionnaire.load gives them, `kept` this
-    job's own answers (key -> answer, 'you' or 'writer'), `consents` kind -> 'accept', 'decline' or 'ask', `files`
-    from documents()."""
+    job's own answers (key -> answer, 'you' or 'writer', its `wording`), `consents` kind -> 'accept', 'decline' or
+    'ask', `files` from documents()."""
     matcher = _Matcher(answers, company, kept or {}, consents or {}, files or {})
-    return tuple(map(matcher.line, form.fields)), _warnings(form, company)
+    lines = tuple(map(matcher.line, form.fields))
+    return lines, _warnings(form, company, lines)
 
 
 def documents(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict[str, tuple[str, Path] | None]:
@@ -139,14 +249,15 @@ def documents(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict[
 def remember(
     conn: sqlcipher3.Connection, label: str, company: str, answer: str = "", today: date | None = None
 ) -> None:
-    """Keep a form's question in your More answers, the company's name saved as [company] so the same question from
-    any company finds it, with `answer` if given. One row per wording: a row keeps the first company and day that
-    asked it, and an answer it holds is never changed."""
+    """Keep a form's ordinary question in your More answers, with `answer` if given. One row per wording: a row keeps
+    the first company and day that asked it, and an answer it holds is never changed. Only for a question of class
+    ORDINARY: the caller asks `care`."""
     values, _, problem = questionnaire.load(conn)
     if problem:
         raise QuestionnaireError(BROKEN.format(problem))
-    wording, answer = clean(label, company), answer.strip()
-    if row := next((row for row in values["more"] if clean(row["question"], company) == wording), None):
+    asked, answer = clean(label), answer.strip()
+    rows = [row for row in values["more"] if OLD_MARKER not in row["question"]]
+    if row := next((row for row in rows if clean(row["question"]) == asked), None):
         if row["answer"] or not answer:
             return
         row["answer"] = answer
@@ -154,22 +265,19 @@ def remember(
         raise QuestionnaireError(FULL)
     else:
         asked_on = (today or date.today()).isoformat()
-        values["more"].append({"question": _marked(label, company), "answer": answer, "asked_by": company[:100],
-                               "asked_on": asked_on})  # fmt: skip
+        values["more"].append({"question": label, "answer": answer, "asked_by": company[:100], "asked_on": asked_on})
     questionnaire.save(conn, questionnaire.check(values))
 
 
-def _marked(label: str, company: str) -> str:
-    """The label with the company's name (whole words, any capitals and punctuation between) as [company]."""
-    if not (words := WORDS.findall(company)):
-        return label
-    name = r"[\W_]+".join(map(re.escape, words))
-    return re.sub(rf"(?<!\w){name}(?!\w)", COMPANY, label, flags=re.IGNORECASE)
-
-
-def _warnings(form: Form, company: str) -> tuple[str, ...]:
-    said = (clean(f"{field.label} {field.help}", company) for field in form.fields)
-    found = [NO_AI_WARNING] if any(NO_AI.search(text) for text in said) else []
+def _warnings(form: Form, company: str, lines: tuple[Line, ...]) -> tuple[str, ...]:
+    said = [_without_name(wording(field), company) for field in form.fields]
+    found = []
+    if any(YOUR_WORDS.search(text) for text in said):
+        found.append(YOUR_WORDS_WARNING)
+    if any(NO_AI.search(text) for text in said):
+        found.append(NO_AI_WARNING)
+        if any(line.source == "Writer draft" for line in lines):
+            found.append(DRAFTS_WARNING)
     if form.limit_note:
         found.append(LIMIT_WARNING.format(form.limit_note))
     return tuple(found)
@@ -182,28 +290,42 @@ class _Matcher:
         self.answers, self.company, self.kept, self.consents, self.files = answers, company, kept, consents, files
         self.saved: dict[str, str] = {}  # your More answers, by their cleaned question
         for pair in answers.get("more") or []:
-            if isinstance(pair, dict) and isinstance(pair.get("answer"), str) and pair["answer"].strip():
-                self.saved.setdefault(clean(str(pair.get("question", "")), company), pair["answer"])
+            if not isinstance(pair, dict) or not isinstance(pair.get("answer"), str) or not pair["answer"].strip():
+                continue
+            question, asked_by = str(pair.get("question", "")), str(pair.get("asked_by") or "")
+            if OLD_MARKER not in question and not names(pair["answer"], asked_by):
+                self.saved.setdefault(clean(question), pair["answer"])
 
     def line(self, field: Field) -> Line:
         if field.kind == "hidden":
             return Line(field, "hidden")
-        words = clean(field.label, self.company)
-        if found := self._kept(field, words):
-            return found
+        kind = care(field, self.company)
+        if kind == PROMISE:  # whatever is kept: you tick it yourself, never the app
+            return Line(field, "left", note=_promise(field, self.company))
+        answer, given_by, asked = self.kept.get(field.key, ("", "", ""))
+        if not answer.strip() or (given_by == "writer" and kind == LEGAL):
+            return self._rules(field, kind)
+        if asked == wording(field):
+            return self._kept(field, answer, given_by)
+        found = self._rules(
+            field, kind
+        )  # your old answer stays until you replace it, but never lands on a new question
+        return replace(found, note=f"{CHANGED}; {found.note}" if found.note else CHANGED)
+
+    def _rules(self, field: Field, kind: str) -> Line:
         if field.kind == "unknown":  # a kind of field the app can't fill
-            return _other(field)
+            return self._other(field)
+        words = clean(field.label)
         for rule in (self._standard, self._upload, self._known, self._eeo, self._saved, self._consent):
             if found := rule(field, words):
                 return found
+        if field.kind == "long_text" and kind == LEGAL:
+            return Line(field, "decide", decision="unknown", note=YOURS_TO_WRITE)
         if field.kind == "long_text" and field.part == "company":
             return Line(field, "write")
-        return _other(field)
+        return self._other(field)
 
-    def _kept(self, field: Field, _: str) -> Line | None:
-        answer, given_by = self.kept.get(field.key, ("", ""))
-        if not answer.strip():
-            return None
+    def _kept(self, field: Field, answer: str, given_by: str) -> Line:
         source = "your answer for this job" if given_by == "you" else "Writer draft"
         if answer == IN_WINDOW:
             return Line(field, "left", source=source, note="you do this in the window")
@@ -230,7 +352,7 @@ class _Matcher:
         """First name: your full name up to its last space; last name: the rest."""
         full = self._answer("contact", "full_name")
         if not full:
-            return _other(field, FILL.format(SECTIONS["contact"]))
+            return self._other(field, FILL.format(SECTIONS["contact"]))
         first, _, last = full.rpartition(" ")
         if field.key == "last_name" and not first:
             return Line(field, "decide", decision="unknown", note="your full name is one word")
@@ -262,14 +384,12 @@ class _Matcher:
         asked = [name for name, pattern in KNOWN.items() if pattern.search(words)]
         if len(asked) != 1:  # two known questions in one: never a guess
             return Line(field, "decide", decision="unknown", note="this asks more than one thing") if asked else None
-        if depends(field, self.company):  # only your answer for this job, kept above, may answer it
-            return Line(field, "decide", decision="unknown", note="this depends on your answer to another question")
+        if asked[0] in LEGAL_TOPICS and (field.kind == "long_text" or not _plain(asked[0], field)):
+            return Line(field, "decide", decision="unknown", note=EYE)
         if field.kind == "long_text" and asked[0] not in FREE_TEXT:  # "Why do you want to relocate?": for the Writer
             return None
-        if asked[0] in ("work", "sponsorship") and places.FOREIGN_NAMES.search(
-            places.STATE_NAMES.sub(" ", field.label)
-        ):
-            return Line(field, "decide", decision="unknown", note="this asks about another country")
+        if asked[0] not in LEGAL_TOPICS and _yes_or_no(field, words):  # a fact is no answer to "Is your GPA above 3.5?"
+            return Line(field, "decide", decision="unknown", note=EYE)
         section, answer = ANSWERS[asked[0]]
         value = answer(self._section(section), words)
         if value is None:
@@ -292,17 +412,13 @@ class _Matcher:
         return Line(field, "fill", (found[0],), f"Questionnaire: {SECTIONS['eeo']}")
 
     def _saved(self, field: Field, words: str) -> Line | None:
-        about = f"{clean(field.key)} {words}"
-        never = depends(field, self.company) or any(pattern.search(about) for pattern in PROMISES)
-        answer = None if never else self.saved.get(words)
+        answer = self.saved.get(words) if care(field, self.company) == ORDINARY else None
         return self._given(field, answer, "your saved answer", NOT_A_CHOICE.format("saved answer")) if answer else None
 
     def _consent(self, field: Field, _: str) -> Line | None:
-        if (found := consent_kind(field, self.company)) is None:
+        if field.kind in ("text", "long_text") or (found := consent_kind(field)) is None:  # a box to type in: yours
             return None
         kind, name = found
-        if kind in ALWAYS_ASK:  # an AI-use promise or an arbitration agreement: you tick it yourself, never the app
-            return Line(field, "left", note=name)
         choice = self.consents.get(kind, "ask") if kind else "ask"  # "": no known kind
         if choice == "decline" and not field.required:
             return Line(field, "empty", note=name)
@@ -312,16 +428,16 @@ class _Matcher:
         return Line(field, "decide", decision="consent", note=note)
 
     def _tick(self, field: Field) -> str | tuple[str, ...]:
-        """A consent given: its box ticked, or the choice that gives it; nothing for a box to type in."""
+        """A remembered consent: its box ticked, or the choice that gives it, on a plain sentence only."""
         if field.kind == "consent":
-            return TICKED
+            return TICKED if plain_consent(field) else ""
         choice = consent_choice(field)
         return (choice.value,) if choice else ""
 
     def _fill(self, field: Field, value: str, section: str, note: str = "") -> Line:
         """A Questionnaire answer; an empty one leaves the field to the last rule, with what to fill in."""
         if not value:
-            return _other(field, FILL.format(SECTIONS[section]))
+            return self._other(field, FILL.format(SECTIONS[section]))
         source = f"Questionnaire: {SECTIONS[section]}"
         return self._given(field, value, source, NOT_A_CHOICE.format("Questionnaire answer"), note)
 
@@ -337,14 +453,20 @@ class _Matcher:
         """The values of the choices the answer names (for a multi field, one a line); () unless each names exactly
         one choice."""
         chosen = []
-        for wanted in filter(None, (clean(text, self.company) for text in answer.splitlines() or [answer])):
-            found = [choice.value for choice in field.choices if fits(clean(choice.label, self.company), wanted)]
+        for wanted in filter(None, map(clean, answer.splitlines() or [answer])):
+            found = [choice.value for choice in field.choices if fits(clean(choice.label), wanted)]
             if len(found) != 1:
                 return ()
             chosen.append(found[0])
         if field.kind == "single" and len(chosen) > 1:
             return ()
         return tuple(dict.fromkeys(chosen))
+
+    def _other(self, field: Field, note: str = "") -> Line:
+        """The last rule: a required field is yours to decide, an optional one is left empty."""
+        if field.required:
+            return Line(field, "decide", decision="unknown", note=note)
+        return Line(field, "empty", note=note, askable=True)
 
     def _section(self, name: str) -> dict:
         section = self.answers.get(name)
@@ -360,13 +482,6 @@ class _Matcher:
         return "US" if name in US_NAMES else places.COUNTRIES.get(name, "")
 
 
-def _other(field: Field, note: str = "") -> Line:
-    """The last rule: a required field is yours to decide, an optional one is left empty."""
-    if field.required:
-        return Line(field, "decide", decision="unknown", note=note)
-    return Line(field, "empty", note=note, askable=True)
-
-
 def written(answers: dict) -> dict[str, str]:
     """Your work, start date and salary answers as the rules write them on a form ("" for one you left empty)."""
     work, availability = answers.get("work") or {}, answers.get("availability") or {}
@@ -379,31 +494,43 @@ def written(answers: dict) -> dict[str, str]:
     }
 
 
-def consent_kind(field: Field, company: str = "") -> tuple[str, str] | None:
+def consent_kind(field: Field) -> tuple[str, str] | None:
     """A consent's kind (a CONSENTS kind, "" for none known) and its name as the preview says it; None for a field
-    that is no consent."""
-    words = clean(field.label, company)
-    if field.kind != "consent" and field.part != "privacy" and not CONSENT_WORDS.search(words):
+    that is no consent. An AI-use promise or arbitration never comes here: `care` stops it first."""
+    said = _said(field)
+    if field.kind != "consent" and field.part != "privacy" and not CONSENT_WORDS.search(said):
         return None
-    about = f"{clean(field.key)} {words}"
-    return next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(about)), ("", "consent"))
+    return next(((kind, name) for kind, name, pattern in CONSENTS if pattern.search(said)), ("", "consent"))
+
+
+def plain_consent(field: Field) -> bool:
+    """Whether the sentence simply gives its kind of consent: no negative, and nothing beyond the kind."""
+    return not NOT_PLAIN.search(wording(field))
 
 
 def consent_choice(field: Field) -> Choice | None:
-    """The choice that gives a consent: its one yes choice, else the only choice there is, unless that is a no. For a
-    consent you accepted: AI-use promises and arbitration never come here."""
+    """The choice that gives a plain consent: its one yes choice, else the only choice there is, unless that says no."""
     labels = [(choice, clean(choice.label)) for choice in field.choices]
-    yes = [choice for choice, label in labels if fits(label, "yes")]
-    if len(labels) == 1 and not fits(labels[0][1], "no"):
-        return labels[0][0]
-    return yes[0] if len(yes) == 1 else None
+    yes = [(choice, label) for choice, label in labels if fits(label, "yes")]
+    found = labels if len(labels) == 1 else yes if len(yes) == 1 else []
+    if not found or not plain_consent(field) or fits(found[0][1], "no") or NOT_PLAIN.search(found[0][1]):
+        return None
+    return found[0][0]
 
 
-def depends(field: Field, company: str = "") -> bool:
-    """A work or sponsorship question that points at another answer ("the location(s) you selected"): your usual answer
-    may not hold for it, so it is answered for this job only."""
-    words = clean(field.label, company)
-    return DEPENDS.search(words) is not None and any(KNOWN[name].search(words) for name in ("work", "sponsorship"))
+def _yes_or_no(field: Field, words: str) -> bool:
+    """Whether a question wants a yes or a no: by how it opens, or by its choices."""
+    labels = [clean(choice.label) for choice in field.choices]
+    return YES_OR_NO.match(words) is not None or all(
+        any(fits(label, word) for label in labels) for word in ("yes", "no")
+    )
+
+
+def _plain(topic: str, field: Field) -> bool:
+    """A legal topic asked in one of its plain forms, its help saying nothing that turns the meaning."""
+    return PLAIN[topic].fullmatch(LABEL_TAIL.sub("", clean(field.label))) is not None and not TWIST.search(
+        clean(field.help)
+    )
 
 
 def fits(label: str, wanted: str) -> bool:

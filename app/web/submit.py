@@ -34,11 +34,12 @@ ALREADY = "Already reading this form"
 TO_REMEMBER = ("text", "single", "multi")  # a required question no rule answers: kept in More answers to answer once
 TYPED = ("text", "location", "long_text", "single", "multi")  # the questions you answer here
 MAX_LINE, MAX_LONG = 2_000, 20_000  # characters of a short and a long answer
-YOURS = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on)
-    VALUES (?, ?, ?, 'you', NULL, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
-    given_by = 'you', preparation_id = NULL, saved_on = excluded.saved_on"""  # replaces a Writer draft
+YOURS = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
+    VALUES (?, ?, ?, 'you', NULL, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
+    given_by = 'you', preparation_id = NULL, saved_on = excluded.saved_on, wording = excluded.wording"""
 FORGET = "DELETE FROM form_answers WHERE job_id = ? AND field = ? AND given_by = 'you'"
 GONE = "This question is no longer on the form: read it again"
+NAMES_COMPANY = "This answer names {}, so it is kept for this job only"
 NOT_HERE = "This question isn't answered here: do it in the window"
 PROMISE = "You tick this yourself in the window: the app never answers it"
 EMPTY = "Type an answer, or press Leave it empty"
@@ -78,7 +79,7 @@ def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview
     form, read_on, read_from, problem = saved
     answers = questionnaire.load(conn)[0]
     company = conn.execute("SELECT company FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
-    kept = {field: (answer, given_by) for field, answer, given_by in conn.execute(KEPT, (job_id,))}
+    kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
     lines, warnings = match.match(
         form, answers, company, kept=kept, consents=answers.get("consents") or {},
         files=match.documents(conn, data_dir, job_id),
@@ -132,7 +133,14 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         for every form; why it could not be (More answers full, or broken saved answers), else None."""
         conn = request.app.state.conn
         for line in preview(conn, data_dir, job["id"]).lines:
-            if line.decision == "unknown" and not line.note and line.field.required and _answerable(line.field):
+            ordinary = match.care(line.field, job["company"]) == match.ORDINARY
+            if (
+                ordinary
+                and line.decision == "unknown"
+                and not line.note
+                and line.field.required
+                and _answerable(line.field)
+            ):
                 try:
                     match.remember(conn, line.field.label, job["company"])
                 except questionnaire.QuestionnaireError as error:
@@ -152,9 +160,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             text = _typed(field, request.state.form)
         except _Refused as refused:
             return _part(request, job, failed=str(refused))
-        _keep(conn, job_id, field.key, text)
-        remembered = field.kind != "long_text" and not match.depends(field, job["company"])
-        if remembered and request.state.form.get("save") == "1":
+        _keep(conn, job_id, field, text)
+        saved = field.kind != "long_text" and match.care(field, job["company"]) == match.ORDINARY
+        if saved and request.state.form.get("save") == "1":
+            if match.names(text, job["company"]):
+                return _part(request, job, note=NAMES_COMPANY.format(job["company"]))
             try:
                 match.remember(conn, field.label, job["company"], text)
             except questionnaire.QuestionnaireError as error:  # the answer for this job is kept all the same
@@ -169,10 +179,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if refused:
             return _part(request, job, failed=refused)
         choice = request.state.form.get("choice")
-        kind = (match.consent_kind(field, job["company"]) or (None,))[0]
+        kind = (match.consent_kind(field) or (None,))[0]
         if kind is None or choice not in ("accept", "decline"):
             return _part(request, job, failed=NOT_HERE)
-        if kind:
+        if kind and match.plain_consent(field):  # a sentence that goes further is for this job only
             values, _, problem = questionnaire.load(conn)
             if problem:
                 return _part(request, job, failed=match.BROKEN.format(problem))
@@ -181,11 +191,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         elif choice == "accept":
             if not (given := _yes(field)):
                 return _part(request, job, failed=NO_YES)
-            _keep(conn, job_id, field.key, given)
+            _keep(conn, job_id, field, given)
         elif field.required:
             return _part(request, job, failed=REQUIRED)
         else:
-            _keep(conn, job_id, field.key, match.LEFT_EMPTY)
+            _keep(conn, job_id, field, match.LEFT_EMPTY)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/window")
@@ -194,7 +204,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         job, field, refused = _asked(request, job_id, promise=True)
         if refused:
             return _part(request, job, failed=refused)
-        _keep(request.app.state.conn, job_id, field.key, match.IN_WINDOW)
+        _keep(request.app.state.conn, job_id, field, match.IN_WINDOW)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/empty")
@@ -203,7 +213,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         job, field, refused = _asked(request, job_id)
         if refused or field.required:
             return _part(request, job, failed=refused or NOT_OPTIONAL)
-        _keep(request.app.state.conn, job_id, field.key, match.LEFT_EMPTY)
+        _keep(request.app.state.conn, job_id, field, match.LEFT_EMPTY)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/forget")
@@ -263,7 +273,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         field = next((field for field in saved[0].fields if field.key == key), None) if saved else None
         if field is None or field.kind == "hidden":
             return job, None, GONE
-        if not promise and (found := match.consent_kind(field, job["company"])) and found[0] in match.ALWAYS_ASK:
+        if not promise and match.care(field, job["company"]) == match.PROMISE:
             return job, field, PROMISE
         return job, field, None
 
@@ -291,10 +301,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             read_on=found and _day(found.read_on), read_from=found and READ_FROM[found.read_from],
             shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
-            kinds={line.field.key: match.consent_kind(line.field, job["company"]) for line in lines
-                   if line.decision == "consent"},
+            remembered={line.field.key for line in lines if line.decision == "consent"
+                        and (match.consent_kind(line.field) or ("",))[0] and match.plain_consent(line.field)},
             askable={line.field.key for line in lines if line.askable and _answerable(line.field)},
-            this_job_only={line.field.key for line in lines if match.depends(line.field, job["company"])},
+            this_job_only={line.field.key for line in lines
+                           if match.care(line.field, job["company"]) != match.ORDINARY},
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
@@ -347,10 +358,10 @@ def _typed(field: Field, form: dict[str, str]) -> str:
     return text
 
 
-def _keep(conn: sqlcipher3.Connection, job_id: int, key: str, answer: str) -> None:
-    """Your answer for this job's question, replacing a Writer draft."""
+def _keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) -> None:
+    """Your answer for this job's question as it is worded now, replacing a Writer draft."""
     with conn:
-        conn.execute(YOURS, (job_id, key, answer, now()))
+        conn.execute(YOURS, (job_id, field.key, answer, now(), match.wording(field)))
 
 
 def _yes(field: Field) -> str:

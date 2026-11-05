@@ -45,10 +45,11 @@ SHAPE = {
 DEFAULT_LIMIT = 1_200  # characters, unless the question states its own limit (owner)
 MAX_TEXT, MAX_NOTES = 20_000, 2000  # only against a broken answer
 STATED = re.compile(r"\b(\d[\d,]*)\s*-?\s*(words?|characters?|chars?)\b", re.IGNORECASE)  # "100 words", "500-character"
-KEPT = "SELECT field, answer, given_by FROM form_answers WHERE job_id = ?"
-SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on)
-    VALUES (?, ?, ?, 'writer', ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
-    preparation_id = excluded.preparation_id, saved_on = excluded.saved_on WHERE form_answers.given_by = 'writer'"""
+KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
+SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
+    VALUES (?, ?, ?, 'writer', ?, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
+    preparation_id = excluded.preparation_id, saved_on = excluded.saved_on, wording = excluded.wording
+    WHERE form_answers.given_by = 'writer'"""
 NO_FORM = "Read the form first"
 OWN_WORDS = "This form asks that application materials be your own: write these answers yourself"
 NO_QUESTIONS = "This form has no long questions for the Writer"
@@ -66,7 +67,7 @@ def questions(conn: sqlcipher3.Connection, job_id: int) -> tuple[list[Field], st
         return [], NO_FORM
     answers = questionnaire.load(conn)[0]
     company = conn.execute("SELECT company FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
-    kept = {field: (answer, given_by) for field, answer, given_by in conn.execute(KEPT, (job_id,))}
+    kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
     lines, warnings = match.match(saved[0], answers, company, kept=kept, consents=answers.get("consents") or {})
     if match.NO_AI_WARNING in warnings:
         return [], OWN_WORDS
@@ -136,7 +137,10 @@ def checked(text: str, fields: list[Field], entries: list[Entry], ad: str) -> Ch
     flags = [{"field": field.key, "numbers": new} for label, field in asked.items()
              if (new := new_numbers(texts[label], known))]  # fmt: skip
     draft = {
-        "answers": [{"field": field.key, "text": texts[label]} for label, field in asked.items()],
+        "answers": [
+            {"field": field.key, "text": texts[label], "wording": match.wording(field)}
+            for label, field in asked.items()
+        ],  # fmt: skip
         "from": [{"source": labels[label].source, "tile_id": labels[label].tile.tile_id} for label in cited],
         "notes": " ".join(CONTROL.sub("", notes).split())[:MAX_NOTES],
     }
@@ -147,7 +151,8 @@ def save(conn: sqlcipher3.Connection, job_id: int, preparation: int, draft: dict
     """Each answer kept for the job as the Writer's, replacing its earlier draft but never an answer you typed. Inside
     the caller's transaction: the version ends with it (app/council/flow.py)."""
     saved_on = now()
-    conn.executemany(SAVE, [(job_id, item["field"], item["text"], preparation, saved_on) for item in draft["answers"]])
+    conn.executemany(SAVE, [(job_id, item["field"], item["text"], preparation, saved_on, item.get("wording", ""))
+                            for item in draft["answers"]])  # fmt: skip
 
 
 def _question(label: str, field: Field) -> str:

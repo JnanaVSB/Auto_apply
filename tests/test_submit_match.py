@@ -32,8 +32,10 @@ def field(label, kind="text", required=False, part="company", key=None, choices=
     return Field(key or label, label, kind, required, part, choices=options, **more)
 
 
-def line(asked, answers=ANSWERS, company="Acme", **given):
-    return match.match(Form((asked,)), answers, company, **given)[0][0]
+def line(asked, answers=ANSWERS, company="Acme", kept=None, **given):
+    """The question's line; a kept answer is an answer to today's wording unless it says otherwise."""
+    kept = {key: (*row, match.wording(asked))[:3] for key, row in (kept or {}).items()}
+    return match.match(Form((asked,)), answers, company, kept=kept, **given)[0][0]
 
 
 def changed(section, **values):
@@ -52,14 +54,17 @@ def said(found):
 @pytest.mark.parametrize(
     ("text", "cleaned"),
     [
-        ("Why do you want to join ACME?!", "why do you want to join [company]"),
-        ("Why [Company]?", "why [company]"),
+        ("Why do you want to join ACME?!", "why do you want to join acme"),
         ("  Résumé/CV\n(PDF) ", "résumé cv pdf"),
-        ("Acmeville office", "acmeville office"),  # the company's name only as a whole word
     ],
 )
-def test_wording_is_cleaned_with_the_company_as_a_marker(text, cleaned):
-    assert match.clean(text, "Acme") == cleaned
+def test_wording_is_cleaned(text, cleaned):
+    assert match.clean(text) == cleaned
+
+
+def test_a_companys_name_counts_only_as_whole_words():
+    assert match.names("Why ACME, Inc?", "Acme Inc.") and match.names("Acme's blue", "Acme")
+    assert not match.names("Acmeville office", "Acme") and not match.names("Why us?", "")
 
 
 def test_every_field_gets_a_line_in_the_form_order():
@@ -166,7 +171,6 @@ def test_uploads_take_the_newest_pdf_or_say_why_not(upload, files, result):
         ("Are you legally authorized to work in the United States?", "Yes", "Work authorization"),
         ("Will you now or in the future require visa sponsorship?", "Yes", "Work authorization"),
         ("Do you currently require sponsorship?", "No", "Work authorization"),
-        ("Are you authorized to work in New Jersey?", "Yes", "Work authorization"),  # a state, not Jersey
         ("Are you open to relocation?", "Yes", "Availability"),
         ("What is your earliest start date?", "January 15, 2027", "Availability"),
         ("Notice period", "Two weeks", "Availability"),
@@ -193,8 +197,8 @@ def test_a_known_question_with_choices_picks_the_one_that_fits():
     ("label", "note"),
     [
         ("Are you legally authorized to work in the US without sponsorship?", "this asks more than one thing"),
-        ("Are you legally authorized to work in Canada?", "this asks about another country"),
-        ("Will you require sponsorship to work in the EMEA region?", "this asks about another country"),
+        ("Are you legally authorized to work in Canada?", "the wording needs your eye"),
+        ("Will you require sponsorship to work in the EMEA region?", "the wording needs your eye"),
     ],
 )
 def test_a_question_the_rules_cannot_answer_alone_is_yours_to_decide(label, note):
@@ -300,9 +304,15 @@ def test_a_lever_survey_for_other_countries_is_left_empty(country):
     assert said(line(survey("CA"), changed("contact", country="Canada")))[0] == "fill"
 
 
-def test_a_saved_more_answer_fits_the_same_question_from_any_company():
-    found = line(field("Why do you want to join Globex?", "long_text", True), company="Globex")
-    assert (found.status, found.value, found.source) == ("fill", "Robots.", "your saved answer")
+def test_a_saved_more_answer_fills_the_same_ordinary_question():
+    saved = ANSWERS | {"more": [{"question": "Favourite colour?", "answer": "Teal"}]}
+    found = line(field("Favourite colour?", required=True), saved)
+    assert (found.status, found.value, found.source) == ("fill", "Teal", "your saved answer")
+
+
+def test_an_old_row_with_the_company_marker_never_matches():
+    assert line(field("Why do you want to join Globex?", "long_text", True), company="Globex").status == "write"
+    assert said(line(field("Why do you want to join [company]?", required=True))) == ("decide", "unknown", "")
 
 
 def test_an_empty_saved_answer_does_not_count():
@@ -333,7 +343,7 @@ def test_a_remembered_consent_is_given_and_otherwise_asked(asked, kind):
     ("label", "kind", "name"),
     [
         ("I consent to Acme's use of AI tools to review my application", "ai", "AI use"),
-        ("I attest that all information I provide is true", "ai", "AI use"),
+        ("I attest that I wrote this without AI tools", "ai", "AI use"),
         ("I agree to resolve any dispute through arbitration", "arbitration", "arbitration"),
     ],
 )
@@ -366,15 +376,23 @@ def test_a_saved_answer_never_answers_ai_use_or_arbitration(kind):
         assert said(line(asked, saved)) == ("left", "", name)
 
 
-def test_a_saved_answer_may_answer_a_consent_of_no_known_kind():
+def test_a_saved_answer_never_answers_a_consent():
     asked = field("I acknowledge the code of conduct", "consent")
-    found = line(asked, ANSWERS | {"more": [{"question": asked.label, "answer": "yes"}]})
-    assert (found.status, found.value, found.source) == ("fill", "yes", "your saved answer")
+    saved = ANSWERS | {"more": [{"question": asked.label, "answer": "yes"}]}
+    assert said(line(asked, saved)) == ("decide", "consent", "consent")
 
 
-@pytest.mark.parametrize("label", ["Why do you want to relocate?", "Tell us about your graduation project"])
-def test_a_long_question_on_a_yes_no_or_education_answer_is_for_the_writer(label):
-    assert line(field(label, "long_text", True)).status == "write"
+def test_a_long_question_on_an_education_answer_is_for_the_writer():
+    assert line(field("Tell us about your graduation project", "long_text", True)).status == "write"
+
+
+def test_a_long_box_on_a_legal_question_is_yours_never_the_writers():
+    assert said(line(field("Why do you want to relocate?", "long_text", True))) == (
+        "decide", "unknown", "the wording needs your eye",
+    )  # fmt: skip
+    assert said(line(field("Tell us about any disability", "long_text", True))) == (
+        "decide", "unknown", "this one is yours to write",
+    )  # fmt: skip
 
 
 def test_a_long_salary_question_still_gets_the_questionnaire_salary():
@@ -442,29 +460,23 @@ def remembered(conn):
 
 
 def test_remember_keeps_one_row_per_wording_with_its_first_asker(conn):
-    match.remember(conn, "Have you worked at Acme before?", "Acme", today=date(2026, 11, 4))
-    match.remember(conn, "Have you worked at GLOBEX before?", "Globex", "No", today=date(2026, 11, 5))
-    match.remember(conn, "Have you worked at Initech before?", "Initech", "Yes", today=date(2026, 11, 6))
+    match.remember(conn, "What is your shoe size?", "Acme", today=date(2026, 11, 4))
+    match.remember(conn, "What is your SHOE size", "Globex", "9", today=date(2026, 11, 5))
+    match.remember(conn, "What is your shoe size?", "Initech", "10", today=date(2026, 11, 6))
     assert remembered(conn) == [
-        {
-            "question": "Have you worked at [company] before?",
-            "answer": "No",
-            "asked_by": "Acme",
-            "asked_on": "2026-11-04",
-        }
+        {"question": "What is your shoe size?", "answer": "9", "asked_by": "Acme", "asked_on": "2026-11-04"}
     ]
 
 
-def test_remember_marks_the_company_however_it_is_written():
-    assert match._marked("Why ACME, Inc? Acmeville is near.", "Acme Inc.") == "Why [company]? Acmeville is near."
-    assert match._marked("Why us?", "") == "Why us?"
-
-
 def test_a_remembered_question_answers_the_same_question_from_another_company(conn):
-    match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
-    asked = field("Have you worked at Globex before?", "single", choices=YES_NO)
-    found = match.match(Form((asked,)), questionnaire.load(conn)[0], "Globex")[0][0]
-    assert (chosen(found), found.source) == (["No"], "your saved answer")
+    match.remember(conn, "What is your shoe size?", "Acme", "9")
+    found = match.match(Form((field("What is your shoe size?"),)), questionnaire.load(conn)[0], "Globex")[0][0]
+    assert (found.value, found.source) == ("9", "your saved answer")
+
+
+def test_a_saved_answer_naming_the_company_that_asked_is_never_used():
+    saved = ANSWERS | {"more": [{"question": "Favourite colour?", "answer": "Acme's blue", "asked_by": "Acme"}]}
+    assert line(field("Favourite colour?"), saved, "Globex").status == "empty"
 
 
 def test_remember_refuses_a_full_list_and_saves_nothing(conn):
@@ -518,7 +530,7 @@ SPONSORED = (
 
 @pytest.mark.parametrize(
     ("label", "name"),
-    [("I attest that my answers are true", "AI use"), ("I agree to binding arbitration", "arbitration")],
+    [("I attest that I used no AI tools", "AI use"), ("I agree to binding arbitration", "arbitration")],
 )
 def test_a_one_choice_promise_is_left_for_you_whatever_you_accepted(label, name):
     asked = field(label, "single", True, choices=("I agree",))
@@ -541,8 +553,8 @@ def test_an_only_choice_that_says_no_is_never_a_consent():
 @pytest.mark.parametrize("label", [AUTHORIZED, SPONSORED])
 def test_a_question_pointing_at_another_answer_is_answered_for_this_job_only(label):
     asked = field(label, "single", True, choices=YES_NO)
-    decision = ("decide", "unknown", "this depends on your answer to another question")
-    assert said(line(asked)) == decision and match.depends(asked, "Acme")
+    decision = ("decide", "unknown", "the wording needs your eye")
+    assert said(line(asked)) == decision and match.care(asked, "Acme") == match.LEGAL
     saved = ANSWERS | {"more": [{"question": label, "answer": "No"}]}
     assert said(line(asked, saved)) == decision
     assert chosen(line(asked, kept={asked.key: ("No", "you")})) == ["No"]
@@ -570,3 +582,56 @@ def test_only_a_question_no_rule_answers_can_still_be_answered():
     assert line(field("Hobby?")).askable
     assert not line(field("Additional information", "long_text", key="comments", part="standard")).askable
     assert not line(field("Subscribe to our newsletter", "consent"), consents={"marketing": "decline"}).askable
+
+
+def test_an_answer_belongs_to_the_wording_it_answered():
+    asked = field("Favourite colour?", "single", required=True, choices=YES_NO)
+    found = line(asked, kept={asked.key: ("Yes", "you", "favourite color")})
+    assert said(found) == ("decide", "unknown", "the question changed since you answered it")
+    assert line(asked, kept={asked.key: ("Yes", "you", "")}).note == match.CHANGED  # a row from before version 19
+    assert chosen(line(asked, kept={asked.key: ("Yes", "you", match.wording(asked))})) == ["Yes"]
+
+
+def test_lever_keys_moved_by_one_never_carry_an_answer_to_the_next_question():
+    moved = field("Are you authorized to work in the UK?", "single", True, key="cards[c][field1]", choices=YES_NO)
+    old = field("Favourite colour?", "single", True, key="cards[c][field1]", choices=YES_NO)
+    found = line(moved, kept={moved.key: ("Yes", "you", match.wording(old))})
+    assert said(found) == (
+        "decide",
+        "unknown",
+        "the question changed since you answered it; the wording needs your eye",
+    )
+
+
+def test_a_promise_with_a_kept_answer_stays_left_for_you():
+    asked = field("AI Policy for Application", "single", True, choices=YES_NO)
+    assert said(line(asked, kept={asked.key: ("Yes", "you")})) == ("left", "", "AI use")
+
+
+def test_a_writer_draft_on_a_legal_question_is_ignored_and_your_answer_is_not():
+    asked = field("Tell us about any disability", "long_text", True)
+    assert line(asked, kept={asked.key: ("A draft.", "writer")}).status == "decide"
+    assert line(asked, kept={asked.key: ("My words.", "you")}).value == "My words."
+
+
+def test_an_optional_question_no_rule_answers_can_be_answered_unless_it_is_a_promise():
+    assert line(field("Do you have a visa?")).askable and line(field("Why Acme?")).askable
+    assert not line(field("AI Policy for Application")).askable
+
+
+def test_a_form_forbidding_ai_warns_about_writer_drafts_kept_from_before():
+    asked = field("Why Acme?", "long_text", help="Answers must be your own.")
+    form = Form((asked,))
+    kept = {asked.key: ("A draft.", "writer", match.wording(asked))}
+    assert match.match(form, ANSWERS, "Acme", kept=kept)[1] == (match.NO_AI_WARNING, match.DRAFTS_WARNING)
+
+
+@pytest.mark.parametrize(
+    ("label", "choices"),
+    [("Is your notice period under a month?", ()), ("Salary expectations met", YES_NO), ("Have you graduated?", ())],
+)
+def test_a_yes_or_no_question_is_never_answered_with_a_fact(label, choices):
+    answers = changed("education", graduation="2027-05")
+    assert said(line(field(label, "single" if choices else "text", True, choices=choices), answers)) == (
+        "decide", "unknown", "the wording needs your eye",
+    )  # fmt: skip

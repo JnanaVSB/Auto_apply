@@ -76,9 +76,11 @@ def test_a_greenhouse_form_is_read_once_the_resume_is_ready_and_previewed(client
 
 def test_the_preview_shows_a_chosen_choices_label_never_its_value(conn, data_dir):
     job = made_up_job(conn, data_dir)
-    submit.save(conn, job, greenhouse.parse(FORM)[0], "api")
+    sponsor = question("Do you require visa sponsorship?", "question_9", "multi_value_single_select", True,
+                       [("Yes", 1), ("No", 0)])  # fmt: skip
+    submit.save(conn, job, greenhouse.parse(FORM | {"questions": [*FORM["questions"], sponsor]})[0], "api")
     lines = {line.field.key: line for line in form_part.preview(conn, data_dir, job).lines}
-    assert (lines["question_102"].value, record.shown(lines["question_102"])) == (("0",), "No")
+    assert (lines["question_9"].value, record.shown(lines["question_9"])) == (("0",), "No")
     assert record.shown(lines["resume"]) == "Resume v3"
 
 
@@ -164,6 +166,7 @@ def test_an_ai_use_promise_is_left_for_you_and_never_an_open_decision(client, co
     assert "Decision required" not in client.get(f"/jobs/{job}/form").text
 
 
+YES_NO = (submit.Choice("Yes", "1"), submit.Choice("No", "0"))
 PAPER = submit.Field("question_1", "What do you like about Acme?", "text", True, "company")
 ROBOTICS = submit.Choice("Robotics <script>x</script>", "7")
 TEAM = submit.Field(
@@ -198,13 +201,63 @@ def status(conn, data_dir, job, key):
 
 
 def test_a_short_answer_is_kept_for_the_job_and_with_save_for_every_form(client, conn, data_dir, job):
-    press(client, job, "answer", field=PAPER.key, answer="  The robots.  ")
-    assert one(conn, KEPT_ROW, job, PAPER.key) == ("The robots.", "you") and questionnaire.load(conn)[0]["more"] == []
-    press(client, job, "answer", field=PAPER.key, answer="The robots, again.", save="1")
+    press(client, job, "answer", field=HOBBY.key, answer="  Chess.  ")
+    assert one(conn, KEPT_ROW, job, HOBBY.key) == ("Chess.", "you") and questionnaire.load(conn)[0]["more"] == []
+    press(client, job, "answer", field=HOBBY.key, answer="Chess, again.", save="1")
     assert [(row["question"], row["answer"]) for row in questionnaire.load(conn)[0]["more"]] == [
-        ("What do you like about [company]?", "The robots, again."),
+        ("Hobby?", "Chess, again."),
     ]  # fmt: skip
-    assert status(conn, data_dir, job, PAPER.key).status == "fill"
+    assert status(conn, data_dir, job, HOBBY.key).status == "fill"
+
+
+def test_save_is_ignored_for_a_question_that_isnt_ordinary(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    about_us = submit.Field("question_1", "What do you like about Acme?", "text", True, "company")
+    legal = submit.Field("question_2", "Have you ever been convicted of a felony?", "text", True, "company")
+    submit.save(conn, job, submit.Form((about_us, legal)), "api")
+    assert "Save to my Questionnaire" not in client.get(f"/jobs/{job}/form").text
+    for asked in (about_us, legal):
+        press(client, job, "answer", field=asked.key, answer="Something", save="1")
+        assert one(conn, KEPT_ROW, job, asked.key) == ("Something", "you")
+    assert questionnaire.load(conn)[0]["more"] == []
+
+
+def test_an_answer_naming_the_company_is_kept_for_this_job_only(client, conn, data_dir, job):
+    text = press(client, job, "answer", field=HOBBY.key, answer="Reading about Acme", save="1").text
+    assert "This answer names Acme, so it is kept for this job only" in text
+    assert one(conn, KEPT_ROW, job, HOBBY.key)[0] == "Reading about Acme" and questionnaire.load(conn)[0]["more"] == []
+
+
+def test_a_promise_is_refused_by_every_route_but_the_window(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    promise = submit.Field("question_1", "AI Policy for Application", "single", True, "company", choices=YES_NO)
+    submit.save(conn, job, submit.Form((promise,)), "api")
+    for action, fields in (("answer", {"answer": "1"}), ("consent", {"choice": "accept"}), ("empty", {})):
+        assert "the app never answers it" in press(client, job, action, field=promise.key, **fields).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+    press(client, job, "window", field=promise.key)
+    assert status(conn, data_dir, job, promise.key).status == "left"
+
+
+def test_accepting_a_sentence_that_goes_further_never_changes_your_remembered_consent(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    further = submit.Field("question_1", "I consent to the privacy policy and to sharing my data", "consent", True,
+                           "privacy")  # fmt: skip
+    submit.save(conn, job, submit.Form((further,)), "api")
+    assert "for this job only" in client.get(f"/jobs/{job}/form").text
+    press(client, job, "consent", field=further.key, choice="accept")
+    assert questionnaire.load(conn)[0]["consents"]["privacy"] == "ask"
+    assert one(conn, KEPT_ROW, job, further.key) == (match.TICKED, "you")
+
+
+def test_a_reworded_question_is_asked_again_and_your_old_answer_stays(client, conn, data_dir, job):
+    press(client, job, "answer", field=TEAM.key, answer="8")
+    reworded = submit.Field(TEAM.key, "Which team would you rather not join?", "single", True, "company",
+                            choices=TEAM.choices)  # fmt: skip
+    submit.save(conn, job, submit.Form((reworded,)), "api")
+    found = status(conn, data_dir, job, TEAM.key)
+    assert (found.status, found.note) == ("decide", "the question changed since you answered it")
+    assert one(conn, KEPT_ROW, job, TEAM.key) == ("Search", "you")
 
 
 def test_choices_are_kept_as_their_labels_and_filled_by_the_rules(client, conn, data_dir, job):
@@ -274,7 +327,8 @@ def test_in_the_window_and_leave_it_empty_close_a_decision_and_change_brings_it_
 
 def test_your_edit_of_a_writer_draft_is_yours_and_a_later_draft_leaves_it(client, conn, data_dir, job):
     with conn:
-        conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then')", (job, WHY.key))
+        conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then', ?)",
+                     (job, WHY.key, match.wording(WHY)))  # fmt: skip
     text = client.get(f"/jobs/{job}/form").text
     assert "(up to 100 words; Writer draft)" in text and ">A draft.</textarea>" in text
     press(client, job, "answer", field=WHY.key, answer="My own words.\r\nTwo lines.")
@@ -362,7 +416,6 @@ def test_a_simplify_job_never_gets_a_link(client, conn, data_dir):
 
 
 SELECTED = "Are you authorized to work in the location(s) you selected in your previous response?"
-YES_NO = (submit.Choice("Yes", "1"), submit.Choice("No", "0"))
 DEPENDS = submit.Field("question_1", SELECTED, "single", True, "company", choices=YES_NO)
 
 
@@ -412,8 +465,31 @@ def test_an_optional_question_no_rule_answers_has_a_folded_box(client, conn, dat
     assert [(row["question"], row["answer"]) for row in questionnaire.load(conn)[0]["more"]] == [("Hobby?", "Chess")]
 
 
+def test_an_optional_legal_question_has_a_folded_box_without_the_save_tick(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    visa = submit.Field("question_1", "Do you have a visa?", "single", False, "company", choices=YES_NO)
+    submit.save(conn, job, submit.Form((visa,)), "api")
+    text = client.get(f"/jobs/{job}/form").text
+    assert "<summary>Answer it</summary>" in text and "Save to my Questionnaire" not in text
+    press(client, job, "answer", field=visa.key, answer="1", save="1")
+    assert one(conn, KEPT_ROW, job, visa.key) == ("Yes", "you") and questionnaire.load(conn)[0]["more"] == []
+
+
 def test_a_records_upload_shows_its_version_once(client, conn, data_dir):
     job = made_up_job(conn, data_dir)
     submit.save(conn, job, submit.Form((submit.Field("resume", "Resume/CV", "file", True, "standard"),)), "api")
     text = press(client, job, "submitted", on="2026-11-04").text
     assert '<td>Resume v3</td><td class="muted"></td>' in text
+
+
+def test_no_needs_answer_row_for_a_question_that_isnt_ordinary(client, conn, data_dir, web):
+    asked = [
+        question("AI Policy for Application", "question_1", "input_text", required=True),
+        question("Have you ever been convicted of a felony?", "question_2", "input_text", required=True),
+        question("What do you like about Acme?", "question_3", "input_text", required=True),
+        question("I acknowledge the code of conduct", "question_4", "input_text", required=True),
+        question("What is your favourite paper?", "question_5", "input_text", required=True),
+    ]
+    web.pages[GREENHOUSE_FORM] = REPLY | {"questions": asked, "education": None}
+    client.get(f"/jobs/{made_up_job(conn, data_dir)}/form")
+    assert [row["question"] for row in questionnaire.load(conn)[0]["more"]] == ["What is your favourite paper?"]

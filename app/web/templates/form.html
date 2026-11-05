@@ -71,7 +71,7 @@
       {% elif line.decision == "consent" %}
       {{ post("consent", "Accept", {"field": field.key, "choice": "accept"}) }}
       {{ post("consent", "Decline", {"field": field.key, "choice": "decline"}) }}
-      {% if kinds[field.key] and kinds[field.key][0] %}<span class="muted">remembered for every form</span>{% else %}<span class="muted">for this job only</span>{% endif %}
+      {% if field.key in remembered %}<span class="muted">remembered for every form</span>{% else %}<span class="muted">for this job only</span>{% endif %}
       {% elif line.decision == "cover_letter" %}
       <br><span class="muted">Press Write cover letter in the Ready to Apply box: the letter is filled in here once it is done.</span>
       {% endif %}

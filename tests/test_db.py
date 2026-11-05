@@ -880,6 +880,21 @@ def test_version_17_adds_the_gmail_tables_and_keeps_the_tracker(tmp_path, monkey
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
 
 
+def test_version_19_adds_the_wording_of_each_answer_and_keeps_your_words(tmp_path, monkeypatch):
+    path = tmp_path / "data"
+    with monkeypatch.context() as version_18:
+        version_18.setattr(db, "UPGRADES", db.UPGRADES[:18])
+        version_18.setattr(db, "SCHEMA_VERSION", 18)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn, conn:
+            _scored_job(conn)
+            conn.execute("INSERT INTO form_answers VALUES (1, 'question_1', 'My words', 'you', NULL, 'then')")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT * FROM form_answers").fetchall() == [
+            (1, "question_1", "My words", "you", None, "then", ""),  # '' counts as changed: asked again, never deleted
+        ]
+
+
 def test_version_18_adds_the_form_tables_and_keeps_every_preparation(tmp_path, monkeypatch):
     path = tmp_path / "data"
     every_row = ("SELECT * FROM preparations ORDER BY id", "SELECT * FROM steps", "SELECT * FROM failed_tries")
