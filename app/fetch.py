@@ -41,6 +41,10 @@ class NotFound(FetchError):
     """The site says the address does not exist (404), e.g. a company closed its job board."""
 
 
+class Moved(FetchError):
+    """The site answered with another address, and the download doesn't follow it."""
+
+
 class Unreachable(FetchError):
     """No answer at all: the connection failed or timed out on every try."""
 
@@ -120,7 +124,7 @@ class Fetcher:
                 if status == 429 or status >= 500:
                     raise _TryAgain(f"busy or failing (status {status})")
                 if status != 200:
-                    raise FetchError(_refusal(status))
+                    raise _refusal(status)
                 digest, received = hashlib.sha256(), 0
                 with partial.open("wb") as file:
                     for chunk in response.iter_bytes():
@@ -151,7 +155,7 @@ class Fetcher:
                     if status == 404:
                         raise NotFound("not found (404)")
                     if status != 429 and status < 500:
-                        raise FetchError(_refusal(status))
+                        raise _refusal(status)
                     reason, site_wait, answered = f"busy or failing (status {status})", _retry_after(response), True
             except httpx.TimeoutException:
                 reason, site_wait, answered = "timed out", None, False
@@ -217,10 +221,10 @@ def _setup_host(url: str) -> None:
         raise FetchError(f"it was sent to {where}, which is not on the approved list; nothing was downloaded")
 
 
-def _refusal(status: int) -> str:
+def _refusal(status: int) -> FetchError:
     if 300 <= status < 400:
-        return f"moved to another address (status {status})"
-    return f"refused (status {status})"
+        return Moved(f"moved to another address (status {status})")
+    return FetchError(f"refused (status {status})")
 
 
 def _retry_after(response: httpx.Response) -> float | None:

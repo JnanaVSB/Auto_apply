@@ -6,8 +6,8 @@ import json
 import re
 from html.parser import HTMLParser
 
-from app.fetch import Fetcher, FetchError, NotFound
-from app.submit import Choice, Field, Form, FormClosed, FormError, distinct
+from app.fetch import Fetcher, FetchError, Moved, NotFound
+from app.submit import BROKEN, Choice, Field, Form, FormClosed, FormError, distinct
 
 FORM_PAGE = "https://jobs.lever.co/{}/{}/apply"
 STANDARD = {  # Lever's own inputs, by name
@@ -26,7 +26,6 @@ SURVEY = "countrySurvey_"  # a voluntary survey's section, followed by the count
 UNREADABLE = "Lever's page could not be read: the browser reads it when you press Fill in browser."
 CLOSED = "This posting is closed or was removed (Lever says not found)."
 MOVED = "Lever sent this posting somewhere else; it may be closed: check the job page."
-BROKEN = (AttributeError, KeyError, TypeError, ValueError)
 
 
 def read(fetcher: Fetcher, board: str, job_id: str) -> tuple[Form, int]:
@@ -36,9 +35,9 @@ def read(fetcher: Fetcher, board: str, job_id: str) -> tuple[Form, int]:
         page = fetcher.get_text(FORM_PAGE.format(board, job_id))
     except NotFound:
         raise FormClosed(CLOSED) from None
+    except Moved:
+        raise FormError(MOVED) from None
     except FetchError as error:
-        if str(error).startswith("moved to another address"):
-            raise FormError(MOVED) from None
         raise FormError(f"Lever did not answer: {error}") from None
     return parse(page)
 

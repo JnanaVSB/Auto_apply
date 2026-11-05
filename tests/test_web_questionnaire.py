@@ -7,7 +7,6 @@ import pytest
 from helpers import csrf, log_in
 
 from app import db, questionnaire
-from app.submit import match
 
 
 @pytest.fixture
@@ -116,7 +115,7 @@ def test_a_301st_row_is_refused_naming_the_section(client, data_dir):
 
 def test_who_asked_stays_after_a_save_through_the_page(client, data_dir):
     with closing(db.connect(data_dir)) as conn:
-        match.remember(conn, "What is your shoe size?", "Acme")
+        questionnaire.remember(conn, "What is your shoe size?", "Acme")
     assert save(client, **{"more.question.0": "What is your shoe size?", "more.answer.0": "9"}).status_code == 303
     with closing(db.connect(data_dir)) as conn:
         assert [(row["answer"], row["asked_by"]) for row in questionnaire.load(conn)[0]["more"]] == [("9", "Acme")]
@@ -125,7 +124,7 @@ def test_who_asked_stays_after_a_save_through_the_page(client, data_dir):
 def test_a_page_opened_before_the_job_box_added_a_row_drops_nothing(client, data_dir):
     stale = opened(client)
     with closing(db.connect(data_dir)) as conn:
-        match.remember(conn, "What is your shoe size?", "Acme")
+        questionnaire.remember(conn, "What is your shoe size?", "Acme")
     answer = save(client, saved_on=stale, **{"contact.full_name": "Alex Example"})
     assert answer.status_code == 200 and "This page is out of date: reload it" in answer.text
     assert 'value="Alex Example"' in answer.text  # what you typed stays on the page

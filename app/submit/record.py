@@ -20,13 +20,14 @@ SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address,
     VALUES (?, ?, ?, 'by hand', ?, ?, ?)"""
 LOAD = "SELECT submitted_on, saved_on, how, address, fields, files FROM submissions WHERE job_id = ?"
 NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
-BY_YOU, LEFT_EMPTY, MISSING = "answered by you on the site", "left empty", "file was missing"
+BY_YOU, EMPTY_FROM, MISSING = "answered by you on the site", "left empty", "file was missing"
+ALREADY = "Already recorded on {}"
 NO_VALUE = {
     "decide": BY_YOU,
     "suggested": BY_YOU,
     "left": BY_YOU,
     "write": BY_YOU,
-    "empty": LEFT_EMPTY,
+    "empty": EMPTY_FROM,
 }  # -> its "from"
 DOCUMENTS = ((runs.KIND, "Resume"), (runs.LETTER, "Cover letter"))
 
@@ -42,10 +43,9 @@ class _Moved(Exception):
 def standard(answers: dict) -> list[tuple[str, str]]:
     """The copy panel's lines (label, text), only those with a value."""
     contact = answers.get("contact") or {}
-    place = ", ".join(filter(None, (contact.get(name) for name in ("city", "state", "country"))))
     lines = {
         "Name": contact.get("full_name"), "E-mail": contact.get("email"), "Phone": contact.get("phone"),
-        "Location": place, "LinkedIn": contact.get("linkedin"), "GitHub": contact.get("github"),
+        "Location": questionnaire.place(contact), "LinkedIn": contact.get("linkedin"), "GitHub": contact.get("github"),
         "Portfolio": contact.get("portfolio"), **match.written(answers),
     }  # fmt: skip
     return [(label, text) for label, text in lines.items() if text]
@@ -61,9 +61,19 @@ def shown(line: match.Line) -> str:
     if field.kind == "consent" and line.value == match.TICKED:
         return "ticked"
     if isinstance(line.value, tuple):
-        labels = {choice.value: choice.label for choice in field.choices}
-        return ", ".join(labels.get(value, value) for value in line.value)
+        return ", ".join(field.labels.get(value, value) for value in line.value)
     return line.value
+
+
+def documents(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict[str, tuple[str, Path] | None]:
+    """The job's newest finished resume and cover letter, each (label, PDF), or None without one or without its
+    file."""
+    found: dict[str, tuple[str, Path] | None] = {}
+    for kind, name in DOCUMENTS:
+        done = runs.last_done(conn, job_id, kind)
+        path = pdf.tailored(data_dir, job_id, done["version"], kind) if done else None
+        found[kind] = (f"{name} v{done['version']}", path) if path and path.is_file() else None
+    return found
 
 
 def recorded(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
@@ -85,7 +95,7 @@ def submit(
     is, never moved backwards, and that is said in the answer. Raises Refused with nothing saved."""
     job_id = job["id"]
     if found := recorded(conn, job_id):
-        raise Refused(f"Already recorded on {found['submitted_on']}")
+        raise Refused(ALREADY.format(found["submitted_on"]))
     if not tracker.date_allowed(on, date.today()):
         raise Refused(tracker.BAD_DATE)
     stage = tracker.stage(conn, job_id)
@@ -106,7 +116,7 @@ def submit(
     except sqlcipher3.IntegrityError:  # a second dashboard saved its record after the check above
         if (found := recorded(conn, job_id)) is None:
             raise
-        raise Refused(f"Already recorded on {found['submitted_on']}") from None
+        raise Refused(ALREADY.format(found["submitted_on"])) from None
     except _Moved:
         stage = STAGES[tracker.stage(conn, job_id) or "ready"]
         raise Refused(f"The card moved meanwhile: it is in {stage} now. Nothing was recorded: press I submitted it "

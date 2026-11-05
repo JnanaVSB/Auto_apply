@@ -35,15 +35,12 @@ VERSION = """SELECT p.id, p.job_id, p.kind, p.version, p.based_on, p.feedback, p
     LEFT JOIN pilots t ON t.id = p.pilot_id WHERE p.id = ?"""
 STEPS = "SELECT round, member, turn, status, answer, sent_on FROM steps WHERE preparation_id = ?"
 ROUND = "UPDATE preparations SET round = ? WHERE id = ?"
-READ_AGAIN = """SELECT 1 FROM forms f JOIN preparations p ON p.job_id = f.job_id
-    WHERE p.id = ? AND f.read_on > p.created_on"""  # both UTC times in the same format
 DRAFT = "UPDATE preparations SET draft = ?, flags = ? WHERE id = ?"
 ENDED = """UPDATE preparations SET status = ?, problem = ?, agreed = ?, wording = ?, draft = coalesce(?, draft),
     finished_on = ? WHERE id = ?"""
 CLOSED = "Job closed: preparation stopped. Steps already sent were finished and saved."
 SKIPPED = "You skipped this job: preparation stopped. Steps already sent were finished and saved."
 CHANGED = "Your entries changed: preparation stopped. It starts again once you confirm them."
-FORM_READ = "The form was read again while the Writer was writing: press Write answers again"
 NO_WRITER = "The Writer gave no valid answer twice in round {}: check by hand, or press Retry."
 ONE_PAGE = "The resume's PDF is {} pages: it must fit on one page."
 NOTHING_SENT = (privacy.PrivacyError, ResumeError, reviewers.NoInstructions, form_answers.NoQuestions)  # fix, Retry
@@ -77,8 +74,8 @@ def start(
     words) builds on the newest finished version. `writer_only`: "Resume only", no council. `pilot`: a pilot's
     version (its id, the line-up's name, and the line-up's models by member), kept apart from yours. A form's answers
     (kind answers): the Writer alone, refused (NoQuestions) when the form has nothing for it."""
-    if kind == runs.ANSWERS and (refusal := form_answers.questions(conn, job_id)[1]):
-        raise form_answers.NoQuestions(refusal)
+    if kind == runs.ANSWERS:
+        form_answers.questions(conn, job_id)
     if pilot:  # a pilot's version: only its line-up's models, whatever Settings say
         kind, roles = "pilot", pilot[2]
         writer, council = json.dumps(roles["writer"]), {"members": {m: roles[m] for m in REVIEWERS}, "names": {}}
@@ -206,11 +203,7 @@ class _Seen(NamedTuple):
         entries = runs.originals(conn, version["sources"])
         questions: list[Field] = []
         if version["kind"] == runs.ANSWERS:  # worked out again: your answers may have changed
-            if conn.execute(READ_AGAIN, (version["id"],)).fetchone():  # Q1, Q2... may name other questions now
-                raise form_answers.NoQuestions(FORM_READ)
-            questions, refusal = form_answers.questions(conn, version["job_id"])
-            if refusal:
-                raise form_answers.NoQuestions(refusal)
+            questions = form_answers.still_asked(conn, version)
         if version["kind"] in (runs.LETTER, runs.ANSWERS):  # your resume's entries, as the letter's
             resume = runs.last_done(conn, version["job_id"])
             fresh = resume is not None and not runs.outdated(resume, json.loads(version["sources"]))

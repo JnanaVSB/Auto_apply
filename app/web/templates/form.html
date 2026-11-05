@@ -1,42 +1,37 @@
 {# The job box's Application form part: loaded by the job page, and sent back by each of its buttons. #}
-{% macro post(action, label, fields={}) %}<form method="post" action="/jobs/{{ job_id }}/form/{{ action }}" hx-post="/jobs/{{ job_id }}/form/{{ action }}" hx-target="#form-part" hx-swap="outerHTML" class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
-    <button type="submit">{{ label }}</button></form>{% endmacro %}
-{% macro answer_box(field) %}      <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ field.key }}"><input type="hidden" name="wording" value="{{ worded[field.key] }}">
+{% macro form_to(action, class="inline") %}<form method="post" action="/jobs/{{ job_id }}/form/{{ action }}" hx-post="/jobs/{{ job_id }}/form/{{ action }}" hx-target="#form-part" hx-swap="outerHTML" class="{{ class }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">{{ caller() }}</form>{% endmacro %}
+{% macro post(action, label, fields={}) %}{% call form_to(action) %}{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <button type="submit">{{ label }}</button>{% endcall %}{% endmacro %}
+{% macro answer_box(field) %}      {% call form_to("answer", "stacked") %}<input type="hidden" name="field" value="{{ field.key }}"><input type="hidden" name="wording" value="{{ worded[field.key] }}">
         {% if field.kind == "single" %}
         <label>Your answer <select name="answer">{% for choice in field.choices %}<option value="{{ choice.value }}">{{ choice.label }}</option>{% endfor %}</select></label>
         {% elif field.kind == "multi" %}
         <fieldset><legend>Your answer (tick every one that fits)</legend>
           {% for choice in field.choices %}<label class="tick"><input type="checkbox" name="choice.{{ loop.index0 }}" value="{{ choice.value }}"> {{ choice.label }}</label>{% endfor %}</fieldset>
         {% elif field.kind == "long_text" %}
-        <label>Your answer <textarea name="answer" rows="4" maxlength="20000"></textarea></label>
+        <label>Your answer <textarea name="answer" rows="4" maxlength="{{ max_long }}"></textarea></label>
         {% else %}
-        <label>Your answer <input name="answer" maxlength="2000"></label>
+        <label>Your answer <input name="answer" maxlength="{{ max_line }}"></label>
         {% endif %}
         {% if field.kind != "long_text" and field.key not in this_job_only %}<label class="tick"><input type="checkbox" name="save" value="1"> Save to my Questionnaire</label>{% endif %}
-        <p><button type="submit">Save</button></p>
-      </form>{% endmacro %}
+        <p><button type="submit">Save</button></p>{% endcall %}{% endmacro %}
 {% macro writing_line() %}<p class="muted" role="status" hx-get="/jobs/{{ job_id }}/form/writing" hx-trigger="every 3s" hx-swap="outerHTML">The Writer is writing these answers…</p>{% endmacro %}
 {% if writing_only %}{{ writing_line() }}{% else %}
 <section class="found" id="form-part">
   <h2>Application form</h2>
-  {% if record %}
-  {% elif found %}
+  {% if found and not record %}
   <p class="muted">Read {{ read_on }} from {{ read_from }}. Nothing is sent to the site from here.</p>
   {% if found.problem %}<p class="error">{{ found.problem }}</p>{% endif %}
-  {% elif elsewhere %}
+  {% elif elsewhere and not record %}
   <p class="muted">{{ elsewhere }}</p>
-  {% elif waiting %}
+  {% elif waiting and not record %}
   <p class="muted">{{ waiting }}</p>
   {% endif %}
   {% if failed %}<p class="error" role="alert">{{ failed }}</p>{% endif %}
   {% if note %}<p class="muted" role="status">{{ note }}</p>{% endif %}
   {% if readable and not record %}
-  <form method="post" action="/jobs/{{ job_id }}/form/read" hx-post="/jobs/{{ job_id }}/form/read" hx-target="#form-part" hx-swap="outerHTML" class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
-    <button type="submit">{{ "Read again" if found else "Read the form" }}</button>
-  </form>
+  {{ post("read", "Read again" if found else "Read the form") }}
   {% endif %}
 
   {% if record %}
@@ -113,16 +108,14 @@
   {% else %}{{ post("write", "Write answers") }}{% endif %}
   {% if stopped and not writing %}<p class="error">The last Write answers stopped: {{ stopped }}</p>{% endif %}
   {% for line, limit, numbers, over in longs %}
-  <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ line.field.key }}"><input type="hidden" name="wording" value="{{ worded[line.field.key] }}">
+  {% call form_to("answer", "stacked") %}<input type="hidden" name="field" value="{{ line.field.key }}"><input type="hidden" name="wording" value="{{ worded[line.field.key] }}">
     <label>{{ line.field.label }}{% if line.field.required %} <span class="mark">required</span>{% endif %}
       <span class="muted">(up to {{ limit }}{% if line.source %}; {{ line.source }}{% endif %})</span>
-      <textarea name="answer" rows="6" maxlength="20000">{{ line.value }}</textarea></label>
+      <textarea name="answer" rows="6" maxlength="{{ max_long }}">{{ line.value }}</textarea></label>
     {% if line.field.help %}<p class="muted">{{ line.field.help }}</p>{% endif %}
-    {% if numbers and line.source == "Writer draft" %}<p class="error">Check these numbers: {{ numbers }}</p>{% endif %}
+    {% if numbers and line.source == writer %}<p class="error">Check these numbers: {{ numbers }}</p>{% endif %}
     {% if over %}<p class="error">{{ over }}</p>{% endif %}
-    <p><button type="submit">Save</button></p>
-  </form>
+    <p><button type="submit">Save</button></p>{% endcall %}
   {% endfor %}
   {% endif %}
 
@@ -168,11 +161,9 @@
   {% for label, address in papers %}<a href="{{ address }}" target="_blank" rel="noopener">{{ label }}</a>{{ " · " if not loop.last }}{% endfor %}
 
   {% if not record %}
-  <form method="post" action="/jobs/{{ job_id }}/form/submitted" hx-post="/jobs/{{ job_id }}/form/submitted" hx-target="#form-part" hx-swap="outerHTML" class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  {% call form_to("submitted") %}
     <label>Date you applied <input type="date" name="on" value="{{ today }}"></label>
-    <button type="submit">I submitted it</button>
-  </form>
+    <button type="submit">I submitted it</button>{% endcall %}
   <p class="muted">This only records what you did on the site: the app never submits anything.</p>
   {% endif %}
 </section>

@@ -13,7 +13,7 @@ from test_submit_lever import PAGE
 from app import config, questionnaire, submit, tracker
 from app.council import answers
 from app.documents import pdf
-from app.submit import greenhouse, match, record
+from app.submit import greenhouse, match, preview, record
 from app.web import submit as form_part
 
 GREENHOUSE = "https://job-boards.greenhouse.io/acme/jobs/123"
@@ -72,7 +72,7 @@ def test_a_greenhouse_form_is_read_once_the_resume_is_ready_and_previewed(client
     assert "Favourite &lt;script&gt;alert(1)&lt;/script&gt; paper?" in text and "<script>alert" not in text
     assert "3 hidden boxes, never filled." in text  # a hidden question, the latitude and the longitude
     assert "Left for you" in text and "You tick this yourself in the window." in text
-    found = form_part.preview(conn, data_dir, job)
+    found = preview.preview(conn, data_dir, job)
     assert f"Decision required ({found.open})</h3>" in text
     assert "question_112" not in [line.field.key for line in found.lines if line.status == "decide"]
 
@@ -82,7 +82,7 @@ def test_the_preview_shows_a_chosen_choices_label_never_its_value(conn, data_dir
     sponsor = question("Do you require visa sponsorship?", "question_9", "multi_value_single_select", True,
                        [("Yes", 1), ("No", 0)])  # fmt: skip
     submit.save(conn, job, greenhouse.parse(FORM | {"questions": [*FORM["questions"], sponsor]})[0], "api")
-    lines = {line.field.key: line for line in form_part.preview(conn, data_dir, job).lines}
+    lines = {line.field.key: line for line in preview.preview(conn, data_dir, job).lines}
     assert (lines["question_9"].value, record.shown(lines["question_9"])) == (("0",), "No")
     assert record.shown(lines["resume"]) == "Resume v3"
 
@@ -156,7 +156,7 @@ def test_reading_a_form_never_saves_an_answer_by_itself(client, conn, data_dir, 
     client.get(f"/jobs/{job}/form")
     more = questionnaire.load(conn)[0]["more"]
     assert [row["question"] for row in more] == asked and not any(row["answer"] for row in more)
-    assert all(line.status != "suggested" for line in form_part.preview(conn, data_dir, job).lines)
+    assert all(line.status != "suggested" for line in preview.preview(conn, data_dir, job).lines)
 
 
 def test_a_full_more_answers_is_said_and_the_form_still_saved(client, conn, data_dir, web):
@@ -177,7 +177,7 @@ def test_an_ai_use_promise_is_left_for_you_and_never_an_open_decision(client, co
     job = made_up_job(conn, data_dir)
     promise = submit.Field("question_1", "I consent to Acme's use of AI tools", "consent", True, "privacy")
     submit.save(conn, job, submit.Form((promise,)), "api")
-    found = form_part.preview(conn, data_dir, job)
+    found = preview.preview(conn, data_dir, job)
     assert ([line.status for line in found.lines], found.open) == (["left"], 0)
     assert "Decision required" not in client.get(f"/jobs/{job}/form").text
 
@@ -224,7 +224,7 @@ def press(client, job, action, **fields):
 
 
 def status(conn, data_dir, job, key):
-    return next(line for line in form_part.preview(conn, data_dir, job).lines if line.field.key == key)
+    return next(line for line in preview.preview(conn, data_dir, job).lines if line.field.key == key)
 
 
 def test_a_short_answer_is_kept_for_the_job_and_with_save_for_every_form(client, conn, data_dir, job):
@@ -345,13 +345,13 @@ def test_a_consent_of_no_known_kind_is_for_this_job_only(client, conn, data_dir,
 
 
 def test_in_the_window_and_leave_it_empty_close_a_decision_and_change_brings_it_back(client, conn, data_dir, job):
-    before = form_part.preview(conn, data_dir, job).open
+    before = preview.preview(conn, data_dir, job).open
     text = press(client, job, "window", field=SAMPLE.key).text
     assert status(conn, data_dir, job, SAMPLE.key).status == "left" and "You do this yourself in the window." in text
     press(client, job, "empty", field=HOBBY.key)
     assert status(conn, data_dir, job, HOBBY.key).note == "you chose to leave it empty"
     assert "This question is required" in press(client, job, "empty", field=PAPER.key).text
-    assert form_part.preview(conn, data_dir, job).open == before - 1  # Hobby? was optional: left empty already
+    assert preview.preview(conn, data_dir, job).open == before - 1  # Hobby? was optional: left empty already
     press(client, job, "forget", field=SAMPLE.key)
     assert status(conn, data_dir, job, SAMPLE.key).status == "decide"
 
@@ -364,7 +364,7 @@ def test_your_edit_of_a_writer_draft_is_yours_and_a_later_draft_leaves_it(client
     assert "(up to 100 words; Writer draft)" in text and ">A draft.</textarea>" in text
     press(client, job, "answer", field=WHY.key, answer="My own words.\r\nTwo lines.")
     with conn:
-        answers.save(conn, job, 6, {"answers": [{"field": WHY.key, "text": "A newer draft."}]})
+        answers.save(conn, job, 6, {"answers": [{"field": WHY.key, "text": "A newer draft.", "wording": ""}]})
     assert one(conn, KEPT_ROW, job, WHY.key) == ("My own words.\nTwo lines.", "you")
 
 
@@ -399,7 +399,7 @@ def test_a_suggestion_is_open_shown_and_filled_only_once_you_press_use(client, c
     job = made_up_job(conn, data_dir)
     with_saved(conn, ("Hobby?", "Chess"), ("Favourite colour?", "Teal"))
     submit.save(conn, job, submit.Form((HOBBY, COLOUR)), "api")
-    assert form_part.preview(conn, data_dir, job).open == 2
+    assert preview.preview(conn, data_dir, job).open == 2
     text = client.get(f"/jobs/{job}/form").text
     assert "Use all 2 suggestions" in text and ">Use</button>" in text and "Chess" in text
     assert form_part.CHANGED_SUGGESTION not in text
@@ -409,8 +409,8 @@ def test_a_suggestion_is_open_shown_and_filled_only_once_you_press_use(client, c
     press(client, job, "use", field=COLOUR.key, seen=seen(client, job))
     assert one(conn, KEPT_ROW, job, COLOUR.key) == ("Teal", "you")  # a choice is kept by its label, as yours is
     found = status(conn, data_dir, job, COLOUR.key)
-    assert (found.status, found.value, found.source) == ("fill", ("7",), form_part.MINE)
-    assert form_part.preview(conn, data_dir, job).open == 0
+    assert (found.status, found.value, found.source) == ("fill", ("7",), match.MINE)
+    assert preview.preview(conn, data_dir, job).open == 0
 
 
 def test_use_all_keeps_every_suggestion_and_nothing_else(client, conn, data_dir):
@@ -457,9 +457,9 @@ def test_a_writer_draft_is_open_and_use_keeps_it_as_yours(client, conn, data_dir
         conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then', ?)",
                      (job, WHY.key, match.wording(WHY)))  # fmt: skip
     found = status(conn, data_dir, job, WHY.key)
-    assert (found.status, found.source) == ("suggested", form_part.WRITER)
+    assert (found.status, found.source) == ("suggested", match.WRITER)
     assert (
-        form_part.preview(conn, data_dir, job).open == 1
+        preview.preview(conn, data_dir, job).open == 1
         and ">A draft.</textarea>" in client.get(f"/jobs/{job}/form").text
     )
     press(client, job, "use", field=WHY.key, seen=seen(client, job))
@@ -482,7 +482,7 @@ def test_a_writer_draft_under_a_rule_about_ai_is_closed_only_by_your_own_edit(cl
     assert one(conn, KEPT_ROW, job, WHY.key) == ("A draft.", "writer")
     press(client, job, "answer", field=WHY.key, answer="My own words.")
     assert one(conn, KEPT_ROW, job, WHY.key) == ("My own words.", "you")
-    assert form_part.preview(conn, data_dir, job).open == 0
+    assert preview.preview(conn, data_dir, job).open == 0
 
 
 def test_save_to_my_questionnaire_starts_unticked(client, conn, data_dir, job):

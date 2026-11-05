@@ -21,6 +21,9 @@ VETERAN = ("I am a protected veteran", "I am not a protected veteran", NO_ANSWER
 DISABILITY = ("Yes, I have a disability (or had one in the past)", "No, I do not have a disability", NO_ANSWER)
 STATUSES = ("citizen", "permanent resident", "F-1 OPT", "STEM OPT", "H-1B", "other")
 MAX_PAIRS = 300
+OLD_MARKER = "[company]"  # in a More answers row from before questions naming a company became this-job-only
+FULL = f"More answers is full ({MAX_PAIRS} rows): delete some on the Questionnaire page"
+BROKEN = "Your saved Questionnaire breaks a rule; fix it on the Questionnaire page first: {}"
 PAIR_ROW = re.compile(r"more\.(question|answer)\.([0-9]{1,3})")  # one "More answers" row on the form
 WORDS = re.compile(r"[^\W_]+")  # a run of letters or digits
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -250,6 +253,35 @@ def load(conn: sqlcipher3.Connection) -> tuple[dict, str | None, str | None]:
 def save(conn: sqlcipher3.Connection, answers: Answers) -> None:
     with conn:  # all or nothing
         conn.execute(SAVE, (answers.model_dump_json(), datetime.now(UTC).isoformat(timespec="seconds")))
+
+
+def remember(
+    conn: sqlcipher3.Connection, label: str, company: str, answer: str = "", today: date | None = None
+) -> None:
+    """Keep a form's ordinary question in your More answers, with `answer` if given. One row per wording: a row keeps
+    the first company and day that asked it, and an answer it holds is never changed. Only for a question of class
+    ORDINARY: the caller asks `wordings.care`."""
+    values, _, problem = load(conn)
+    if problem:
+        raise QuestionnaireError(BROKEN.format(problem))
+    asked, answer = clean(label), answer.strip()
+    rows = [row for row in values["more"] if OLD_MARKER not in row["question"]]
+    if row := next((row for row in rows if clean(row["question"]) == asked), None):
+        if row["answer"] or not answer:
+            return
+        row["answer"] = answer
+    elif len(values["more"]) >= MAX_PAIRS:
+        raise QuestionnaireError(FULL)
+    else:
+        asked_on = (today or date.today()).isoformat()
+        values["more"].append({"question": label, "answer": answer, "asked_by": company[:100], "asked_on": asked_on})
+    save(conn, check(values))
+
+
+def place(contact: dict) -> str:
+    """Your city, state and country on one line, those you gave."""
+    found = (contact.get(name) for name in ("city", "state", "country"))
+    return ", ".join(text.strip() for text in found if isinstance(text, str) and text.strip())
 
 
 def as_file(values: dict) -> str:

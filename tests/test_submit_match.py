@@ -7,7 +7,7 @@ from helpers import add_job
 from app import questionnaire
 from app.documents import pdf
 from app.questionnaire import DISABILITY, NO_ANSWER, VETERAN
-from app.submit import Choice, Field, Form, match
+from app.submit import Choice, Field, Form, match, record
 
 ANSWERS = questionnaire.check({
     "contact": {
@@ -497,8 +497,8 @@ def test_documents_are_the_newest_finished_versions_with_their_file(conn, data_d
     resume = pdf.tailored(data_dir, job, 2)
     resume.parent.mkdir(parents=True)
     resume.write_bytes(b"%PDF-1.7 fake")
-    assert match.documents(conn, data_dir, job) == {"resume": ("Resume v2", resume), "cover_letter": None}
-    assert match.documents(conn, data_dir, add_job(conn, "Data Intern")) == {"resume": None, "cover_letter": None}
+    assert record.documents(conn, data_dir, job) == {"resume": ("Resume v2", resume), "cover_letter": None}
+    assert record.documents(conn, data_dir, add_job(conn, "Data Intern")) == {"resume": None, "cover_letter": None}
 
 
 def remembered(conn):
@@ -506,16 +506,16 @@ def remembered(conn):
 
 
 def test_remember_keeps_one_row_per_wording_with_its_first_asker(conn):
-    match.remember(conn, "What is your shoe size?", "Acme", today=date(2026, 11, 4))
-    match.remember(conn, "What is your SHOE size", "Globex", "9", today=date(2026, 11, 5))
-    match.remember(conn, "What is your shoe size?", "Initech", "10", today=date(2026, 11, 6))
+    questionnaire.remember(conn, "What is your shoe size?", "Acme", today=date(2026, 11, 4))
+    questionnaire.remember(conn, "What is your SHOE size", "Globex", "9", today=date(2026, 11, 5))
+    questionnaire.remember(conn, "What is your shoe size?", "Initech", "10", today=date(2026, 11, 6))
     assert remembered(conn) == [
         {"question": "What is your shoe size?", "answer": "9", "asked_by": "Acme", "asked_on": "2026-11-04"}
     ]
 
 
 def test_a_remembered_question_answers_the_same_question_from_another_company(conn):
-    match.remember(conn, "What is your shoe size?", "Acme", "9")
+    questionnaire.remember(conn, "What is your shoe size?", "Acme", "9")
     found = match.match(Form((field("What is your shoe size?"),)), questionnaire.load(conn)[0], "Globex")[0][0]
     assert (found.value, found.source) == ("9", "your saved answer")
 
@@ -530,9 +530,9 @@ def test_remember_refuses_a_full_list_and_saves_nothing(conn):
     questionnaire.save(conn, questionnaire.check({"more": full}))
     before = conn.execute("SELECT answers, saved_on FROM questionnaire").fetchone()
     with pytest.raises(questionnaire.QuestionnaireError, match=r"More answers is full \(300 rows\): delete some"):
-        match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
+        questionnaire.remember(conn, "Have you worked at Acme before?", "Acme", "No")
     assert conn.execute("SELECT answers, saved_on FROM questionnaire").fetchone() == before
-    match.remember(conn, "Question 7?", "Acme", "Yes")  # a row already there still takes its answer
+    questionnaire.remember(conn, "Question 7?", "Acme", "Yes")  # a row already there still takes its answer
     assert remembered(conn)[7]["answer"] == "Yes" and len(remembered(conn)) == 300
 
 
@@ -544,7 +544,7 @@ def test_remember_changes_nothing_when_the_saved_answers_break_a_rule(conn):
     with pytest.raises(
         questionnaire.QuestionnaireError, match="fix it on the Questionnaire page first: Contact, phone"
     ):
-        match.remember(conn, "Have you worked at Acme before?", "Acme", "No")
+        questionnaire.remember(conn, "Have you worked at Acme before?", "Acme", "No")
     assert json.loads(conn.execute("SELECT answers FROM questionnaire").fetchone()[0]) == stored
 
 

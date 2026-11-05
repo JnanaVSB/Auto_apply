@@ -391,6 +391,34 @@ def _new_numbers(bullet: dict, tile: Tile) -> list[str]:
     return new_numbers(bullet["text"], " ".join(tile.bullets[index] for index in bullet["from"]))
 
 
+def final_text(where: str, given: object, most: int) -> str:
+    """A piece of the Writer's answer as it is kept, on one line, checked; raises BadAnswer naming `where`, never the
+    text."""
+    if not isinstance(given, str):
+        raise BadAnswer(f"{where} must be text")
+    text = " ".join(given.split())
+    if not text or len(text) > most or CONTROL.search(given):
+        raise BadAnswer(f"{where} is empty, far too long, or holds invisible characters")
+    if LONG_DASH.search(text):
+        raise BadAnswer(f"{where} uses a long dash (— or –) or '--': use a plain '-' or rewrite the sentence")
+    if PLACEHOLDER.search(text):
+        raise BadAnswer(f"{where} uses a placeholder: write no name or contact details, they are added separately")
+    try:
+        last_check(text)
+    except PrivacyStop as stop:
+        raise BadAnswer(f"{where} holds {stop}: never add one") from None
+    return text
+
+
+def cited_entries(cited: object, entries: list[Entry], drawn_by: str) -> list[Entry]:
+    """The entries an answer's "from" names, each once; raises BadAnswer saying what `drawn_by` must list."""
+    labels = {entry.label: entry for entry in entries}
+    known_labels = isinstance(cited, list) and all(isinstance(label, str) and label in labels for label in cited)
+    if not known_labels or not cited or len(set(cited)) != len(cited):
+        raise BadAnswer(f'"from" must list the labels (E1, E2, ...) of the entries {drawn_by}, each once')
+    return [labels[label] for label in cited]
+
+
 def new_numbers(text: str, known: str) -> list[str]:
     """The numbers in `text` (40%, 3x, 10k, 2025) that `known` doesn't have, each once; 1,000 and 1000 are the same."""
     old = {number.replace(",", "") for number in NUMBER.findall(known)}

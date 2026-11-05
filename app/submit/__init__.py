@@ -11,8 +11,7 @@ import sqlcipher3
 from app.collect import now
 from app.resume import CONTROL
 
-KINDS = ("text", "long_text", "single", "multi", "file", "location", "consent", "hidden", "unknown")
-PARTS = ("standard", "company", "location", "eeo", "demographic", "privacy", "education")
+BROKEN = (AttributeError, KeyError, TypeError, ValueError)  # what a site's broken entry raises in its reader
 MAX_LABEL, MAX_HELP, MAX_CHOICE = 1_000, 5_000, 500  # characters
 MAX_CHOICES, MAX_FIELDS = 5_000, 500
 UNREAD = "{:,} of this form's questions could not be read: check the form on the site before you submit."
@@ -45,9 +44,9 @@ class Choice:
 class Field:
     key: str  # the site's own field name
     label: str  # the question, as the form words it
-    kind: str  # one of KINDS
+    kind: str  # text, long_text, single, multi, file, location, consent, hidden or unknown
     required: bool
-    part: str  # one of PARTS
+    part: str  # standard, company, location, eeo, demographic, privacy or education
     help: str = ""
     choices: tuple[Choice, ...] = ()
     accept: tuple[str, ...] = ()  # an upload's file types, e.g. ".pdf"
@@ -57,6 +56,11 @@ class Field:
         object.__setattr__(self, "help", CONTROL.sub("", self.help)[:MAX_HELP])
         object.__setattr__(self, "choices", tuple(self.choices[:MAX_CHOICES]))
         object.__setattr__(self, "accept", tuple(self.accept))
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """Each choice's label, by its value."""
+        return {choice.value: choice.label for choice in self.choices}
 
 
 @dataclass(frozen=True)

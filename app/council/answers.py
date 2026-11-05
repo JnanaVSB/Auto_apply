@@ -8,13 +8,23 @@ import re
 
 import sqlcipher3
 
-from app import questionnaire
 from app.collect import now
 from app.config import PROJECT_DIR
-from app.council.writer import DATA_RULE, LONG_DASH, LOOK_ALIKES, BadAnswer, Checked, Entry, data, new_numbers, original
-from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check
+from app.council.writer import (
+    DATA_RULE,
+    LOOK_ALIKES,
+    BadAnswer,
+    Checked,
+    Entry,
+    cited_entries,
+    data,
+    final_text,
+    new_numbers,
+    original,
+)
+from app.documents.privacy import Shield
 from app.resume import CONTROL
-from app.submit import Field, load, match
+from app.submit import Field, load, match, preview, wordings
 
 SKILL_FILE = PROJECT_DIR / "skills" / "form-answers.md"
 RULES = DATA_RULE + """
@@ -50,7 +60,6 @@ STATED = re.compile(  # "100 words", "500-character"; groups 1, 3 and 5, a lower
     r"(\s+(?:minimum|min\b|at least|or more))?",
     re.IGNORECASE,
 )
-KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
 SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
     VALUES (?, ?, ?, 'writer', ?, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
     preparation_id = excluded.preparation_id, saved_on = excluded.saved_on, wording = excluded.wording
@@ -58,33 +67,40 @@ SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation
 NO_FORM = "Read the form first"
 OWN_WORDS = match.NO_AI_WARNING
 NO_QUESTIONS = "This form has no long questions for the Writer"
+READ_AGAIN = """SELECT 1 FROM forms f JOIN preparations p ON p.job_id = f.job_id
+    WHERE p.id = ? AND f.read_on > p.created_on"""  # both UTC times in the same format
+FORM_READ = "The form was read again while the Writer was writing: press Write answers again"
 
 
 class NoQuestions(Exception):  # noqa: N818 (a refusal, shown as it is)
     """Nothing for the Writer to answer on this job's form; the message says why."""
 
 
-def questions(conn: sqlcipher3.Connection, job_id: int) -> tuple[list[Field], str | None]:
+def questions(conn: sqlcipher3.Connection, job_id: int) -> list[Field]:
     """The company's long questions on the job's saved form that the Writer answers (those left for it, and its own
-    earlier drafts, never an answer you gave), and why there are none (else None)."""
+    earlier drafts, never an answer you gave); raises NoQuestions saying why there are none."""
     saved = load(conn, job_id)
     if saved is None:
-        return [], NO_FORM
-    answers = questionnaire.load(conn)[0]
-    company, us_location = conn.execute("SELECT company, us_location FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
-    lines, warnings = match.match(
-        saved[0], answers, company, kept=kept, consents=answers.get("consents") or {}, us_job=us_location == "yes"
-    )
-    if match.NO_AI_WARNING in warnings:
-        return [], OWN_WORDS
+        raise NoQuestions(NO_FORM)
+    lines, _, no_writer = preview.lines(conn, saved[0], job_id)
+    if no_writer:
+        raise NoQuestions(OWN_WORDS)
     found = [
         line.field
         for line in lines
         if line.field.kind == "long_text" and line.field.part == "company"
-        and (line.status == "write" or line.source == "Writer draft")
+        and (line.status == "write" or line.source == match.WRITER)
     ]  # fmt: skip
-    return found, None if found else NO_QUESTIONS
+    if not found:
+        raise NoQuestions(NO_QUESTIONS)
+    return found
+
+
+def still_asked(conn: sqlcipher3.Connection, version: dict) -> list[Field]:
+    """The questions for a version being written: Q1, Q2... may name other questions if the form was read again."""
+    if conn.execute(READ_AGAIN, (version["id"],)).fetchone():
+        raise NoQuestions(FORM_READ)
+    return questions(conn, version["job_id"])
 
 
 def limit(field: Field) -> tuple[int | None, int | None]:
@@ -127,10 +143,7 @@ def checked(text: str, fields: list[Field], entries: list[Entry], ad: str) -> Ch
     given, cited, notes = found["answers"], found["from"], found["notes"]
     if not isinstance(given, list) or not isinstance(notes, str):
         raise BadAnswer('"answers" must be a list, and "notes" must be text')
-    labels = {entry.label: entry for entry in entries}
-    known_labels = isinstance(cited, list) and all(isinstance(label, str) and label in labels for label in cited)
-    if not known_labels or not cited or len(set(cited)) != len(cited):
-        raise BadAnswer('"from" must list the labels (E1, E2, ...) of the entries the answers draw on, each once')
+    used = cited_entries(cited, entries, "the answers draw on")
     asked = {f"Q{number}": field for number, field in enumerate(fields, 1)}
     texts: dict[str, str] = {}
     for item in given:
@@ -144,15 +157,15 @@ def checked(text: str, fields: list[Field], entries: list[Entry], ad: str) -> Ch
         texts[label] = _answer(label, item["text"], limit(asked[label]))
     if missing := [label for label in asked if label not in texts]:
         raise BadAnswer(f"answer every question: {', '.join(missing)} missing")
-    known = " ".join([ad, *(original(labels[label]) for label in cited)])
+    known = " ".join([ad, *map(original, used)])
     flags = [{"field": field.key, "numbers": new} for label, field in asked.items()
              if (new := new_numbers(texts[label], known))]  # fmt: skip
     draft = {
         "answers": [
-            {"field": field.key, "text": texts[label], "wording": match.wording(field)}
+            {"field": field.key, "text": texts[label], "wording": wordings.wording(field)}
             for label, field in asked.items()
         ],  # fmt: skip
-        "from": [{"source": labels[label].source, "tile_id": labels[label].tile.tile_id} for label in cited],
+        "from": [{"source": entry.source, "tile_id": entry.tile.tile_id} for entry in used],
         "notes": " ".join(CONTROL.sub("", notes).split())[:MAX_NOTES],
     }
     return Checked(draft, flags)
@@ -162,35 +175,24 @@ def save(conn: sqlcipher3.Connection, job_id: int, preparation: int, draft: dict
     """Each answer kept for the job as the Writer's, replacing its earlier draft but never an answer you typed. Inside
     the caller's transaction: the version ends with it (app/council/flow.py)."""
     saved_on = now()
-    conn.executemany(SAVE, [(job_id, item["field"], item["text"], preparation, saved_on, item.get("wording", ""))
+    conn.executemany(SAVE, [(job_id, item["field"], item["text"], preparation, saved_on, item["wording"])
                             for item in draft["answers"]])  # fmt: skip
 
 
 def _question(label: str, field: Field) -> str:
     help_ = [f"Help: {field.help}"] if field.help else []
-    return "\n".join([f"{label}: {field.label}", *help_, f"Limit: up to {_said(limit(field))}"])
+    return "\n".join([f"{label}: {field.label}", *help_, f"Limit: up to {in_words(limit(field))}"])
 
 
-def _said(most: tuple[int | None, int | None]) -> str:
-    """A limit in words: "100 words", "1200 characters", or both."""
-    return " and ".join(f"{count} {unit}" for count, unit in zip(most, ("words", "characters"), strict=True) if count)
+def in_words(most: tuple[int | None, int | None], thousands: str = "") -> str:
+    """A limit in words: "100 words", "1200 characters", or both; `thousands` "," writes "1,200"."""
+    pairs = zip(most, ("words", "characters"), strict=True)
+    return " and ".join(f"{count:{thousands}} {unit}" for count, unit in pairs if count)
 
 
 def _answer(label: str, text: object, most: tuple[int | None, int | None]) -> str:
-    if not isinstance(text, str):
-        raise BadAnswer(f"{label} must be text")
-    answer = " ".join(text.split())
-    if not answer or len(answer) > MAX_TEXT or CONTROL.search(text):
-        raise BadAnswer(f"{label} is empty, far too long, or holds invisible characters")
+    answer = final_text(label, text, MAX_TEXT)
     words, characters = most
     if (words and len(answer.split()) > words) or (characters and len(answer) > characters):
-        raise BadAnswer(f"{label} is over its limit of {_said(most)}: shorten it")
-    if LONG_DASH.search(answer):
-        raise BadAnswer(f"{label} uses a long dash (— or –) or '--': use a plain '-' or rewrite the sentence")
-    if PLACEHOLDER.search(answer):
-        raise BadAnswer(f"{label} uses a placeholder: write no name or contact details")
-    try:
-        last_check(answer)
-    except PrivacyStop as stop:
-        raise BadAnswer(f"{label} holds {stop}: never add one") from None
+        raise BadAnswer(f"{label} is over its limit of {in_words(most)}: shorten it")
     return answer

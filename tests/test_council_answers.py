@@ -50,7 +50,7 @@ def reply(*texts, cited=("E1",), notes="Robots first."):
 
 
 def test_the_writer_answers_the_long_company_questions_left_for_it_and_its_own_drafts(conn):
-    assert answers.questions(conn, with_form(conn)) == ([WHY, PROJECT, DRAFTED], None)
+    assert answers.questions(conn, with_form(conn)) == [WHY, PROJECT, DRAFTED]
 
 
 @pytest.mark.parametrize(
@@ -80,7 +80,8 @@ def test_the_writer_answers_the_long_company_questions_left_for_it_and_its_own_d
 )
 def test_a_form_with_nothing_for_the_writer_says_why(conn, form, refusal):
     job = with_form(conn, form) if form else add_job(conn, "Robot Learning Intern")
-    assert answers.questions(conn, job) == ([], refusal)
+    with pytest.raises(answers.NoQuestions, match=refusal):
+        answers.questions(conn, job)
 
 
 @pytest.mark.parametrize(
@@ -189,8 +190,9 @@ def test_an_answer_that_breaks_a_rule_is_refused_naming_the_question(text, probl
 
 def test_a_writer_draft_replaces_its_earlier_draft_and_never_your_answer(conn):
     job = with_form(conn)
-    draft = {"answers": [{"field": "question_3", "text": "New."}, {"field": "question_7", "text": "A new draft."},
-                         {"field": "question_1", "text": "Robots."}]}  # fmt: skip
+    draft = {"answers": [{"field": "question_3", "text": "New.", "wording": ""},
+                         {"field": "question_7", "text": "A new draft.", "wording": ""},
+                         {"field": "question_1", "text": "Robots.", "wording": ""}]}  # fmt: skip
     with conn:
         answers.save(conn, job, 5, draft)
     assert conn.execute(ROWS).fetchall() == [
@@ -254,14 +256,15 @@ def test_a_form_read_again_while_the_writer_writes_stops_the_version(conn, data_
     with conn:
         conn.execute("UPDATE forms SET read_on = '2999-01-01T00:00:00+00:00'")  # read after the version started
     assert flow.advance(conn, config, version) == []
-    assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == ("stopped", flow.FORM_READ)
+    assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == ("stopped", answers.FORM_READ)
 
 
 def test_your_own_words_leaves_the_writer_available_and_your_own_answers_do_not(conn):
     essay = Field("question_1", "Why Acme?", "long_text", True, "company", "In your own words, please.")
-    assert answers.questions(conn, with_form(conn, Form((essay,)))) == ([essay], None)
+    assert answers.questions(conn, with_form(conn, Form((essay,)))) == [essay]
     own = Field("question_1", "Why Acme?", "long_text", True, "company", "Answers must be your own.")
-    assert answers.questions(conn, with_form(conn, Form((own,)))) == ([], answers.OWN_WORDS)
+    with pytest.raises(answers.NoQuestions, match=answers.OWN_WORDS):
+        answers.questions(conn, with_form(conn, Form((own,))))
 
 
 def test_the_writer_gets_no_promise_or_legal_question(conn):
@@ -269,9 +272,10 @@ def test_the_writer_gets_no_promise_or_legal_question(conn):
         "question_8", "Have you ever been convicted of a crime? If so, explain.", "long_text", True, "company"
     )
     job = with_form(conn, Form((WHY, legal)))
-    assert answers.questions(conn, job) == ([WHY], None)
+    assert answers.questions(conn, job) == [WHY]
 
 
 def test_a_form_with_an_ai_promise_has_no_questions_for_the_writer(conn):
     promise = Field("question_9", "How did you use AI when preparing this application?", "long_text", True, "company")
-    assert answers.questions(conn, with_form(conn, Form((WHY, promise)))) == ([], answers.OWN_WORDS)
+    with pytest.raises(answers.NoQuestions, match=answers.OWN_WORDS):
+        answers.questions(conn, with_form(conn, Form((WHY, promise))))

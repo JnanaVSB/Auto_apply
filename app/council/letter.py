@@ -8,17 +8,18 @@ from app.config import PROJECT_DIR
 from app.council import writer
 from app.council.writer import (
     DATA_RULE,
-    LONG_DASH,
     BadAnswer,
     Checked,
     Entry,
+    cited_entries,
     data,
+    final_text,
     new_numbers,
     original,
     responses,
     revision,
 )
-from app.documents.privacy import PLACEHOLDER, PrivacyStop, Shield, last_check
+from app.documents.privacy import Shield
 from app.resume import CONTROL
 
 SKILL_FILE = PROJECT_DIR / "skills" / "cover-letter.md"
@@ -76,35 +77,14 @@ def checked(text: str, entries: list[Entry], ad: str, objections: dict[str, str]
     paragraphs, cited, notes = found["paragraphs"], found["from"], found["notes"]
     if not isinstance(paragraphs, list) or not FEWEST <= len(paragraphs) <= MOST or not isinstance(notes, str):
         raise BadAnswer(f'"paragraphs" must hold {FEWEST} to {MOST} paragraphs, and "notes" must be text')
-    labels = {entry.label: entry for entry in entries}
-    known_labels = isinstance(cited, list) and all(isinstance(label, str) and label in labels for label in cited)
-    if not known_labels or not cited or len(set(cited)) != len(cited):
-        raise BadAnswer('"from" must list the labels (E1, E2, ...) of the entries the letter draws on, each once')
-    letter = [_paragraph(number, paragraph) for number, paragraph in enumerate(paragraphs, 1)]
-    known = " ".join([ad, *(original(labels[label]) for label in cited)])
+    used = cited_entries(cited, entries, "the letter draws on")
+    letter = [final_text(f"paragraph {number}", text, MAX_PARAGRAPH) for number, text in enumerate(paragraphs, 1)]
+    known = " ".join([ad, *map(original, used)])
     flags = [
         {"paragraph": number, "numbers": new}
         for number, paragraph in enumerate(letter)
         if (new := new_numbers(paragraph, known))
     ]
-    draw = [{"source": labels[label].source, "tile_id": labels[label].tile.tile_id} for label in cited]
+    draw = [{"source": entry.source, "tile_id": entry.tile.tile_id} for entry in used]
     notes = " ".join(CONTROL.sub("", notes).split())[:MAX_NOTES]
     return Checked({"paragraphs": letter, "from": draw, "notes": notes, "responses": replies, "missed": missed}, flags)
-
-
-def _paragraph(number: int, paragraph: object) -> str:
-    where = f"paragraph {number}"
-    if not isinstance(paragraph, str):
-        raise BadAnswer(f"{where} must be text")
-    text = " ".join(paragraph.split())
-    if not text or len(text) > MAX_PARAGRAPH or CONTROL.search(paragraph):
-        raise BadAnswer(f"{where} is empty, far too long, or holds invisible characters")
-    if LONG_DASH.search(text):
-        raise BadAnswer(f"{where} uses a long dash (— or –) or '--': use a plain '-' or rewrite the sentence")
-    if PLACEHOLDER.search(text):
-        raise BadAnswer(f"{where} uses a placeholder: write no name or contact details, they are added separately")
-    try:
-        last_check(text)
-    except PrivacyStop as stop:
-        raise BadAnswer(f"{where} holds {stop}: never add one") from None
-    return text

@@ -6,7 +6,7 @@ from typing import Any
 
 from app.fetch import Fetcher, FetchError, NotFound
 from app.sources import html_to_text
-from app.submit import Choice, Field, Form, FormClosed, FormError, distinct
+from app.submit import BROKEN, Choice, Field, Form, FormClosed, FormError, distinct
 
 FORM_API = "https://boards-api.greenhouse.io/v1/boards/{}/jobs/{}?questions=true"
 KINDS = {
@@ -24,7 +24,6 @@ CONSENTS = {
 EDUCATION = {"school": "School", "degree": "Degree", "discipline": "Discipline"}
 UNREADABLE = "Greenhouse's form for this job could not be read."
 CLOSED = "This posting is closed or was removed (Greenhouse says not found)."
-BROKEN = (AttributeError, KeyError, TypeError, ValueError)
 
 
 def read(fetcher: Fetcher, board: str, job_id: str) -> tuple[Form, int]:

@@ -20,8 +20,8 @@ from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import CONTROL, ResumeError, from_latex, read_latex
 from app.scoring import ready
-from app.submit import record
-from app.web import actions, drafts, queries, submit
+from app.submit import preview, record
+from app.web import actions, drafts, queries
 
 CHOICES = {  # the questionnaire's drop-down choices
     "STATUSES": questionnaire.STATUSES, "GENDERS": questionnaire.GENDERS, "RACES": questionnaire.RACES,
@@ -177,7 +177,7 @@ def add_routes(
         forms = {  # nothing is open on an application you already recorded
             job_id: found.open
             for job_id in ids
-            if not record.recorded(conn, job_id) and (found := submit.preview(conn, data_dir, job_id))
+            if not record.recorded(conn, job_id) and (found := preview.preview(conn, data_dir, job_id))
         }
         skipped = request.query_params.get("skipped", "")
         return page(
@@ -279,7 +279,7 @@ def add_routes(
         preparer = request.app.state.preparer
         free, doubts = not _busy(conn, job_id), _doubts(conn, current, job)
         missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
-        writer, answers = _writer_chosen(), runs.latest(conn, job_id, runs.ANSWERS)
+        writer, answers = writer_chosen(), runs.latest(conn, job_id, runs.ANSWERS)
         return page(
             request, "preparation.html", job_id=job_id, queued=queued, chosen=chosen, own=own,
             files=uploads.offered(conn), **drafts.state(conn, data_dir, job_id),
@@ -322,7 +322,7 @@ def cannot(
         writer_sources.offered(conn, current.resume), writer_sources.of_job(conn, job["id"])[0]
     ):
         return "tiles"
-    if not _writer_chosen():
+    if not writer_chosen():
         return "writer"
     return None if alone or _council_chosen() else "council"
 
@@ -360,7 +360,7 @@ def _council_chosen() -> bool:
         return False
 
 
-def _writer_chosen() -> bool:
+def writer_chosen() -> bool:
     try:
         return load_config().ai.writer is not None
     except ConfigError:  # shown on the Settings page; nothing can be prepared meanwhile

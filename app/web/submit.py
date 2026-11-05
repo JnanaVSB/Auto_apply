@@ -7,25 +7,23 @@ anything to a job site (owner rule: never a submission without your explicit aut
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-import sqlcipher3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import questionnaire, sources, submit, tracker
-from app.collect import now
-from app.config import ConfigError, load_config
+from app.config import load_config
 from app.council import answers, flow, runs
-from app.council.answers import KEPT
-from app.fetch import FetchError
 from app.resume import CONTROL
-from app.submit import Field, FormError, greenhouse, lever, match, record
+from app.submit import Field, FormError, greenhouse, lever, match, preview, record, wordings
+from app.submit.match import MINE, WRITER
+from app.submit.preview import Preview
 from app.web import queries
+from app.web.prepare import BUSY_JOB, NO_WRITER, writer_chosen
 
 READERS = {"greenhouse": (greenhouse, "api"), "lever": (lever, "page")}  # site -> its reader, and where it reads from
 READ_FROM = {"api": "Greenhouse's public job board", "page": "Lever's application page", "browser": "the browser"}
@@ -35,10 +33,6 @@ ALREADY = "Already reading this form"
 TO_REMEMBER = ("text", "single", "multi")  # a required question no rule answers: kept in More answers to answer once
 TYPED = ("text", "location", "long_text", "single", "multi")  # the questions you answer here
 MAX_LINE, MAX_LONG = 2_000, 20_000  # characters of a short and a long answer
-YOURS = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
-    VALUES (?, ?, ?, 'you', NULL, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
-    given_by = 'you', preparation_id = NULL, saved_on = excluded.saved_on, wording = excluded.wording"""
-FORGET = "DELETE FROM form_answers WHERE job_id = ? AND field = ? AND given_by = 'you'"
 GONE = "This question is no longer on the form: read it again"
 NAMES_COMPANY = "This answer names {}, so it is kept for this job only"
 NOT_HERE = "This question isn't answered here: do it in the window"
@@ -52,43 +46,10 @@ NOT_OPTIONAL = "This question is required: answer it, or do it in the window"
 NO_YES = "This consent has no single yes choice: decide in the window"
 CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 CHANGED_QUESTION = "This question changed: look at it again"
-# worded as app/web/prepare.py's NO_WRITER and BUSY_JOB, which can't be imported here (prepare.py imports this module)
-NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
-BUSY_JOB = "The Writer is still working on this job: try again when it's done."
-MINE, WRITER = "your answer for this job", "Writer draft"  # match's sources of a job's own answers
 
 
 class _Refused(Exception):  # noqa: N818 (shown as it is)
     """An answer that can't be kept; the message says why, never with your text."""
-
-
-@dataclass(frozen=True)
-class Preview:
-    """The job's saved form, matched to your answers: what the part and the Ready page's badge show."""
-
-    read_on: str
-    read_from: str
-    problem: str | None  # questions that could not be read
-    lines: tuple[match.Line, ...]
-    warnings: tuple[str, ...]
-    open: int  # decisions required, suggestions included
-
-
-def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview | None:
-    """The job's form as it would be filled in now; None before it is read."""
-    saved = submit.load(conn, job_id)
-    if saved is None:
-        return None
-    form, read_on, read_from, problem = saved
-    answers = questionnaire.load(conn)[0]
-    company, us_location = conn.execute("SELECT company, us_location FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    kept = {row[0]: row[1:] for row in conn.execute(KEPT, (job_id,))}
-    lines, warnings = match.match(
-        form, answers, company, kept=kept, consents=answers.get("consents") or {},
-        files=match.documents(conn, data_dir, job_id), us_job=us_location == "yes",
-    )  # fmt: skip
-    still_open = sum(line.status in ("decide", "suggested") for line in lines)
-    return Preview(read_on, read_from, problem, lines, warnings, still_open)
 
 
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) -> None:
@@ -125,7 +86,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         state.forms_tried.add(job_id)
         try:
             form, unread = await run_in_threadpool(reader.read, state.collector.fetcher, posting[1], posting[2])
-        except (FormError, FetchError) as error:  # their messages never hold your details
+        except FormError as error:  # its messages never hold your details
             return _part(request, job, failed=str(error))
         finally:
             state.forms_reading.discard(job_id)
@@ -136,8 +97,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         """Each required question no rule answers kept in your More answers as "needs answer", so you answer it once
         for every form; why it could not be (More answers full, or broken saved answers), else None."""
         conn = request.app.state.conn
-        for line in preview(conn, data_dir, job["id"]).lines:
-            ordinary = match.care(line.field, job["company"]) == match.ORDINARY
+        for line in preview.preview(conn, data_dir, job["id"]).lines:
+            ordinary = wordings.care(line.field, job["company"]) == wordings.ORDINARY
             if (
                 ordinary
                 and line.decision == "unknown"
@@ -146,7 +107,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
                 and _answerable(line.field)
             ):
                 try:
-                    match.remember(conn, line.field.label, job["company"])
+                    questionnaire.remember(conn, line.field.label, job["company"])
                 except questionnaire.QuestionnaireError as error:
                     return str(error)
         return None
@@ -159,18 +120,16 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if refused or _stale(request, field):
             return _part(request, job, failed=refused or CHANGED_QUESTION)
         try:
-            if field.kind not in TYPED:
-                raise _Refused(NOT_HERE)
             text = _typed(field, request.state.form)
         except _Refused as refused:
             return _part(request, job, failed=str(refused))
-        _keep(conn, job_id, field, text)
-        saved = field.kind != "long_text" and match.care(field, job["company"]) == match.ORDINARY
+        preview.keep(conn, job_id, field, text)
+        saved = field.kind != "long_text" and wordings.care(field, job["company"]) == wordings.ORDINARY
         if saved and request.state.form.get("save") == "1":
-            if match.names(text, job["company"]):
+            if wordings.names(text, job["company"]):
                 return _part(request, job, note=NAMES_COMPANY.format(job["company"]))
             try:
-                match.remember(conn, field.label, job["company"], text)
+                questionnaire.remember(conn, field.label, job["company"], text)
             except questionnaire.QuestionnaireError as error:  # the answer for this job is kept all the same
                 return _part(request, job, note=str(error))
         return _part(request, job)
@@ -183,23 +142,23 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         if refused or _stale(request, field):
             return _part(request, job, failed=refused or CHANGED_QUESTION)
         choice = request.state.form.get("choice")
-        kind = match.consent_kind(field, job["company"])
+        kind = wordings.consent_kind(field, job["company"])
         if kind is None or choice not in ("accept", "decline"):
             return _part(request, job, failed=NOT_HERE)
         if kind:  # any other sentence is for this job only
             values, _, problem = questionnaire.load(conn)
             if problem:
-                return _part(request, job, failed=match.BROKEN.format(problem))
+                return _part(request, job, failed=questionnaire.BROKEN.format(problem))
             values["consents"][kind] = choice
             questionnaire.save(conn, questionnaire.check(values))
         elif choice == "accept":
             if not (given := _yes(field)):
                 return _part(request, job, failed=NO_YES)
-            _keep(conn, job_id, field, given)
+            preview.keep(conn, job_id, field, given)
         elif field.required:
             return _part(request, job, failed=REQUIRED)
         else:
-            _keep(conn, job_id, field, match.LEFT_EMPTY)
+            preview.keep(conn, job_id, field, match.LEFT_EMPTY)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/use")
@@ -208,21 +167,23 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         conn, (job, field, refused) = request.app.state.conn, _asked(request, job_id)
         if refused:
             return _part(request, job, failed=refused)
-        line = next((line for line in _usable(preview(conn, data_dir, job_id)) if line.field.key == field.key), None)
+        line = next(
+            (line for line in _usable(preview.preview(conn, data_dir, job_id)) if line.field.key == field.key), None
+        )
         if line is None or request.state.form.get("seen") != _seen([line]):
             return _part(request, job, failed=CHANGED_SUGGESTION)
-        _keep(conn, job_id, field, _suggestion(line))
+        preview.keep(conn, job_id, field, _suggestion(line))
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/use-all")
     async def use_all(request: Request, job_id: int) -> Response:
         """Use all: every suggested answer becomes your answer for this job, if the list is still the one shown."""
         conn, job = request.app.state.conn, _job(request, job_id)
-        lines = _usable(preview(conn, data_dir, job_id))
+        lines = _usable(preview.preview(conn, data_dir, job_id))
         if request.state.form.get("seen") != _seen(lines):
             return _part(request, job, failed=CHANGED_SUGGESTION)
         for line in lines:
-            _keep(conn, job_id, line.field, _suggestion(line))
+            preview.keep(conn, job_id, line.field, _suggestion(line))
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/window")
@@ -231,7 +192,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         job, field, refused = _asked(request, job_id, promise=True)
         if refused:
             return _part(request, job, failed=refused)
-        _keep(request.app.state.conn, job_id, field, match.IN_WINDOW)
+        preview.keep(request.app.state.conn, job_id, field, match.IN_WINDOW)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/empty")
@@ -240,7 +201,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         job, field, refused = _asked(request, job_id)
         if refused or field.required:
             return _part(request, job, failed=refused or NOT_OPTIONAL)
-        _keep(request.app.state.conn, job_id, field, match.LEFT_EMPTY)
+        preview.keep(request.app.state.conn, job_id, field, match.LEFT_EMPTY)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/forget")
@@ -249,15 +210,14 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         job, field, refused = _asked(request, job_id, promise=True)
         if refused:
             return _part(request, job, failed=refused)
-        with request.app.state.conn as conn:
-            conn.execute(FORGET, (job_id, field.key))
+        preview.forget(request.app.state.conn, job_id, field.key)
         return _part(request, job)
 
     @app.post("/jobs/{job_id:int}/form/write")
     async def write(request: Request, job_id: int) -> Response:
         """Write answers: the Writer drafts the form's long questions, in the background."""
         conn, job = request.app.state.conn, _job(request, job_id)
-        if not _writer_chosen():
+        if not writer_chosen():
             return _part(request, job, failed=NO_WRITER)
         if runs.writing(conn, job_id):
             return _part(request, job, failed=BUSY_JOB)
@@ -272,7 +232,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
     async def submitted(request: Request, job_id: int) -> Response:
         """I submitted it: records what you did on the site and moves the card to Applied. The app sends nothing."""
         conn, job = request.app.state.conn, _job(request, job_id)
-        found = preview(conn, data_dir, job_id)
+        found = preview.preview(conn, data_dir, job_id)
         try:
             on = date.fromisoformat(request.state.form.get("on", ""))
         except ValueError:
@@ -300,7 +260,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         field = next((field for field in saved[0].fields if field.key == key), None) if saved else None
         if field is None or field.kind == "hidden":
             return job, None, GONE
-        if not promise and match.care(field, job["company"]) == match.PROMISE:
+        if not promise and wordings.care(field, job["company"]) == wordings.PROMISE:
             return job, field, PROMISE
         return job, field, None
 
@@ -308,7 +268,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         conn, job_id = request.app.state.conn, job["id"]
         posting = sources.posting_of(job["apply_url"])
         site = posting and posting[0]
-        found = preview(conn, data_dir, job_id)
+        found = preview.preview(conn, data_dir, job_id)
         lines = found.lines if found else ()
         latest, done = runs.latest(conn, job_id, runs.ANSWERS), runs.last_done(conn, job_id, runs.ANSWERS)
         recorded = record.recorded(conn, job_id)
@@ -318,7 +278,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         )
         suggested = _usable(found)
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
-            (line, _limit(answers.limit(line.field)), flags.get(line.field.key), _over_limit(line))
+            (line, answers.in_words(answers.limit(line.field), ","), flags.get(line.field.key), _over_limit(line))
             for line in lines
             if line.field.kind == "long_text"
             and (line.status == "write" or line.source == WRITER or (line.status == "fill" and line.source == MINE))
@@ -332,20 +292,21 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
             remembered={line.field.key for line in lines if line.decision == "consent"
-                        and match.consent_kind(line.field, job["company"])},
+                        and wordings.consent_kind(line.field, job["company"])},
             askable={line.field.key for line in lines
                      if line.askable and (line.field.kind == "long_text" or _answerable(line.field))},
             this_job_only={line.field.key for line in lines
-                           if match.care(line.field, job["company"]) != match.ORDINARY},
+                           if wordings.care(line.field, job["company"]) != wordings.ORDINARY},
             seen={line.field.key: _seen([line]) for line in suggested}, seen_all=_seen(suggested),
-            worded={line.field.key: _fingerprint(match.wording(line.field)) for line in lines},
-            longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
+            worded={line.field.key: _fingerprint(wordings.wording(line.field)) for line in lines},
+            longs=longs, own_words=found is not None and found.no_writer,
             writing=latest is not None and latest["status"] == "writing",
-            stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
+            stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE, writer=WRITER,
+            max_line=MAX_LINE, max_long=MAX_LONG,
             job=job, record=recorded, moved_back=back and _day(back), today=date.today().isoformat(),
             panel=record.standard(questionnaire.load(conn)[0]),
             papers=[(found_file[0], f"/documents/{job_id}/{found_file[1].name}")
-                    for found_file in match.documents(conn, data_dir, job_id).values() if found_file],
+                    for found_file in record.documents(conn, data_dir, job_id).values() if found_file],
         )  # fmt: skip
 
 
@@ -365,8 +326,10 @@ def _answerable(field: Field) -> bool:
 def _typed(field: Field, form: dict[str, str]) -> str:
     """Your answer as it is kept: text as typed (one line for a short box), or the chosen choices' labels, one a line,
     so the rules' choice matching finds them; raises _Refused saying what is wrong."""
+    if field.kind not in TYPED:
+        raise _Refused(NOT_HERE)
     if field.kind in ("single", "multi"):
-        labels = {choice.value: choice.label for choice in field.choices}
+        labels = field.labels
         chosen = [form.get("answer", "")] if field.kind == "single" else [
             value for name, value in form.items() if name.startswith("choice.")
         ]  # fmt: skip
@@ -391,16 +354,16 @@ def _suggestion(line: match.Line) -> str:
     """A suggested answer as `_typed` keeps yours: its text, or the labels of its choices, one a line."""
     if isinstance(line.value, str):
         return line.value
-    labels = {choice.value: choice.label for choice in line.field.choices}
-    return "\n".join(labels[value] for value in line.value)
+    return "\n".join(line.field.labels[value] for value in line.value)
 
 
 def _usable(found: Preview | None) -> list[match.Line]:
     """The suggestions Use may keep: never a Writer draft on a form with a rule about AI: only your edit closes it."""
     if found is None:
         return []
-    ruled = match.NO_AI_WARNING in found.warnings
-    return [line for line in found.lines if line.status == "suggested" and not (ruled and line.source == WRITER)]
+    return [
+        line for line in found.lines if line.status == "suggested" and not (found.no_writer and line.source == WRITER)
+    ]
 
 
 def _fingerprint(shown: object) -> str:
@@ -416,7 +379,7 @@ def _seen(lines: list[match.Line]) -> str:
 
 def _stale(request: Request, field: Field) -> bool:
     """Whether the page was showing other words for this question: your answer was to those."""
-    return request.state.form.get("wording") != _fingerprint(match.wording(field))
+    return request.state.form.get("wording") != _fingerprint(wordings.wording(field))
 
 
 def _over_limit(line: match.Line) -> str:
@@ -426,34 +389,15 @@ def _over_limit(line: match.Line) -> str:
         return ""
     words, characters = most
     over = (words and len(line.value.split()) > words) or (characters and len(line.value) > characters)
-    return f"over the form's stated limit of {_limit(most)}" if over else ""
-
-
-def _keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) -> None:
-    """Your answer for this job's question as it is worded now, replacing a Writer draft."""
-    with conn:
-        conn.execute(YOURS, (job_id, field.key, answer, now(), match.wording(field)))
+    return f"over the form's stated limit of {answers.in_words(most, ',')}" if over else ""
 
 
 def _yes(field: Field) -> str:
     """A consent given for this job: its box ticked, or the label of the choice that gives it ("" without one)."""
     if field.kind == "consent":
         return match.TICKED
-    choice = match.consent_choice(field)
+    choice = wordings.consent_choice(field)
     return choice.label if choice and field.kind in ("single", "multi") else ""
-
-
-def _limit(most: tuple[int | None, int | None]) -> str:
-    """A question's limit in words: "100 words", "1,200 characters", or both."""
-    return " and ".join(f"{count:,} {unit}" for count, unit in zip(most, ("words", "characters"), strict=True) if count)
-
-
-def _writer_chosen() -> bool:
-    """Whether the Writer has a model, as the Ready to Apply box checks it (app/web/prepare.py)."""
-    try:
-        return load_config().ai.writer is not None
-    except ConfigError:  # shown on the Settings page
-        return False
 
 
 def _day(read_on: str) -> str:
