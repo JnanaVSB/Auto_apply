@@ -150,6 +150,26 @@ def test_bot_check_boxes_are_never_a_question_whatever_element_holds_them():
     assert fields["h-captcha-response"].kind == fields["g-recaptcha-response"].kind == "hidden"
 
 
+def card_page(title, instructions, description):
+    entry = {"type": "textarea", "text": "Why Acme?", "required": True, "description": description}
+    template = {"id": "c-1", "text": title, "instructions": instructions, "fields": [entry]}
+    value = html.escape(json.dumps(template))
+    return f'<form><input type="hidden" name="cards[c-1][baseTemplate]" value="{value}"></form>'
+
+
+@pytest.mark.parametrize(
+    ("title", "instructions", "description", "help_"),
+    [
+        ("About you", "Do not use AI.", "Answers written with ChatGPT are rejected.",
+         "About you Do not use AI. Answers written with ChatGPT are rejected."),
+        ("Why Acme?", "", "Temporary visa holders should select No.", "Temporary visa holders should select No."),
+        ("", "Be brief.", "", "Be brief."), ("Why Acme?", None, None, ""),
+    ],
+)  # fmt: skip
+def test_a_cards_title_instructions_and_a_fields_description_are_its_help(title, instructions, description, help_):
+    assert lever.parse(card_page(title, instructions, description))[0].fields[0].help == help_
+
+
 def test_a_survey_outside_a_country_section_is_for_everyone():
     survey = card("surveysResponses", "s-2", "Second survey", SURVEY)
     page = PAGE.replace("</form>", f'<div class="section page-centered application-form">{survey}</div></form>')

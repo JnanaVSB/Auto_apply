@@ -111,8 +111,9 @@ def _card_field(name: str, card: dict, number: int, entry: dict, countries: str)
     options = [option["text"] for option in entry.get("options") or []]
     if not all(isinstance(option, str) and option.strip() for option in options):
         raise ValueError("a choice without a label")
-    title = card.get("text") if isinstance(card.get("text"), str) else ""
-    help_ = title if title.strip() != label.strip() else ""
+    title = _text(card.get("text"))
+    said = (title if title != label.strip() else "", _text(card.get("instructions")), _text(entry.get("description")))
+    help_ = " ".join(filter(None, said))
     if group == "cards":
         key, part = f"cards[{card_id}][field{number}]", "company"
     else:
@@ -121,6 +122,10 @@ def _card_field(name: str, card: dict, number: int, entry: dict, countries: str)
     choices = tuple(Choice(option, option) for option in options)
     kind = CARD_KINDS.get(entry["type"], "unknown")
     return Field(key, label, kind, entry.get("required") is True, part, help_.strip(), choices)
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 class _Page(HTMLParser):

@@ -67,7 +67,7 @@ def parse(data: Any) -> tuple[Form, int]:
                 skipped += 1
     if not any(field.part in ("standard", "company") for field in fields):
         raise FormError(UNREADABLE)
-    kept, repeated = distinct(fields + _education(data.get("education")))
+    kept, repeated = distinct(fields + _education(data.get("education")) + _ai_disclaimer(data.get("ai_disclaimer")))
     return Form(kept), skipped + repeated
 
 
@@ -115,6 +115,12 @@ def _education(setting: Any) -> list[Field]:
         return []
     required = setting == "education_required"
     return [Field(key, label, "single", required, "education") for key, label in EDUCATION.items()]
+
+
+def _ai_disclaimer(text: Any) -> list[Field]:
+    """The site's own words about AI, kept as a hidden box: a form's rule about AI is read from its fields."""
+    words = html_to_text(html.unescape(text)) if isinstance(text, str) else ""
+    return [Field("ai_disclaimer", "AI disclaimer", "hidden", False, "standard", words)] if words.strip() else []
 
 
 def _choice(label: Any, value: Any) -> Choice:

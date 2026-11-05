@@ -82,7 +82,7 @@ def questions(conn: sqlcipher3.Connection, job_id: int) -> tuple[list[Field], st
         line.field
         for line in lines
         if line.field.kind == "long_text" and line.field.part == "company"
-        and (line.status == "write" or (line.status == "fill" and line.source == "Writer draft"))
+        and (line.status == "write" or line.source == "Writer draft")
     ]  # fmt: skip
     return found, None if found else NO_QUESTIONS
 

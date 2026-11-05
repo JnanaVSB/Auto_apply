@@ -224,8 +224,9 @@ def test_a_legal_question_needs_a_us_job_and_no_help(us_job, help_, status):
     assert match.match(Form((asked,)), ANSWERS, "Acme", us_job=us_job)[0][0].status == status
 
 
-def test_a_plain_fact_may_have_help():
-    assert line(field("What is your GPA?", help="Out of 4.0")).value == "3.9"
+@pytest.mark.parametrize("label", ["What is your GPA?", "LinkedIn", "GPA"])
+def test_a_plain_fact_or_link_with_help_asks(label):
+    assert line(field(label, key="question_7", required=True, help="Out of 4.0")).status == "decide"
 
 
 @pytest.mark.parametrize(
@@ -328,15 +329,15 @@ def survey(countries):
 
 
 @pytest.mark.parametrize("countries", ["US", "GB, US, CA", ""])
-def test_a_lever_survey_for_your_country_is_answered(countries):
-    assert chosen(line(survey(countries))) == ["Woman"]
+def test_a_lever_survey_for_your_country_is_yours_as_its_help_says_more_than_the_label(countries):
+    found = line(survey(countries))
+    assert (found.status, found.value, found.askable) == ("empty", "", True)
 
 
 @pytest.mark.parametrize("country", ["United States", "Canada", ""])
 def test_a_lever_survey_for_other_countries_is_left_empty(country):
     found = line(survey("GB, IE"), changed("contact", country=country))
     assert said(found) == ("empty", "", "only for candidates in: GB, IE")
-    assert said(line(survey("CA"), changed("contact", country="Canada")))[0] == "fill"
 
 
 def test_a_saved_more_answer_is_only_suggested_for_the_same_ordinary_question():
@@ -359,7 +360,7 @@ def test_an_empty_saved_answer_does_not_count():
     [
         (field("Consent to the privacy notice (GDPR)", "consent", True, "privacy"), "privacy"),
         (field("Consent to keeping your data (GDPR)", "consent", True, "privacy"), "retention"),
-        (field("Consent to data processing (GDPR)", "consent", True, "privacy"), "privacy"),
+        (field("Consent to data processing (GDPR)", "consent", True, "privacy"), "processing"),
         (field("I have read and agree to the privacy policy", "consent", True), "privacy"),
         (field("Do you opt in to receive WhatsApp messages?", "single", choices=YES_NO), "texting"),
         (field("Acme may contact me about future job opportunities.", "consent", key="consent[x]"), "marketing"),

@@ -337,7 +337,7 @@ ROWS = [
     (r("Why OpenAI?", L, company="OpenAI"), *LEFT),
     (r("Did you use OpenAI to write this?", L, company="OpenAI"), *LEFT),
     # company 'C3.ai'
-    (r("Why C3.ai?", L, company="C3.ai"), THIS_COMPANY, "write", "", ""),
+    (r("Why C3.ai?", L, company="C3.ai"), *OURS),  # the dot reads as a second sentence
     (r("Have you worked at C3.ai before?", L, company="C3.ai"), *LEFT),
     # company 'GPT'
     (r("Why GPT?", L, company="GPT"), *LEFT),
@@ -419,14 +419,14 @@ ROWS = [
     (r("Why do you want this job?", L, help="Do you have your own transportation?"), *ASKED),
     (r("Why do you want this job?", L, help="If you have your own website, list it."), *ASKED),
     (r("Why do you want this job?", L, help="I am at my own expense."), *ASKED),
-    (r("Why do you want this job?", L, help="Explain in your own words."), ORDINARY, "write", "", ""),
+    (r("Why do you want this job?", L, help="Explain in your own words."), *ASKED),
     # w6
     (r("Why do you want this job?", L, help="You must not use AI to write your answers"), *EYE),
     (r("Why do you want this job?", L, help="Do not use AI when answering these questions."), *EYE),
     (r("Why do you want this job?", L, help="Applications written with AI will be rejected."), *EYE),
     (r("Why do you want this job?", L, help="We do not accept AI-generated applications."), *EYE),
     (r("Why do you want this job?", L, help="Please refrain from using generative AI in your application."), *EYE),
-    (r("Why do you want this job?", L, help="I confirm the materials I submit are my own work"), *EYE),
+    (r("Why do you want this job?", L, help="I confirm the materials I submit are my own work"), *ASKED),
     (r("Why do you want this job?", L, help="All submitted materials are the candidate's own."), *ASKED),
     (r("Why do you want this job?", L, help="Answers must be written by you, not by an AI."), *EYE),
     # eeo
@@ -559,12 +559,13 @@ def test_a_promise_on_the_form_stops_the_writer_on_every_other_question(promise)
     assert [line.status for line in lines] == ["left", "decide"] and match.NO_AI_WARNING in warnings
 
 
-def test_a_writer_draft_is_kept_but_warned_about_on_a_form_that_later_forbids_ai():
+def test_a_writer_draft_on_a_form_that_later_forbids_ai_stays_open_with_the_warning():
     essay = Field("q9", "Why this role?", L, True, "company")
     rule = Field("q1", "Rule", C, True, "company", "Do not use AI.")
     kept = {"q9": ("draft", "writer", match.wording(essay))}
     lines, warnings = match.match(Form((rule, essay)), F1, "Acme", kept=kept)
-    assert lines[1].source == "Writer draft" and match.DRAFTS_WARNING in warnings
+    assert (lines[1].status, lines[1].source, lines[1].note) == ("suggested", "Writer draft", match.DRAFT_UNDER_RULE)
+    assert match.DRAFTS_WARNING in warnings
 
 
 def test_a_writer_draft_on_a_question_that_is_now_legal_is_dropped():

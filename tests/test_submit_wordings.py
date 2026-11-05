@@ -297,7 +297,7 @@ ROWS = [
     (q(ACKNOWLEDGE, "multi", company="Cloudflare", choices=("Acknowledge/Confirm",), help="Candidate Privacy Policy"),
      *CONSENT),
     (q(ACKNOWLEDGE, "multi", company="Cloudflare", choices=("Acknowledge/Confirm",), help="Candidate Privacy Policy",
-       consents={"privacy": "accept"}), LEGAL, "fill", "Acknowledge/Confirm", ""),
+       consents={"privacy": "accept"}), *CONSENT),  # a remembered consent needs empty help
     # Spotify's public Lever form (posting 2a55d6c9): the questions the others didn't have
     (text("Full name", key="name", part="standard", company="Spotify"), ORDINARY, "fill", "Alex Example", ""),
     (q("Pronouns", "multi", key="pronouns", part="standard", required=False, company="Spotify",
@@ -312,11 +312,11 @@ ROWS = [
        help="Previous Spotify Employment", choices=("No", "Yes - Intern", "Yes - Full Time Employment")), *OURS),
     (q("What best describes your gender?", key="surveysResponses[s1][responses][field0]", part="demographic",
        required=False, company="Spotify", help="Demographic Questions for Spotify (for candidates in: US)",
-       choices=("Woman", "Man", "Prefer not to disclose")), LEGAL, "fill", "Prefer not to disclose", ""),
+       choices=("Woman", "Man", "Prefer not to disclose")), LEGAL, "empty", "", ""),
     (q("Are you a veteran/have you served in the military?", key="surveysResponses[s1][responses][field2]",
        part="demographic", required=False, company="Spotify",
        help="Demographic Questions for Spotify (for candidates in: US)",
-       choices=("Yes", "No", "Prefer not to disclose")), LEGAL, "fill", "Prefer not to disclose", ""),
+       choices=("Yes", "No", "Prefer not to disclose")), LEGAL, "empty", "", ""),
     # The country list is the app's own: "AI" there is Anguilla, never a promise
     (q("What best describes your gender?", key="surveysResponses[s2][responses][field0]", part="demographic",
        required=False, company="Spotify", help="Demographic Question for Spotify (for candidates in: AL, DZ, AI, AQ)",

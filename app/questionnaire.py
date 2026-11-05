@@ -167,6 +167,7 @@ class Consents(Section):
     """The consent kinds app/submit/match.py remembers; AI-use promises and arbitration are always asked."""
 
     privacy: Consent = "ask"
+    processing: Consent = "ask"
     retention: Consent = "ask"
     texting: Consent = "ask"
     marketing: Consent = "ask"
@@ -196,6 +197,7 @@ def typed(form: dict[str, str]) -> dict:
     values: dict = {name: {} for name in SECTIONS if name != "more"}
     rows: dict[int, dict[str, str]] = {}
     for name, value in form.items():
+        value = value.replace("\r\n", "\n")  # a browser sends a text area's new lines as \r\n
         if match := PAIR_ROW.fullmatch(name):
             rows.setdefault(int(match[2]), {})[match[1]] = value
         elif (section := name.partition(".")[0]) in values:

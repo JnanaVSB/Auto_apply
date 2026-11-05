@@ -52,7 +52,7 @@ def made_up(conn, data_dir, letter=False, pdfs=True):
 def test_the_copy_panel_holds_only_the_answers_you_gave():
     assert record.standard(questionnaire.check(ANSWERS).model_dump(mode="json")) == [
         ("Name", "Sam Lee Park"), ("E-mail", "sam@example.com"), ("Location", "Austin, United States"),
-        ("Work authorization", "Yes"), ("Sponsorship now", "No"), ("Earliest start", "January 15, 2027"),
+        ("Work authorization (US)", "Yes"), ("Sponsorship now", "No"), ("Earliest start", "January 15, 2027"),
         ("Salary", "120,000-150,000 USD per year"),
     ]  # fmt: skip
 

@@ -83,6 +83,7 @@ def test_consents_are_asked_each_time_until_you_choose():
         "retention": "ask",
         "texting": "ask",
         "marketing": "ask",
+        "processing": "ask",
     }
     assert answers(**{"consents.marketing": "decline"}).consents.marketing == "decline"
 

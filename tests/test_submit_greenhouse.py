@@ -3,7 +3,7 @@ import pytest
 from helpers import FakeWeb
 
 from app.fetch import Fetcher
-from app.submit import Choice, FormClosed, FormError, greenhouse
+from app.submit import Choice, Field, FormClosed, FormError, greenhouse
 from app.submit.greenhouse import ACCEPT
 
 FORM_URL = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/123?questions=true"
@@ -128,6 +128,17 @@ def test_a_field_name_seen_before_is_skipped_and_the_first_kept():
     form, skipped = greenhouse.parse(REPLY | {"questions": [*REPLY["questions"], again]})
     assert skipped == 4
     assert [(field.label, field.kind) for field in form.fields if field.key == "first_name"] == [("First Name", "text")]
+
+
+def test_an_ai_disclaimer_is_kept_as_a_hidden_box_only_when_it_says_something():
+    form = greenhouse.parse(REPLY | {"ai_disclaimer": "<p>Do not use AI in your application.</p>"})[0]
+    assert form.fields[-1] == Field(
+        "ai_disclaimer", "AI disclaimer", "hidden", False, "standard", "Do not use AI in your application."
+    )
+    for empty in (None, "", "  "):
+        assert "ai_disclaimer" not in {
+            field.key for field in greenhouse.parse(REPLY | {"ai_disclaimer": empty})[0].fields
+        }
 
 
 def test_no_consent_or_education_fields_when_the_form_asks_for_none():

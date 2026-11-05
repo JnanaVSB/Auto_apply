@@ -51,6 +51,7 @@ REQUIRED = "This form requires it: decide in the window, or skip this job"
 NOT_OPTIONAL = "This question is required: answer it, or do it in the window"
 NO_YES = "This consent has no single yes choice: decide in the window"
 CHANGED_SUGGESTION = "This suggestion changed: look at it again"
+CHANGED_QUESTION = "This question changed: look at it again"
 # worded as app/web/prepare.py's NO_WRITER and BUSY_JOB, which can't be imported here (prepare.py imports this module)
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
 BUSY_JOB = "The Writer is still working on this job: try again when it's done."
@@ -155,8 +156,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         """Your answer to one question, for this job; with Save ticked (short questions), also in your More answers
         for every form."""
         conn, (job, field, refused) = request.app.state.conn, _asked(request, job_id)
-        if refused:
-            return _part(request, job, failed=refused)
+        if refused or _stale(request, field):
+            return _part(request, job, failed=refused or CHANGED_QUESTION)
         try:
             if field.kind not in TYPED:
                 raise _Refused(NOT_HERE)
@@ -179,8 +180,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         """Accept or Decline: remembered for every form for a known kind (your Questionnaire's Consents), else for
         this job only. AI-use promises and arbitration are never answered by the app."""
         conn, (job, field, refused) = request.app.state.conn, _asked(request, job_id)
-        if refused:
-            return _part(request, job, failed=refused)
+        if refused or _stale(request, field):
+            return _part(request, job, failed=refused or CHANGED_QUESTION)
         choice = request.state.form.get("choice")
         kind = match.consent_kind(field, job["company"])
         if kind is None or choice not in ("accept", "decline"):
@@ -207,8 +208,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         conn, (job, field, refused) = request.app.state.conn, _asked(request, job_id)
         if refused:
             return _part(request, job, failed=refused)
-        line = next(line for line in preview(conn, data_dir, job_id).lines if line.field.key == field.key)
-        if line.status != "suggested" or request.state.form.get("seen") != _seen([line]):
+        line = next((line for line in _usable(preview(conn, data_dir, job_id)) if line.field.key == field.key), None)
+        if line is None or request.state.form.get("seen") != _seen([line]):
             return _part(request, job, failed=CHANGED_SUGGESTION)
         _keep(conn, job_id, field, _suggestion(line))
         return _part(request, job)
@@ -217,8 +218,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
     async def use_all(request: Request, job_id: int) -> Response:
         """Use all: every suggested answer becomes your answer for this job, if the list is still the one shown."""
         conn, job = request.app.state.conn, _job(request, job_id)
-        found = preview(conn, data_dir, job_id)
-        lines = [line for line in (found.lines if found else ()) if line.status == "suggested"]
+        lines = _usable(preview(conn, data_dir, job_id))
         if request.state.form.get("seen") != _seen(lines):
             return _part(request, job, failed=CHANGED_SUGGESTION)
         for line in lines:
@@ -316,12 +316,12 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         flags = (
             {flag["field"]: ", ".join(flag["numbers"]) for flag in json.loads(done["flags"] or "[]")} if done else {}
         )
-        suggested = [line for line in lines if line.status == "suggested"]
+        suggested = _usable(found)
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
             (line, _limit(answers.limit(line.field)), flags.get(line.field.key), _over_limit(line))
             for line in lines
             if line.field.kind == "long_text"
-            and (line.status == "write" or (line.status == "fill" and line.source in (WRITER, MINE)))
+            and (line.status == "write" or line.source == WRITER or (line.status == "fill" and line.source == MINE))
         ]  # fmt: skip
         return page(
             request, "form.html", job_id=job_id, found=found, note=note, failed=failed,
@@ -338,6 +338,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             this_job_only={line.field.key for line in lines
                            if match.care(line.field, job["company"]) != match.ORDINARY},
             seen={line.field.key: _seen([line]) for line in suggested}, seen_all=_seen(suggested),
+            worded={line.field.key: _fingerprint(match.wording(line.field)) for line in lines},
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
@@ -394,11 +395,28 @@ def _suggestion(line: match.Line) -> str:
     return "\n".join(labels[value] for value in line.value)
 
 
-def _seen(lines: list[match.Line]) -> str:
-    """A fingerprint of suggestions as the page shows them: Use checks it, so a saved answer never goes unseen. A
-    fingerprint, not the text: a browser changes the new lines of a value it sends back."""
-    shown = [(line.field.key, record.shown(line)) for line in lines]
+def _usable(found: Preview | None) -> list[match.Line]:
+    """The suggestions Use may keep: never a Writer draft on a form with a rule about AI: only your edit closes it."""
+    if found is None:
+        return []
+    ruled = match.NO_AI_WARNING in found.warnings
+    return [line for line in found.lines if line.status == "suggested" and not (ruled and line.source == WRITER)]
+
+
+def _fingerprint(shown: object) -> str:
+    """What a page showed, for the press that comes back from it. Not the text: a browser changes the new lines of a
+    value it sends back."""
     return hashlib.sha256(json.dumps(shown).encode()).hexdigest()
+
+
+def _seen(lines: list[match.Line]) -> str:
+    """Suggestions as the page shows them: Use checks this, so a saved answer never goes unseen."""
+    return _fingerprint([(line.field.key, record.shown(line)) for line in lines])
+
+
+def _stale(request: Request, field: Field) -> bool:
+    """Whether the page was showing other words for this question: your answer was to those."""
+    return request.state.form.get("wording") != _fingerprint(match.wording(field))
 
 
 def _over_limit(line: match.Line) -> str:

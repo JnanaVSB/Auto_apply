@@ -91,7 +91,7 @@
   <h2>Consents</h2>
   <p class="hint">AI-use promises and arbitration agreements are always asked, on every form.</p>
   {% set consents = values.get("consents") or {} %}
-  {% for name, label in [("privacy", "Privacy notice"), ("retention", "Keeping your data (GDPR)"),
+  {% for name, label in [("privacy", "Privacy notice"), ("processing", "Data processing (GDPR)"), ("retention", "Keeping your data (GDPR)"),
                          ("texting", "Text or WhatsApp messages"), ("marketing", "Marketing or talent community")] %}
   <label>{{ label }}
     <select name="consents.{{ name }}">

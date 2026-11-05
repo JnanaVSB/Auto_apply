@@ -3,7 +3,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf }}">{% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
     <button type="submit">{{ label }}</button></form>{% endmacro %}
 {% macro answer_box(field) %}      <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
-        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ field.key }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ field.key }}"><input type="hidden" name="wording" value="{{ worded[field.key] }}">
         {% if field.kind == "single" %}
         <label>Your answer <select name="answer">{% for choice in field.choices %}<option value="{{ choice.value }}">{{ choice.label }}</option>{% endfor %}</select></label>
         {% elif field.kind == "multi" %}
@@ -14,7 +14,7 @@
         {% else %}
         <label>Your answer <input name="answer" maxlength="2000"></label>
         {% endif %}
-        {% if field.kind != "long_text" and field.key not in this_job_only %}<label class="tick"><input type="checkbox" name="save" value="1" checked> Save to my Questionnaire</label>{% endif %}
+        {% if field.kind != "long_text" and field.key not in this_job_only %}<label class="tick"><input type="checkbox" name="save" value="1"> Save to my Questionnaire</label>{% endif %}
         <p><button type="submit">Save</button></p>
       </form>{% endmacro %}
 {% macro writing_line() %}<p class="muted" role="status" hx-get="/jobs/{{ job_id }}/form/writing" hx-trigger="every 3s" hx-swap="outerHTML">The Writer is writing these answers…</p>{% endmacro %}
@@ -70,13 +70,13 @@
     <li><span class="mark warn">{{ decisions[line.decision] or "Suggested" }}</span> {{ field.label }}{% if line.note %} <span class="muted">({{ line.note }})</span>{% endif %}
       {% if field.help %}<br><span class="muted">{{ field.help }}</span>{% endif %}
       {% if line.status == "suggested" %}
-      <br>{{ value }} <span class="muted">({{ line.source }})</span> {{ post("use", "Use", {"field": field.key, "seen": seen[field.key]}) }}
+      <br>{{ value }} <span class="muted">({{ line.source }})</span>{% if field.key in seen %} {{ post("use", "Use", {"field": field.key, "seen": seen[field.key]}) }}{% endif %}
       <details><summary>Answer it another way</summary>{{ answer_box(field) }}</details>
       {% elif line.decision == "unknown" and field.kind in ("text", "location", "long_text", "single", "multi") %}
       {{ answer_box(field) }}
       {% elif line.decision == "consent" %}
-      {{ post("consent", "Accept", {"field": field.key, "choice": "accept"}) }}
-      {{ post("consent", "Decline", {"field": field.key, "choice": "decline"}) }}
+      {{ post("consent", "Accept", {"field": field.key, "choice": "accept", "wording": worded[field.key]}) }}
+      {{ post("consent", "Decline", {"field": field.key, "choice": "decline", "wording": worded[field.key]}) }}
       {% if field.key in remembered %}<span class="muted">remembered for every form</span>{% else %}<span class="muted">for this job only</span>{% endif %}
       {% elif line.decision == "cover_letter" %}
       <br><span class="muted">Press Write cover letter in the Ready to Apply box: the letter is filled in here once it is done.</span>
@@ -114,10 +114,10 @@
   {% if stopped and not writing %}<p class="error">The last Write answers stopped: {{ stopped }}</p>{% endif %}
   {% for line, limit, numbers, over in longs %}
   <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
-    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ line.field.key }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ line.field.key }}"><input type="hidden" name="wording" value="{{ worded[line.field.key] }}">
     <label>{{ line.field.label }}{% if line.field.required %} <span class="mark">required</span>{% endif %}
-      <span class="muted">(up to {{ limit }}{% if line.status == "fill" %}; {{ line.source }}{% endif %})</span>
-      <textarea name="answer" rows="6" maxlength="20000">{{ line.value if line.status == "fill" else "" }}</textarea></label>
+      <span class="muted">(up to {{ limit }}{% if line.source %}; {{ line.source }}{% endif %})</span>
+      <textarea name="answer" rows="6" maxlength="20000">{{ line.value }}</textarea></label>
     {% if line.field.help %}<p class="muted">{{ line.field.help }}</p>{% endif %}
     {% if numbers and line.source == "Writer draft" %}<p class="error">Check these numbers: {{ numbers }}</p>{% endif %}
     {% if over %}<p class="error">{{ over }}</p>{% endif %}
@@ -137,7 +137,7 @@
       <td>{% if line.status == "fill" %}{{ value }}
         {% elif line.status == "empty" %}<span class="muted">left empty</span>
           {% if line.field.key in askable %}<details><summary>Answer it</summary>{{ answer_box(line.field) }}</details>{% endif %}
-        {% elif line.status == "suggested" %}{{ value }}<br><span class="muted">suggested: only filled once you press Use</span>
+        {% elif line.status == "suggested" %}{{ value }}<br><span class="muted">{{ "suggested: only filled once you press Use" if line.field.key in seen else "only filled once you save your own words" }}</span>
         {% elif line.status == "write" %}<span class="muted">to be written (Write answers, above)</span>
         {% elif line.status == "left" %}<span class="muted">{{ "you tick this yourself" if line.source != mine and line.field.kind in ticked else "you do this in the window" }}</span>
         {% else %}<span class="error">{{ decisions[line.decision] }}</span>{% endif %}

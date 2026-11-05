@@ -190,7 +190,7 @@ TEAM = submit.Field(
 )
 TOOLS = submit.Field("question_3", "Which tools?", "multi", False, "company",
                      choices=(submit.Choice("Python", "p"), submit.Choice("Rust", "r")))  # fmt: skip
-WHY = submit.Field("question_4", "Why Acme? In 100 words or less.", "long_text", True, "company")
+WHY = submit.Field("question_4", "Why Acme, in 100 words or less?", "long_text", True, "company")
 CONDUCT = submit.Field("question_5", "I acknowledge the code of conduct", "consent", False, "privacy")
 RULES = submit.Field("question_6", "I acknowledge the house rules", "consent", True, "privacy")
 TEXTS = submit.Field("question_7", "Do you opt in to WhatsApp messages?", "consent", True, "privacy")
@@ -208,7 +208,18 @@ def job(conn, data_dir):
     return job
 
 
+def worded(client, job, key):
+    """The fingerprint of its wording the page sends with a question's answer or Accept; "" where it offers neither."""
+    page = client.get(f"/jobs/{job}/form").text
+    boxes = rf'name="field" value="{re.escape(key)}">(?:<input type="hidden" name="choice" value="\w+">)?'
+    found = re.search(rf'{boxes}<input type="hidden" name="wording" value="(\w+)"', page)
+    return found[1] if found else ""
+
+
 def press(client, job, action, **fields):
+    """A press on the page as it is now, sending the wording it shows, unless `wording` says otherwise."""
+    if action in ("answer", "consent"):
+        fields = {"wording": worded(client, job, fields.get("field", ""))} | fields
     return client.post(f"/jobs/{job}/form/{action}", data=fields | {"csrf_token": csrf(client)})
 
 
@@ -217,9 +228,10 @@ def status(conn, data_dir, job, key):
 
 
 def test_a_short_answer_is_kept_for_the_job_and_with_save_for_every_form(client, conn, data_dir, job):
-    press(client, job, "answer", field=HOBBY.key, answer="  Chess.  ")
+    shown = worded(client, job, HOBBY.key)
+    press(client, job, "answer", field=HOBBY.key, answer="  Chess.  ", wording=shown)
     assert one(conn, KEPT_ROW, job, HOBBY.key) == ("Chess.", "you") and questionnaire.load(conn)[0]["more"] == []
-    press(client, job, "answer", field=HOBBY.key, answer="Chess, again.", save="1")
+    press(client, job, "answer", field=HOBBY.key, answer="Chess, again.", save="1", wording=shown)
     assert [(row["question"], row["answer"]) for row in questionnaire.load(conn)[0]["more"]] == [
         ("Hobby?", "Chess, again."),
     ]  # fmt: skip
@@ -296,7 +308,10 @@ def test_choices_are_kept_as_their_labels_and_filled_by_the_rules(client, conn, 
         ({"field": PAPER.key, "answer": "Hi\x07there"}, "The answer holds an invisible character"),
         ({"field": PAPER.key, "answer": match.IN_WINDOW}, "That text is one the app keeps for itself"),
         ({"field": PAPER.key, "answer": "   "}, "Type an answer, or press Leave it empty"),
-        ({"field": SAMPLE.key, "answer": "x"}, "This question isn&#39;t answered here"),
+        (
+            {"field": SAMPLE.key, "answer": "x", "wording": form_part._fingerprint(match.wording(SAMPLE))},
+            "This question isn&#39;t answered here",
+        ),
         ({"field": AI.key, "answer": "yes"}, "You do this yourself in the window: the app never answers it"),
     ],
 )
@@ -316,15 +331,16 @@ def test_a_known_consent_is_remembered_for_every_form(client, conn, data_dir, jo
 
 
 def test_a_consent_of_no_known_kind_is_for_this_job_only(client, conn, data_dir, job):
-    press(client, job, "consent", field=CONDUCT.key, choice="accept")
+    shown = worded(client, job, CONDUCT.key)
+    press(client, job, "consent", field=CONDUCT.key, choice="accept", wording=shown)
     assert one(conn, KEPT_ROW, job, CONDUCT.key) == (match.TICKED, "you")
-    press(client, job, "consent", field=CONDUCT.key, choice="decline")
+    press(client, job, "consent", field=CONDUCT.key, choice="decline", wording=shown)
     assert status(conn, data_dir, job, CONDUCT.key).status == "empty"
     assert "This form requires it: decide in the window" in press(client, job, "consent", field=RULES.key,
                                                                     choice="decline").text  # fmt: skip
     assert "the app never answers it" in press(client, job, "consent", field=AI.key, choice="accept").text
     assert questionnaire.load(conn)[0]["consents"] == {
-        k: "ask" for k in ("privacy", "retention", "texting", "marketing")
+        k: "ask" for k in ("privacy", "processing", "retention", "texting", "marketing")
     }
 
 
@@ -432,6 +448,68 @@ def test_use_on_a_line_that_is_no_suggestion_keeps_nothing(client, conn, data_di
     assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=HOBBY.key).text
     assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
     assert form_part.PROMISE in press(client, job, "use", field=AI.key).text
+
+
+def test_a_writer_draft_is_open_and_use_keeps_it_as_yours(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    submit.save(conn, job, submit.Form((WHY,)), "api")
+    with conn:
+        conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then', ?)",
+                     (job, WHY.key, match.wording(WHY)))  # fmt: skip
+    found = status(conn, data_dir, job, WHY.key)
+    assert (found.status, found.source) == ("suggested", form_part.WRITER)
+    assert (
+        form_part.preview(conn, data_dir, job).open == 1
+        and ">A draft.</textarea>" in client.get(f"/jobs/{job}/form").text
+    )
+    press(client, job, "use", field=WHY.key, seen=seen(client, job))
+    assert one(conn, KEPT_ROW, job, WHY.key) == ("A draft.", "you")
+    assert status(conn, data_dir, job, WHY.key).status == "fill"
+
+
+def test_a_writer_draft_under_a_rule_about_ai_is_closed_only_by_your_own_edit(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    rule = submit.Field("question_1", "Rule", "consent", True, "company", help="Do not use AI.")
+    submit.save(conn, job, submit.Form((rule, WHY)), "api")
+    with conn:
+        conn.execute("INSERT INTO form_answers VALUES (?, ?, 'A draft.', 'writer', 5, 'then', ?)",
+                     (job, WHY.key, match.wording(WHY)))  # fmt: skip
+    text = client.get(f"/jobs/{job}/form").text
+    assert ">Use</button>" not in text and "Use all" not in text and match.DRAFT_UNDER_RULE in text
+    shown = form_part._seen([status(conn, data_dir, job, WHY.key)])
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use", field=WHY.key, seen=shown).text
+    assert form_part.CHANGED_SUGGESTION in press(client, job, "use-all", seen=shown).text
+    assert one(conn, KEPT_ROW, job, WHY.key) == ("A draft.", "writer")
+    press(client, job, "answer", field=WHY.key, answer="My own words.")
+    assert one(conn, KEPT_ROW, job, WHY.key) == ("My own words.", "you")
+    assert form_part.preview(conn, data_dir, job).open == 0
+
+
+def test_save_to_my_questionnaire_starts_unticked(client, conn, data_dir, job):
+    page = client.get(f"/jobs/{job}/form").text
+    assert 'name="save" value="1">' in page and 'name="save" value="1" checked' not in page
+
+
+def test_an_answer_from_a_page_showing_other_words_is_refused(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    car = submit.Field("question_1", "Do you have a car?", "text", True, "company")
+    submit.save(conn, job, submit.Form((car,)), "api")
+    shown = worded(client, job, car.key)
+    twisted = submit.Field("question_1", "Do you NOT have a car?", "text", True, "company")
+    submit.save(conn, job, submit.Form((twisted,)), "api")
+    assert form_part.CHANGED_QUESTION in press(client, job, "answer", field=car.key, answer="Yes", wording=shown).text
+    assert one(conn, "SELECT count(*) FROM form_answers")[0] == 0
+
+
+def test_an_accept_from_a_page_showing_other_words_is_refused(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    terms = submit.Field("question_1", "I agree to our terms", "consent", True, "company")
+    submit.save(conn, job, submit.Form((terms,)), "api")
+    shown = worded(client, job, terms.key)
+    more = submit.Field("question_1", "I agree to a credit check and to our terms", "consent", True, "company")
+    submit.save(conn, job, submit.Form((more,)), "api")
+    text = press(client, job, "consent", field=terms.key, choice="accept", wording=shown).text
+    assert form_part.CHANGED_QUESTION in text and one(conn, "SELECT count(*) FROM form_answers")[0] == 0
 
 
 def test_a_long_box_ruled_by_its_own_help_is_yours_to_write_in_a_box(client, conn, data_dir):

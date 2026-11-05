@@ -135,6 +135,14 @@ def test_a_page_opened_before_the_job_box_added_a_row_drops_nothing(client, data
     assert values["contact"]["full_name"] == ""
 
 
+def test_a_browsers_new_lines_save_in_both_text_areas(client, data_dir):
+    typed = {"availability.locations": "Austin\r\nBoston", "more.question.0": "Hobby?", "more.answer.0": "Chess\r\nGo"}
+    assert save(client, **typed).status_code == 303
+    with closing(db.connect(data_dir)) as conn:
+        values = questionnaire.load(conn)[0]
+    assert (values["availability"]["locations"], values["more"][0]["answer"]) == ("Austin\nBoston", "Chess\nGo")
+
+
 def test_a_refused_save_can_be_corrected_and_saved_from_the_same_page(client):
     stale = opened(client)
     assert "Not saved: Contact, phone" in save(client, saved_on=stale, **{"contact.phone": "12"}).text
