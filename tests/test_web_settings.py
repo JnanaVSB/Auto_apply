@@ -241,6 +241,37 @@ def test_the_next_refresh_does_what_the_box_says(client, conn, settings_file, se
     assert (fetch.HN_API in {request.url.host for request in web.requests}) is asked
 
 
+FEED_BOX = '<input type="checkbox" name="feed_remoteok" value="on"'
+NO_FEED = '<input type="hidden" name="feed_remoteok" value="off">'
+
+
+def test_a_feed_is_ticked_when_the_file_does_not_say(client):
+    page = client.get("/settings").text
+    assert f"{FEED_BOX} checked> Remote OK</label>" in page
+    assert page.index(NO_FEED) < page.index(FEED_BOX)
+
+
+@pytest.mark.parametrize(("sent", "feeds"), [(TICKED, ["remoteok"]), ("off", [])])
+def test_a_feeds_box_is_saved_and_shown(client, settings_file, sent, feeds):
+    assert "Saved." in save(client, feed_remoteok=sent).text
+    assert load_config(settings_file).sources.feeds == feeds
+    assert (f"{FEED_BOX} checked>" in client.get("/settings").text) is bool(feeds)
+
+
+def test_a_feeds_box_leaves_the_other_sources_as_they_are(client, settings_file):
+    other = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
+    save(client, feed_remoteok="off", hacker_news=TICKED, phonebook_lists=other)
+    sources = load_config(settings_file).sources
+    assert [listing.url for listing in sources.simplify_lists] == [LIST]
+    assert (sources.extra_boards, sources.phonebook_lists) == (["greenhouse:acme"], [other])
+    assert (sources.hacker_news, sources.feeds) == (True, [])
+
+
+def test_a_refused_save_keeps_a_feeds_box_as_you_left_it(client):
+    text = save(client, feed_remoteok="off", extra_boards="not a board").text
+    assert "Not saved" in text and f"{FEED_BOX}>" in text
+
+
 def test_adding_and_removing_simplify_lists(client, settings_file):
     second = LIST.replace("Summer2027-Internships", "New-Grad-Positions")
     save(client, list_url_1=second, list_level_1="new grad")

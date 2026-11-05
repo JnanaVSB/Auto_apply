@@ -27,6 +27,42 @@ def four(conn):
         add_job(conn, "Delta", ["manual"], not_interested=1, date_posted="2026-10-05")
 
 
+@pytest.fixture
+def on_a_feed(conn):
+    with conn:
+        add_job(conn, "Open", ["feed:remoteok"])
+        add_job(conn, "Gone", ["feed:remoteok"], status="no longer available", status_reason="no longer in the feed")
+        add_job(conn, "Off", ["feed:remoteok"], status="no longer available", status_reason="feed turned off")
+        add_job(conn, "Elsewhere", ["lever:globex"])
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("f=1&source=feed", {"Open", "Gone", "Off"}),
+        ("f=1&source=feed:remoteok", {"Open", "Gone", "Off"}),
+        ("f=1&reason=no+longer+in+the+feed", {"Gone"}),
+        ("f=1&reason=feed+turned+off", {"Off"}),
+    ],
+)
+def test_jobs_on_feeds_can_be_found_by_source_and_reason(conn, on_a_feed, address, expected):
+    assert set(titles(conn, address)) == expected
+
+
+def test_a_made_up_feed_in_the_address_is_ignored_and_never_shown_as_html(client, conn, on_a_feed):
+    log_in(client)
+    text = client.get("/", params={"f": "1", "source": "feed:<script>alert(1)</script>"}).text
+    assert "<script>alert(1)" not in text
+    assert "Elsewhere" in text  # the filter was dropped, not matched
+
+
+def test_the_source_list_offers_job_feeds_and_the_reasons_list_both_reasons(client):
+    log_in(client)
+    text = client.get("/").text
+    assert '<option value="feed">Job feeds</option>' in text
+    assert "no longer in the feed" in text and "feed turned off" in text
+
+
 def titles(conn, address=""):
     return [job["title"] for job in queries.list_jobs(conn, queries.Filters.from_address(address)).jobs]
 
@@ -98,6 +134,9 @@ def test_values_the_dashboard_does_not_know_are_ignored():
         ("board=greenhouse:acme", ["greenhouse:acme"]),
         ("source=simplify", ["Simplify lists"]),
         ("source=manual", ["Added by link"]),
+        ("source=feed", ["Job feeds"]),
+        ("source=feed:remoteok", ["Remote OK"]),
+        ("board=feed:remoteok", ["Remote OK"]),
     ],
 )  # fmt: skip
 def test_the_filters_in_use_in_the_forms_own_words(address, expected):

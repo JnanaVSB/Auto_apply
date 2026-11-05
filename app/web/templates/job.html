@@ -140,7 +140,7 @@
 <h2>Where this job is listed</h2>
 <ul class="sources">
   {% for source in job.sources %}
-  <li>{{ source.label }}: {{ source.state }}{% if source.board %} <span class="muted">({{ source.board }})</span>{% endif %}
+  <li>{{ source.label }}: {{ source.state }}{% if source.via %} · <a href="{{ source.via }}" target="_blank" rel="noopener noreferrer">via {{ source.label }}</a>{% endif %}{% if source.board %} <span class="muted">({{ source.board }})</span>{% endif %}
     {%- if source.stoppable %}
     <form method="post" action="/boards/stop" class="inline">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">

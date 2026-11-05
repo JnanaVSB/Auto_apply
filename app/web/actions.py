@@ -23,6 +23,7 @@ from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import BOARD_NAME, SourceError, closed_site, greenhouse
 from app.sources.boards import BOARDS
+from app.sources.feeds import FEEDS
 from app.web import queries
 
 LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
@@ -296,6 +297,8 @@ def settings_form() -> dict[str, str]:
     form["hacker_news"] = (
         "on" if sources.get("hacker_news", SourceSettings.model_fields["hacker_news"].default) else "off"
     )
+    feeds = sources.get("feeds", SourceSettings.model_fields["feeds"].default)
+    form |= {f"feed_{name}": "on" if name in feeds else "off" for name in FEEDS}
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
     scoring, defaults = raw.get("scoring") or {}, ScoringSettings()
@@ -357,6 +360,7 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
             "extra_boards": _lines(form.get("extra_boards", "")),
             "phonebook_lists": _lines(form.get("phonebook_lists", "")),
             "hacker_news": form.get("hacker_news") == "on",
+            "feeds": [name for name in FEEDS if form.get(f"feed_{name}") == "on"],
         },
         **{name: whole(form.get(name, "")) for name in NUMBERS},
         "gmail_read_all": form.get("gmail_read_all") == "on",

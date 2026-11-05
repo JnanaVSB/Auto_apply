@@ -104,6 +104,15 @@ def test_the_example_settings_are_valid():
     assert config.sources.hacker_news is True
 
 
+def test_a_feed_the_app_does_not_have_is_named_in_the_error(tmp_path):
+    with pytest.raises(ConfigError, match="no feed called madeup"):
+        load_config(write(tmp_path, "data_dir: data\nsources:\n  feeds: [madeup]\n"))
+
+
+def test_an_older_settings_file_reads_remote_ok(tmp_path):
+    assert load_config(write(tmp_path, "data_dir: data\nsources:\n  extra_boards: []\n")).sources.feeds == ["remoteok"]
+
+
 def test_hacker_news_is_true_or_false_and_nothing_else(tmp_path):
     with pytest.raises(ConfigError, match="hacker_news"):
         load_config(write(tmp_path, 'data_dir: data\nsources:\n  hacker_news: "false"\n'))

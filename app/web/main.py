@@ -24,6 +24,7 @@ from app.config import ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
+from app.sources.feeds import FEEDS
 from app.web import (
     actions,
     answer_key,
@@ -486,6 +487,7 @@ async def _settings_page(
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
         rows=rows, stopped=queries.stopped_boards(request.app.state.conn), ollama_line=ollama_line,
+        feeds={name: feed.LABEL for name, feed in FEEDS.items()},
     )  # fmt: skip
 
 

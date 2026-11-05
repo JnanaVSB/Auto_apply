@@ -34,6 +34,43 @@ def test_every_detail_is_shown(conn, page):
         assert shown in text
 
 
+LISTING = "https://remoteok.com/remote-jobs/remote-ml-intern-acme-1"
+LINK_BACK = f'<a href="{LISTING}" target="_blank" rel="noopener noreferrer">via Remote OK</a>'
+
+
+def job_on_a_feed(conn, listing=LISTING, sources=()):
+    with conn:
+        job_id = add_job(conn, "ML Intern", sources=sources)
+        conn.execute("INSERT INTO job_sources (source, source_job_id, job_id, listed) "
+                     "VALUES ('feed:remoteok', ?, ?, 1)", (listing, job_id))  # fmt: skip
+    return job_id
+
+
+def test_a_feeds_listing_links_back_and_has_no_stop_button(conn, page):
+    text = page(job_on_a_feed(conn)).text
+    assert f"Remote OK: listed · {LINK_BACK}" in text
+    assert "Stop reading this board" not in text
+
+
+@pytest.mark.parametrize(
+    "listing",
+    ["javascript:alert(1)", "http://remoteok.com/x", "https://remoteok.com.evil.example/x", "https://evil.example/x"],
+)
+def test_a_listing_that_is_not_on_the_feeds_own_site_shows_no_link(conn, page, listing):
+    text = page(job_on_a_feed(conn, listing)).text
+    assert "Remote OK: listed" in text
+    assert "via Remote OK" not in text and listing not in text
+
+
+def test_a_job_on_a_feed_and_a_board_has_one_stop_button_on_the_board(conn, page):
+    job_id = job_on_a_feed(conn, sources=["greenhouse:acme"])
+    with conn:
+        conn.execute("INSERT INTO sources (name) VALUES ('greenhouse:acme')")
+    text = page(job_id).text
+    assert LINK_BACK in text
+    assert text.count("Stop reading this board") == 1
+
+
 def test_every_source_is_shown_with_its_own_state(conn, page):
     with conn:
         job_id = add_job(conn, "ML Intern", sources=(), status="no longer available", status_reason="board shut down")
@@ -133,7 +170,7 @@ def test_job_query_reads_one_job(conn):
         job_id = add_job(conn, "ML Intern")
     assert queries.job(conn, job_id)["sources"] == [
         {"label": "Greenhouse board 'acme'", "state": "listed", "board": "", "name": "greenhouse:acme",
-         "stoppable": False, "stopped": False}  # no board record yet, so nothing to stop
+         "stoppable": False, "stopped": False, "via": None}  # no board record yet, so nothing to stop
     ]  # fmt: skip
     assert queries.job(conn, job_id + 1) is None
 

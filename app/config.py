@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationErr
 
 from app.sources import BOARD_NAME
 from app.sources.boards import BOARDS
+from app.sources.feeds import FEEDS
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_DIR / "data" / "config.yaml"
@@ -83,6 +84,14 @@ class SourceSettings(BaseModel):
     phonebook_lists: list[GitHubFile] = []  # other public GitHub job lists the phone book reads; you approve each
     hacker_news: Annotated[bool, Field(strict=True)] = True  # the phone book reads the boards HN's threads link to
     feeds: list[str] = ["remoteok"]  # read on each collection; one left out is switched off
+
+    @field_validator("feeds")
+    @classmethod
+    def _known_feeds(cls, feeds: list[str]) -> list[str]:
+        for name in feeds:
+            if name not in FEEDS:
+                raise ValueError(f"no feed called {name}; the feeds are {', '.join(FEEDS)}")
+        return feeds
 
     @field_validator("extra_boards")
     @classmethod

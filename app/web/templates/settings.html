@@ -46,6 +46,11 @@
   <p class="hint">Read by the phone book. Only board names are kept, never what people wrote.</p>
   <input type="hidden" name="hacker_news" value="off">{# an unticked box sends nothing; a refused save must keep it #}
   <label class="tick"><input type="checkbox" name="hacker_news" value="on"{% if form.hacker_news == "on" %} checked{% endif %}> Hacker News' monthly Who is hiring (only the company boards it links to)</label>
+  <p class="hint">Read on every collection. Switching one off closes the jobs only it lists, until you switch it on again.</p>
+  {% for name, label in feeds.items() %}
+  <input type="hidden" name="feed_{{ name }}" value="off">
+  <label class="tick"><input type="checkbox" name="feed_{{ name }}" value="on"{% if form["feed_" ~ name] == "on" %} checked{% endif %}> {{ label }}</label>
+  {% endfor %}
 
   <h2>Automatic collection and phone book</h2>
   <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)

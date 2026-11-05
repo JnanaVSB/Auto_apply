@@ -16,6 +16,7 @@ from app.config import AISettings, ScoringSettings
 from app.scoring.ready import STATUS
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
+from app.sources.feeds import FEEDS
 
 PAGE_SIZE = 50
 MAX_TEXT = 200
@@ -27,7 +28,7 @@ OPTIONS = {  # every value a list filter accepts; anything else in the address i
     "status": ("open", "no longer available", "closed"),
     "reason": (
         jobs.REMOVED_FROM_BOARD, jobs.BOARD_SHUT_DOWN, jobs.STOPPED_HIRING, jobs.REMOVED_FROM_SIMPLIFY,
-        jobs.INACTIVE, jobs.NOT_RECORDED,
+        jobs.INACTIVE, jobs.NOT_RECORDED, jobs.NOT_IN_FEED, jobs.FEED_OFF,
     ),
     "hidden": ("hide", "show", "only"),
     "sort": ("posted", "found", "company", "title", "score"),
@@ -43,7 +44,7 @@ SCORING_LABELS = {
 MAX_ID = 2**63 - 1  # the largest number the database can hold
 PAGE_NUMBER = re.compile(r"[0-9]{1,9}")  # plain digits only: Python's isdigit() also accepts "²"
 SCORE = re.compile(r"[0-9]{1,3}")
-SOURCE = re.compile(rf"(simplify|{'|'.join(BOARDS)})(:[\w.-]+)?|manual")  # a kind, or one list or board
+SOURCE = re.compile(rf"(simplify|feed|{'|'.join(BOARDS)})(:[\w.-]+)?|manual")  # a kind, or one list, board or feed
 SORTS = {
     "posted": "date_posted IS NULL, date_posted DESC, id DESC",  # jobs with no date go last
     "found": "first_seen DESC, id DESC",
@@ -56,7 +57,10 @@ US_LABELS = {"yes": "US", "unclear": "unclear", "no": "not US"}
 SORT_LABELS = {"posted": "newest posted", "found": "newest found", "company": "company A-Z", "title": "title A-Z",
                "score": "highest score"}  # fmt: skip
 HIDDEN_LABELS = {"hide": "hidden", "show": "shown too", "only": "only those"}  # the "Not interested" choices
-SOURCE_LABELS = {"simplify": "Simplify lists", **{kind: kind.title() for kind in BOARDS}, "manual": "Added by link"}
+SOURCE_LABELS = {
+    "simplify": "Simplify lists", **{kind: kind.title() for kind in BOARDS}, "feed": "Job feeds",
+    "manual": "Added by link",
+}  # fmt: skip
 # Only columns of the jobs_list index, so listing never reads the long descriptions.
 LIST_COLUMNS = """id, title, company, locations, level, remote, us_location, check_location, date_posted, status,
     status_reason, added_by_you, not_interested"""
@@ -82,7 +86,7 @@ JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.sco
 OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE job_id = ? AND model != ?
     ORDER BY scored_on DESC"""
 SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
-        r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%'
+        r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%', s.source_job_id
     FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
 
 
@@ -182,8 +186,8 @@ class Filters:
         found = [f'"{self.q}"'] if self.q else []
         if self.source:  # as the Source list names it; a board typed in, as typed
             kind, _, name = self.source.partition(":")
-            found.append(f"Simplify {name}" if kind == "simplify" and name else self.source if name else
-                         SOURCE_LABELS[kind])  # fmt: skip
+            found.append(source_label(self.source) if kind in ("simplify", "feed") and name else self.source if name
+                         else SOURCE_LABELS[kind])  # fmt: skip
         found += [*self.level, *(US_LABELS[value] for value in self.us)]
         if self.check:
             found.append('only "please check location"')
@@ -374,10 +378,20 @@ def job(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
             "name": source,
             "stoppable": bool(board),  # a company board, which you can stop reading or read again
             "stopped": bool(stopped),
+            "via": _listing(source, source_job_id),
         }
-        for source, listed, since, reason, retired, read, stopped, board in conn.execute(SOURCES_OF, (job_id,))
+        for source, listed, since, reason, retired, read, stopped, board, source_job_id in conn.execute(
+            SOURCES_OF, (job_id,)
+        )
     ]
     return found
+
+
+def _listing(source: str, source_job_id: str) -> str | None:
+    """The address of a feed's own listing, the link back its terms ask for; only ever on the feed's own site."""
+    kind, _, name = source.partition(":")
+    on_its_site = kind == "feed" and name in FEEDS and source_job_id.startswith(f"https://{FEEDS[name].HOST}/")
+    return source_job_id if on_its_site else None
 
 
 def job_scoring(conn: sqlcipher3.Connection, job_id: int, scoring: Scoring = DEFAULT_SCORING) -> dict:
