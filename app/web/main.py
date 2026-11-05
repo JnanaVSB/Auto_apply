@@ -76,8 +76,10 @@ templates.env.globals |= {
     "SCHEMES": look.SCHEMES,  # the Look form on Settings
     "MODES": look.MODES,
 }
-# Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text)
+# Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text);
+# the computer's list could also change the manifest's type, which Python does know
 mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def create_app(
