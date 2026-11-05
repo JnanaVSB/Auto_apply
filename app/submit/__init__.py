@@ -14,7 +14,7 @@ from app.resume import CONTROL
 KINDS = ("text", "long_text", "single", "multi", "file", "location", "consent", "hidden", "unknown")
 PARTS = ("standard", "company", "location", "eeo", "demographic", "privacy", "education")
 MAX_LABEL, MAX_HELP, MAX_CHOICE = 1_000, 5_000, 500  # characters
-MAX_CHOICES, MAX_FIELDS = 1_000, 500
+MAX_CHOICES, MAX_FIELDS = 5_000, 500
 UNREAD = "{:,} of this form's questions could not be read: check the form on the site before you submit."
 SAVE = """INSERT INTO forms (job_id, read_on, read_from, fields, fingerprint, limit_note, problem)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -96,6 +96,14 @@ def load(conn: sqlcipher3.Connection, job_id: int) -> tuple[Form, str, str, str 
         for item in json.loads(row[0])
     )
     return Form(fields, row[1]), row[2], row[3], row[4]
+
+
+def distinct(fields: list[Field]) -> tuple[tuple[Field, ...], int]:
+    """Each key once, the first one kept (answers are kept per key), and how many repeats were left out."""
+    unique: dict[str, Field] = {}
+    for field in fields:
+        unique.setdefault(field.key, field)
+    return tuple(unique.values()), len(fields) - len(unique)
 
 
 def _fields(form: Form) -> list[dict]:

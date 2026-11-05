@@ -6,7 +6,7 @@ from typing import Any
 
 from app.fetch import Fetcher, FetchError, NotFound
 from app.sources import html_to_text
-from app.submit import Choice, Field, Form, FormClosed, FormError
+from app.submit import Choice, Field, Form, FormClosed, FormError, distinct
 
 FORM_API = "https://boards-api.greenhouse.io/v1/boards/{}/jobs/{}?questions=true"
 KINDS = {
@@ -67,11 +67,8 @@ def parse(data: Any) -> tuple[Form, int]:
                 skipped += 1
     if not any(field.part in ("standard", "company") for field in fields):
         raise FormError(UNREADABLE)
-    fields += _education(data.get("education"))
-    unique: dict[str, Field] = {}
-    for field in fields:  # answers are kept per key, so a key seen before is skipped
-        unique.setdefault(field.key, field)
-    return Form(tuple(unique.values())), skipped + len(fields) - len(unique)
+    kept, repeated = distinct(fields + _education(data.get("education")))
+    return Form(kept), skipped + repeated
 
 
 def _question(entry: dict, part: str | None) -> list[Field]:

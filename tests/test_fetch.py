@@ -48,6 +48,8 @@ def test_returns_data_and_version_tag_and_says_who_it_is():
         "https://api.lever.co.evil.example/x",
         "https://someone@api.lever.co/x",
         "https://[not a url",
+        "http://jobs.lever.co/acme/1/apply",
+        "https://jobs.lever.co.evil.example/acme/1/apply",
     ],
 )
 def test_only_https_to_the_allowed_hosts(url):
@@ -55,6 +57,12 @@ def test_only_https_to_the_allowed_hosts(url):
     with pytest.raises(fetch.FetchError, match="address not allowed"):
         fetcher.get_json(url)
     assert requests == []
+
+
+def test_lever_application_pages_may_be_read_but_are_no_collection_site():
+    fetcher, requests = fake_web(httpx.Response(200, text="<form></form>"))
+    assert fetcher.get_text("https://jobs.lever.co/acme/1/apply") == "<form></form>"
+    assert len(requests) == 1 and "jobs.lever.co" not in fetch.COLLECT_HOSTS
 
 
 def test_redirect_is_reported_not_followed():
