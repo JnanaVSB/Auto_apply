@@ -41,7 +41,8 @@ def asked(label, kind="single", choices=YES_NO, help="", key="question_1", part=
         ("Why do you want to work here; are you a citizen?", ""),
         ("Describe your background " + "and more " * 12, ""),
         ("Why do you want this job?", "Tell us about your background; say if AI helped you."),
-        ("Why do you want this job?", "In your own words, please."),
+        ("Why do you want this job?", "Say in your own words whether AI helped you."),
+        ("Why do you want this job?", "In your own words, and tell us your salary."),
     ],
 )
 def test_only_one_short_sentence_can_be_the_writers(label, help_):
@@ -73,6 +74,10 @@ def test_the_writer_may_draft_a_sentence_of_an_essays_shape_and_its_draft_stays_
         ("Why do you want to work here?", "100 words or less"),
         ("Tell us about yourself.", "Keep it under 600 characters."),
         ("Why do you want to work here?", "No more than 200 words."),
+        ("Why do you want to work here?", "In your own words."),
+        ("Why do you want to work here?", "In your own words, please."),
+        ("Why do you want to work here?", "In your own words, 100 words or less."),
+        ("Why do you want to work here?", "100 words or less, in your own words."),
     ],
 )  # fmt: skip
 def test_one_short_sentence_of_an_essays_shape_is_still_the_writers(label, help_):

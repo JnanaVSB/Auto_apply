@@ -168,9 +168,13 @@ ABOUT_THIS_COMPANY = re.compile(
 )
 MAX_ESSAY_WORDS = 25
 SENTENCE_END = re.compile(r"[.?!;]")
-ONLY_A_LIMIT = re.compile(  # an essay's help, whole and cleaned, may say this and nothing else
+A_LIMIT = (
     r"(?:please )?(?:keep it )?(?:in |up to |at most |maximum(?: of)? |max |no more than |not more than |under "
     r"|fewer than |less than )*\d[\d ]* ?(?:words?|characters?|chars?)(?: or (?:less|fewer)| maximum| max| limit)?"
+)
+OWN_WORDS = r"(?:please )?(?:explain )?in your own words(?: please)?"
+ESSAY_HELP = re.compile(  # an essay's help, whole and cleaned, may say this and nothing else
+    rf"{A_LIMIT}|{OWN_WORDS}(?: {A_LIMIT})?|{A_LIMIT} {OWN_WORDS}"
 )
 ESSAY = re.compile(  # the start of the cleaned label: only these may be the Writer's
     r"why (?:do you want|are you interested|would you like|should we|this (?:company|role|position|job|team)|us\b)"
@@ -441,13 +445,13 @@ class _Matcher:
 
     def _essay(self, field: Field, words: str, kind: str) -> bool:
         """Only a long company question of the shape of an essay, on a form with no AI rule, is the Writer's: one short
-        sentence, read in the raw label, as `clean` removes its stops, with no help but a limit. A class of legal means
-        LEGAL_WORDS holds none."""
+        sentence, read in the raw label, as `clean` removes its stops, with no help but a limit or "in your own words".
+        A class of legal means LEGAL_WORDS holds none."""
         name = _bare(self.company)
         shaped = ESSAY.match(words) is not None or bool(name) and f"{words} ".startswith(f"why {name} ")
         one_sentence = not SENTENCE_END.search(field.label.strip().rstrip(".?!;"))
         short = len(field.label.split()) <= MAX_ESSAY_WORDS
-        bare = not field.help.strip() or ONLY_A_LIMIT.fullmatch(clean(field.help)) is not None
+        bare = not field.help.strip() or ESSAY_HELP.fullmatch(clean(field.help)) is not None
         return (shaped and one_sentence and short and bare and field.part == "company"
                 and kind in (ORDINARY, THIS_COMPANY) and not self.no_writer)  # fmt: skip
 

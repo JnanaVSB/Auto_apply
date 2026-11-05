@@ -257,9 +257,9 @@ def test_a_form_read_again_while_the_writer_writes_stops_the_version(conn, data_
     assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == ("stopped", flow.FORM_READ)
 
 
-def test_help_beyond_a_limit_leaves_a_question_to_you_and_your_own_answers_stop_the_writer(conn):
+def test_your_own_words_leaves_the_writer_available_and_your_own_answers_do_not(conn):
     essay = Field("question_1", "Why Acme?", "long_text", True, "company", "In your own words, please.")
-    assert answers.questions(conn, with_form(conn, Form((essay,)))) == ([], answers.NO_QUESTIONS)
+    assert answers.questions(conn, with_form(conn, Form((essay,)))) == ([essay], None)
     own = Field("question_1", "Why Acme?", "long_text", True, "company", "Answers must be your own.")
     assert answers.questions(conn, with_form(conn, Form((own,)))) == ([], answers.OWN_WORDS)
 

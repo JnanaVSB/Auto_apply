@@ -419,7 +419,7 @@ ROWS = [
     (r("Why do you want this job?", L, help="Do you have your own transportation?"), *ASKED),
     (r("Why do you want this job?", L, help="If you have your own website, list it."), *ASKED),
     (r("Why do you want this job?", L, help="I am at my own expense."), *ASKED),
-    (r("Why do you want this job?", L, help="Explain in your own words."), *ASKED),
+    (r("Why do you want this job?", L, help="Explain in your own words."), ORDINARY, "write", "", ""),
     # w6
     (r("Why do you want this job?", L, help="You must not use AI to write your answers"), *EYE),
     (r("Why do you want this job?", L, help="Do not use AI when answering these questions."), *EYE),
