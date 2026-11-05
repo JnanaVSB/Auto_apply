@@ -24,6 +24,7 @@ from app.fetch import BLOCKED_HINT, COLLECT_HOSTS, Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
 from app.sources import Job, SourceError, host_of, is_simplify_site, plain_text, posting_of, simplify
 from app.sources.boards import BOARDS
+from app.sources.feeds import FEEDS
 
 LOCK_FILE = "collect-lock.db"  # held by a collection, or by a refresh except while it is paused
 REFRESH_LOCK = "phonebook-lock.db"  # held by a phone-book refresh from start to end, paused or not
@@ -94,6 +95,8 @@ def source_label(source: str) -> str:
     kind, _, name = source.partition(":")
     if kind == "simplify":
         return f"Simplify {name}"
+    if kind == "feed":
+        return FEEDS[name].LABEL if name in FEEDS else name
     return f"{kind.title()} board '{name}'" if name else "added by you"
 
 
@@ -239,6 +242,29 @@ class _Run:
         counts.skipped += skipped
         _add_up(self.total, counts)
         self.out(f"{label}: {_describe(counts)}")
+
+    def read_feed(self, name: str) -> None:
+        source = f"feed:{name}"
+        label = source_label(source)
+        try:
+            found, skipped = FEEDS[name].read(self.fetcher, self.roles)
+            counts = jobs.save(self.conn, source, found, self.roles, now())
+        except FetchError as error:
+            self.failed.append(f"{label}: {error}")
+            return
+        except SourceError as error:
+            self.investigate.append(f"{label}: {error}")
+            return
+        counts.skipped += skipped
+        _add_up(self.total, counts)
+        self.out(f"{label}: {_describe(counts)}")
+
+    def switch_off(self, name: str) -> None:
+        source = f"feed:{name}"
+        counts = jobs.switch_off(self.conn, source, now())
+        _add_up(self.total, counts)
+        if counts.unavailable:
+            self.out(f"{source_label(source)}: switched off, {_unavailable(counts)}")
 
     def read_boards(self, extra_boards: list[str]) -> None:
         """Read every board that is not retired, plus extra_boards: one queue per site, all sites at the same time.
@@ -410,7 +436,7 @@ def _next(results: Queue) -> tuple:
 
 
 def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: Output = print) -> None:
-    """Read Simplify's lists, then every board with all sites at the same time; save each source all-or-nothing."""
+    """Read Simplify's lists, every board with all sites at once, then the feeds; each source all-or-nothing."""
     run = _Run(conn, fetcher, jobs.Roles.from_settings(config.roles), out)
     run.check_internet()
     with conn:
@@ -420,6 +446,11 @@ def collect(conn: sqlcipher3.Connection, config: Config, fetcher: Fetcher, out: 
         for listing in config.sources.simplify_lists:
             run.read_simplify(listing)
         run.read_boards(config.sources.extra_boards)
+        for name in FEEDS:  # after the boards, so a board's job is known first
+            if name in config.sources.feeds:
+                run.read_feed(name)
+            else:
+                run.switch_off(name)
         outcome = "done"
     except KeyboardInterrupt:
         outcome = "cancelled"

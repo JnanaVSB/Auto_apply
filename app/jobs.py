@@ -63,6 +63,11 @@ SAVE_ENTRY = """INSERT INTO job_sources (source, source_job_id, job_id, listed, 
         ELSE job_sources.unlisted_on END"""  # the day it stopped being listed is kept on later runs
 UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
     unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
+# A feed's listed entries, but for jobs on the Tracker: switching a feed off must not turn a card closed.
+OFF_THE_TRACKER = """SELECT source_job_id FROM job_sources s WHERE source = ? AND listed = 1
+    AND NOT EXISTS (SELECT 1 FROM tracker WHERE job_id = s.job_id)
+    AND NOT EXISTS (SELECT 1 FROM submissions WHERE job_id = s.job_id)
+    AND NOT EXISTS (SELECT 1 FROM preparations WHERE job_id = s.job_id AND kind = 'resume' AND status = 'done')"""
 # Every source entry of the jobs `source` has. 'closed' is never set or changed here; it is left for a later phase.
 ENTRIES = """SELECT j.id, j.status, j.status_reason, s.listed, s.unlisted_on, s.unlisted_reason,
         s.source NOT LIKE 'simplify:%' AND s.source NOT LIKE 'feed:%',
@@ -210,6 +215,18 @@ def save(
             )
             gone = [(reason, now[:10], source, job_id) for (job_id,) in rows.fetchall() if job_id not in seen]
             conn.executemany(UNLIST, gone)
+        _refresh_status(conn, source, counts)
+    return counts
+
+
+def switch_off(conn: sqlcipher3.Connection, source: str, now: str) -> Counts:
+    """Unlist a feed you switched off, all-or-nothing; reading it again reopens what it still lists."""
+    counts = Counts()
+    with conn:
+        gone = [
+            (FEED_OFF, now[:10], source, job_id) for (job_id,) in conn.execute(OFF_THE_TRACKER, (source,)).fetchall()
+        ]
+        conn.executemany(UNLIST, gone)
         _refresh_status(conn, source, counts)
     return counts
 
