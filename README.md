@@ -106,6 +106,13 @@ feeds is decided by them. Switching a feed off marks the jobs only it lists "fee
 and switching it on again reopens what it still lists; a job on your Tracker is left as it is. A job you add yourself
 is never merged into a job that is only on a feed. Each job from Remote OK links back to its listing on the job page.
 
+USAJobs is a feed too, off until you tick it in Settings and save your own free key and e-mail on
+**Settings → USAJobs key**; each person asks USAJobs for their own key, and none comes with the app. The key and
+e-mail stay in your keychain and go only to USAJobs, in each request's headers. It searches for your role keywords,
+and almost all its jobs need US citizenship. Check a job's details against the official announcement before relying
+on them. This app is not connected with, or endorsed by, USAJobs or any government body. Nobody has yet tried this
+feed with a real key, so its first run may show that its replies differ from what the app expects.
+
 ## Phone book of company boards
 ```bash
 python -m app.phonebook refresh
