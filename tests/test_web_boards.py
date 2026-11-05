@@ -44,6 +44,12 @@ def rows(text):
     return re.findall(r'<td><a href="[^"]*" target="_blank" rel="noopener noreferrer">([^<]+)</a></td>', text)
 
 
+def test_a_board_found_through_hacker_news_says_so(client, conn):
+    with conn:
+        conn.execute("INSERT INTO sources (name, found_by) VALUES ('lever:hnco', 'hackernews')")
+    assert "<td>Hacker News</td>" in client.get("/boards").text
+
+
 def test_every_company_board_is_listed_with_where_it_came_from(client):
     text = client.get("/boards").text
     assert rows(text) == ["ashby:hooli", "ashby:initech", "greenhouse:acme", "lever:globex", "lever:gone"]

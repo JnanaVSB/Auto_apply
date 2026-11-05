@@ -69,7 +69,7 @@ class SourceSettings(BaseModel):
     simplify_lists: list[SimplifyList] = []
     extra_boards: list[str] = []
     phonebook_lists: list[GitHubFile] = []  # other public GitHub job lists the phone book reads; you approve each
-    hacker_news: bool = True  # the phone book reads the boards Hacker News' "Who is hiring?" threads link to
+    hacker_news: Annotated[bool, Field(strict=True)] = True  # the phone book reads the boards HN's threads link to
 
     @field_validator("extra_boards")
     @classmethod

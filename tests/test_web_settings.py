@@ -3,10 +3,11 @@
 import stat
 from contextlib import closing
 
+import httpx
 import pytest
-from helpers import LIST, csrf, log_in
+from helpers import LIST, FakeWeb, csrf, log_in
 
-from app import config, db
+from app import config, db, fetch, phonebook
 from app.config import load_config
 from app.web import actions
 
@@ -35,6 +36,11 @@ def settings_file(tmp_path, data_dir, monkeypatch):
 def client(client, settings_file):
     log_in(client)
     return client
+
+
+TICK = '<input type="checkbox" name="hacker_news" value="on"'
+UNTICKED = '<input type="hidden" name="hacker_news" value="off">'  # an unticked box sends nothing by itself
+TICKED = ["off", "on"]  # what a browser sends for the ticked box: the last value counts
 
 
 def form(**changes):
@@ -137,6 +143,46 @@ def test_phone_book_lists_are_saved_and_shown(client, settings_file):
     save(client, phonebook_lists=f" {other} \n\n{other}")
     assert load_config(settings_file).sources.phonebook_lists == [other]  # spaces, blank lines and repeats cleaned
     assert f">{other}</textarea>" in client.get("/settings").text
+
+
+def test_hacker_news_is_ticked_when_the_file_does_not_say(client):
+    page = client.get("/settings").text
+    assert f"{TICK} checked>" in page
+    assert page.index(UNTICKED) < page.index(TICK)
+    assert "Hacker News' monthly Who is hiring (only the company boards it links to)" in page
+    assert "Read by the phone book. Only board names are kept, never what people wrote." in page
+
+
+@pytest.mark.parametrize(("sent", "kept"), [(TICKED, True), ("off", False)])
+def test_the_hacker_news_box_is_saved_and_shown(client, settings_file, sent, kept):
+    assert "Saved." in save(client, hacker_news=sent).text
+    assert load_config(settings_file).sources.hacker_news is kept
+    assert f"hacker_news: {str(kept).lower()}" in settings_file.read_text(encoding="utf-8")
+    assert (f"{TICK} checked>" in client.get("/settings").text) is kept
+
+
+def test_the_hacker_news_box_leaves_the_other_sources_as_they_are(client, settings_file):
+    other = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
+    save(client, hacker_news=TICKED, keywords="RL", phonebook_lists=other)
+    sources = load_config(settings_file).sources
+    assert [listing.url for listing in sources.simplify_lists] == [LIST]
+    assert (sources.extra_boards, sources.phonebook_lists) == (["greenhouse:acme"], [other])
+    assert sources.hacker_news is True
+
+
+def test_a_refused_save_keeps_the_box_as_you_left_it(client):
+    text = save(client, hacker_news="off", extra_boards="not a board").text
+    assert "Not saved" in text and f"{TICK}>" in text
+
+
+@pytest.mark.usefixtures("no_waiting")
+@pytest.mark.parametrize(("sent", "asked"), [(TICKED, True), ("off", False)])
+def test_the_next_refresh_does_what_the_box_says(client, conn, settings_file, sent, asked):
+    save(client, hacker_news=sent)
+    web = FakeWeb({})
+    with closing(fetch.Fetcher(httpx.MockTransport(web))) as fetcher:
+        phonebook.refresh(conn, load_config(settings_file), fetcher, [].append)
+    assert (fetch.HN_API in {request.url.host for request in web.requests}) is asked
 
 
 def test_adding_and_removing_simplify_lists(client, settings_file):
