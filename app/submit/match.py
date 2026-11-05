@@ -359,6 +359,18 @@ def _other(field: Field, note: str = "") -> Line:
     return Line(field, "decide", decision="unknown", note=note) if field.required else Line(field, "empty", note=note)
 
 
+def written(answers: dict) -> dict[str, str]:
+    """Your work, start date and salary answers as the rules write them on a form ("" for one you left empty)."""
+    work, availability = answers.get("work") or {}, answers.get("availability") or {}
+    return {
+        "Work authorization": _yes_no(work.get("authorized_us")),
+        "Sponsorship now": _yes_no(work.get("sponsorship_now")),
+        "Sponsorship later": _yes_no(work.get("sponsorship_future")),
+        "Earliest start": _day(availability.get("earliest_start")),
+        "Salary": _salary(answers.get("salary") or {}, ""),
+    }
+
+
 def consent_kind(field: Field, company: str = "") -> tuple[str, str] | None:
     """A consent's kind (a CONSENTS kind, "" for none known) and its name as the preview says it; None for a field
     that is no consent."""

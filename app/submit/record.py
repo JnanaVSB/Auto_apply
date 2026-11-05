@@ -1,0 +1,137 @@
+"""What you applied with (Phase 7): the copy panel's lines, and "I submitted it", which records what you did on the
+site. The app never submits anything. A record is saved once, with the card's move to Applied, and is never changed;
+a record made by hand holds what the app prepared, not what the site received. Nothing here contacts any site."""
+
+import hashlib
+import json
+from datetime import date
+from pathlib import Path
+
+import sqlcipher3
+
+from app import questionnaire, tracker
+from app.collect import now
+from app.council import runs
+from app.documents import pdf
+from app.submit import match
+from app.tracker import STAGES
+
+SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
+    VALUES (?, ?, ?, 'by hand', ?, ?, ?)"""
+LOAD = "SELECT submitted_on, saved_on, how, address, fields, files FROM submissions WHERE job_id = ?"
+NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
+BY_YOU, LEFT_EMPTY, MISSING = "answered by you on the site", "left empty", "file was missing"
+NO_VALUE = {"decide": BY_YOU, "left": BY_YOU, "write": BY_YOU, "empty": LEFT_EMPTY}  # a line's status -> its "from"
+DOCUMENTS = ((runs.KIND, "Resume"), (runs.LETTER, "Cover letter"))
+
+
+class Refused(Exception):  # noqa: N818 (shown as it is)
+    """Nothing was recorded; the message says why in plain words, never with your text."""
+
+
+class _Moved(Exception):
+    """The card left Ready between the check and the move: the record rolls back with it."""
+
+
+def standard(answers: dict) -> list[tuple[str, str]]:
+    """The copy panel's lines (label, text), only those with a value."""
+    contact = answers.get("contact") or {}
+    place = ", ".join(filter(None, (contact.get(name) for name in ("city", "state", "country"))))
+    lines = {
+        "Name": contact.get("full_name"), "E-mail": contact.get("email"), "Phone": contact.get("phone"),
+        "Location": place, "LinkedIn": contact.get("linkedin"), "GitHub": contact.get("github"),
+        "Portfolio": contact.get("portfolio"), **match.written(answers),
+    }  # fmt: skip
+    return [(label, text) for label, text in lines.items() if text]
+
+
+def shown(line: match.Line) -> str:
+    """A line's value as you'd read it: a choice's label (never its value), an upload's version (never its path)."""
+    field = line.field
+    if line.status != "fill":
+        return ""
+    if field.kind == "file":
+        return line.source
+    if field.kind == "consent" and line.value == match.TICKED:
+        return "ticked"
+    if isinstance(line.value, tuple):
+        labels = {choice.value: choice.label for choice in field.choices}
+        return ", ".join(labels.get(value, value) for value in line.value)
+    return line.value
+
+
+def recorded(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
+    """The job's record, with its fields and files read back; None before "I submitted it"."""
+    row = conn.execute(LOAD, (job_id,)).fetchone()
+    if row is None:
+        return None
+    submitted_on, saved_on, how, address, fields, files = row
+    return {"submitted_on": submitted_on, "saved_on": saved_on, "how": how, "address": address,
+            "fields": json.loads(fields), "files": json.loads(files)}  # fmt: skip
+
+
+def submit(
+    conn: sqlcipher3.Connection, data_dir: Path, job: dict, on: date, lines: tuple[match.Line, ...] | None
+) -> None:
+    """Record that you applied on `on`, and move the card from Ready to Applied, all or nothing; `lines` is the read
+    form's preview (None: no form was read, so your standard answers are kept). Open decisions never stop it: they are
+    kept as answered by you on the site. Raises Refused with nothing saved."""
+    job_id = job["id"]
+    if found := recorded(conn, job_id):
+        raise Refused(f"Already recorded on {found['submitted_on']}")
+    if not tracker.date_allowed(on, date.today()):
+        raise Refused(tracker.BAD_DATE)
+    if not tracker.on_board(conn, job_id) or runs.last_done(conn, job_id) is None:
+        raise Refused(NO_CARD)
+    if (stage := tracker.stage(conn, job_id)) not in (None, "ready"):
+        raise Refused(f"This job is already in {STAGES[stage]}: nothing changed")
+    fields = _fields(lines) if lines is not None else [
+        {"question": label, "value": text, "from": "Questionnaire"}
+        for label, text in standard(questionnaire.load(conn)[0])
+    ]  # fmt: skip
+    saved = (job_id, on.isoformat(), now(), job["apply_url"], json.dumps(fields, ensure_ascii=False),
+             json.dumps(_files(conn, data_dir, job_id), ensure_ascii=False))  # fmt: skip
+    try:
+        with conn:
+            conn.execute(SAVE, saved)
+            if not tracker.moved(conn, job_id, "ready", "applied", on):
+                raise _Moved
+    except sqlcipher3.IntegrityError:  # a second dashboard saved its record after the check above
+        if (found := recorded(conn, job_id)) is None:
+            raise
+        raise Refused(f"Already recorded on {found['submitted_on']}") from None
+    except _Moved:
+        stage = STAGES[tracker.stage(conn, job_id) or "ready"]
+        raise Refused(f"The card moved meanwhile: it is in {stage} now. Nothing was recorded") from None
+
+
+def _fields(lines: tuple[match.Line, ...]) -> list[dict]:
+    """Each question as the app prepared it. What you do yourself on the site is never guessed at: no value."""
+    return [
+        {"question": line.field.label, "value": shown(line), "from": NO_VALUE.get(line.status, line.source),
+         "note": line.note}
+        for line in lines
+        if line.status != "hidden"
+    ]  # fmt: skip
+
+
+def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> list[dict]:
+    """The newest finished resume and cover letter, each with its SHA-256. A PDF gone from the folder is noted and
+    never stops the record."""
+    found = []
+    for kind, name in DOCUMENTS:
+        if (done := runs.last_done(conn, job_id, kind)) is None:
+            continue
+        version = done["version"]
+        digest = _sha256(pdf.tailored(data_dir, job_id, version, kind))
+        found.append({"slot": kind, "label": f"{name} v{version}", "version": version, "sha256": digest,
+                      "note": "" if digest else MISSING})  # fmt: skip
+    return found
+
+
+def _sha256(path: Path) -> str:
+    try:
+        with path.open("rb") as file:  # read a piece at a time
+            return hashlib.file_digest(file, "sha256").hexdigest()
+    except OSError:
+        return ""

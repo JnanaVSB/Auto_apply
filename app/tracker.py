@@ -58,17 +58,27 @@ def move(conn: sqlcipher3.Connection, job_id: int, expected: str, to: str, on: d
     """Move the card from `expected` (the stage the page showed) to `to`, on the local date `on`, and record it.
     False when it was moved meanwhile (another tab). The caller checks the job exists and, from Ready, that it is on
     the board (Add an application skips this on purpose: it puts a new job straight in Applied)."""
+    with conn:
+        return moved(conn, job_id, expected, to, on, moved_by)
+
+
+def moved(conn: sqlcipher3.Connection, job_id: int, expected: str, to: str, on: date, moved_by: str = "you") -> bool:
+    """`move`, inside the caller's transaction: all or nothing with whatever else it saves."""
     if expected not in STAGES or to not in STAGES or expected == to:
         raise ValueError("Choose two different stages.")
     round_ = "1" if to == "interview" else None
     applied = None if to == "ready" else on.isoformat()
     at = collect.now()
-    with conn:
-        values = {"job": job_id, "to": to, "round": round_, "applied": applied, "now": at, "expected": expected}
-        if conn.execute(MOVE, values).rowcount != 1:
-            return False
-        conn.execute(ADD_MOVE, (job_id, expected, to, round_, moved_by, at))
+    values = {"job": job_id, "to": to, "round": round_, "applied": applied, "now": at, "expected": expected}
+    if conn.execute(MOVE, values).rowcount != 1:
+        return False
+    conn.execute(ADD_MOVE, (job_id, expected, to, round_, moved_by, at))
     return True
+
+
+def date_allowed(on: date, today: date) -> bool:
+    """Whether `on` can be the day you applied: not later than tomorrow, not before 2000 (BAD_DATE says so)."""
+    return date(2000, 1, 1) <= on <= today + timedelta(days=1)
 
 
 def add_application(
@@ -79,7 +89,7 @@ def add_application(
     company, role = company.strip(), role.strip()
     if len(company) > 200 or len(role) > 200:
         raise ValueError("Company and role are at most 200 characters each.")
-    if not date(2000, 1, 1) <= applied_on <= today + timedelta(days=1):
+    if not date_allowed(applied_on, today):
         raise ValueError(BAD_DATE)
     link = link.strip()
     posting = posting_of(link)

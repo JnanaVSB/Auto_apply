@@ -321,3 +321,14 @@ def test_the_box_says_when_the_writer_writes_the_jobs_form_answers(client, conn,
     text = client.get(f"/jobs/{ready_job}/preparation").text
     assert "The Writer is writing this job's form answers…" in text and 'hx-trigger="every 3s"' in text
     assert "The Writer is working on it" not in text and "(version new)" not in text
+
+
+def test_a_job_you_recorded_shows_no_open_decisions(client, conn, data_dir, jobs):
+    asked = submit.Field("question_1", "Favourite paper?", "text", True, "company")
+    submit.save(conn, jobs["Fresh"], submit.Form((asked,)), "api")
+    with conn:
+        conn.execute(
+            "INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) VALUES "
+            "(?, '2026-11-04', 'now', 'by hand', 'https://jobs.example/1', '[]', '[]')", (jobs["Fresh"],),
+        )  # fmt: skip
+    assert ">Fresh</a>" in client.get("/ready").text and "Decision required" not in client.get("/ready").text

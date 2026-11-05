@@ -6,7 +6,8 @@
 {% if writing_only %}{{ writing_line() }}{% else %}
 <section class="found" id="form-part">
   <h2>Application form</h2>
-  {% if found %}
+  {% if record %}
+  {% elif found %}
   <p class="muted">Read {{ read_on }} from {{ read_from }}. Nothing is sent to the site from here.</p>
   {% if found.problem %}<p class="error">{{ found.problem }}</p>{% endif %}
   {% elif elsewhere %}
@@ -16,14 +17,31 @@
   {% endif %}
   {% if failed %}<p class="error" role="alert">{{ failed }}</p>{% endif %}
   {% if note %}<p class="muted" role="status">{{ note }}</p>{% endif %}
-  {% if readable %}
+  {% if readable and not record %}
   <form method="post" action="/jobs/{{ job_id }}/form/read" hx-post="/jobs/{{ job_id }}/form/read" hx-target="#form-part" hx-swap="outerHTML" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
     <button type="submit">{{ "Read again" if found else "Read the form" }}</button>
   </form>
   {% endif %}
 
-  {% if found %}
+  {% if record %}
+  <h3>{{ "What was sent" if record.how == "browser" else "What the app prepared (you applied by hand)" }}</h3>
+  {% if record.how != "browser" %}<p class="muted">The site may hold different answers if you changed them there.</p>{% endif %}
+  <p>Applied {{ record.submitted_on }} at <code class="address">{{ record.address }}</code></p>
+  <table class="jobs">
+    <thead><tr><th>Question</th><th>Answer</th><th>From</th></tr></thead>
+    <tbody>
+    {% for row in record.fields %}
+    <tr><td>{{ row.question }}</td><td>{{ row.value }}{% if row.note %}<br><span class="muted">{{ row.note }}</span>{% endif %}</td><td class="muted">{{ row.from }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if record.files %}
+  <ul class="reasons">
+    {% for file in record.files %}<li>{{ file.label }}{% if file.note %} <span class="error">{{ file.note }}</span>{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% elif found %}
   {% for warning in found.warnings %}<p class="error">{{ warning }}</p>{% endfor %}
 
   {% if found.open %}
@@ -123,6 +141,31 @@
     </tbody>
   </table>
   {% if hidden %}<p class="muted">{{ hidden }} hidden box{{ "es" if hidden != 1 }}, never filled.</p>{% endif %}
+  {% endif %}
+
+  <h3>To copy</h3>
+  {% if job.open_manually_only %}
+  <p><code class="address">{{ job.apply_url }}</code><br>
+    <span class="muted">simplify.jobs: copy this into your browser yourself; the app never opens this site.</span></p>
+  {% elif job.apply_url.startswith(("https://", "http://")) %}
+  <p><a href="{{ job.apply_url }}" target="_blank" rel="noopener">Open the posting</a> <span class="muted">(new tab)</span></p>
+  {% else %}
+  <p><code class="address">{{ job.apply_url }}</code></p>
+  {% endif %}
+  {% if panel %}
+  <ul class="reasons">
+    {% for label, text in panel %}<li><span class="muted">{{ label }}:</span> {{ text }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% for label, address in papers %}<a href="{{ address }}" target="_blank" rel="noopener">{{ label }}</a>{{ " · " if not loop.last }}{% endfor %}
+
+  {% if not record %}
+  <form method="post" action="/jobs/{{ job_id }}/form/submitted" hx-post="/jobs/{{ job_id }}/form/submitted" hx-target="#form-part" hx-swap="outerHTML" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <label>Date you applied <input type="date" name="on" value="{{ today }}"></label>
+    <button type="submit">I submitted it</button>
+  </form>
+  <p class="muted">This only records what you did on the site: the app never submits anything.</p>
   {% endif %}
 </section>
 {% endif %}

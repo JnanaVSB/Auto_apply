@@ -10,7 +10,7 @@ from test_submit_lever import PAGE
 from app import config, questionnaire, submit
 from app.council import answers
 from app.documents import pdf
-from app.submit import greenhouse, match
+from app.submit import greenhouse, match, record
 from app.web import submit as form_part
 
 GREENHOUSE = "https://job-boards.greenhouse.io/acme/jobs/123"
@@ -65,7 +65,7 @@ def test_a_greenhouse_form_is_read_once_the_resume_is_ready_and_previewed(client
         "api", "3 of this form's questions could not be read: check the form on the site before you submit.",
     )  # fmt: skip
     assert "from Greenhouse&#39;s public job board" in text and ">Read again</button>" in text
-    assert "Resume v3" in text and str(data_dir) not in text and "resume-v3.pdf" not in text  # never the file's path
+    assert "Resume v3" in text and str(data_dir) not in text  # never the file's path
     assert "Favourite &lt;script&gt;alert(1)&lt;/script&gt; paper?" in text and "<script>alert" not in text
     assert "3 hidden boxes, never filled." in text  # a hidden question, the latitude and the longitude
     assert "Left for you" in text and "You tick this yourself in the window." in text
@@ -78,8 +78,8 @@ def test_the_preview_shows_a_chosen_choices_label_never_its_value(conn, data_dir
     job = made_up_job(conn, data_dir)
     submit.save(conn, job, greenhouse.parse(FORM)[0], "api")
     lines = {line.field.key: line for line in form_part.preview(conn, data_dir, job).lines}
-    assert (lines["question_102"].value, form_part._shown(lines["question_102"])) == (("0",), "No")
-    assert form_part._shown(lines["resume"]) == "Resume v3"
+    assert (lines["question_102"].value, record.shown(lines["question_102"])) == (("0",), "No")
+    assert record.shown(lines["resume"]) == "Resume v3"
 
 
 def test_a_lever_form_is_read_from_its_application_page(client, conn, data_dir, web):
@@ -107,7 +107,7 @@ def test_a_site_that_fails_says_why_and_nothing_is_saved(client, conn, data_dir,
     ("link", "line"),
     [
         ("https://jobs.ashbyhq.com/initech/9f8e-7d6c", "Ashby forms are read in the browser"),
-        ("https://careers.example.com/jobs/7", "This site&#39;s form isn&#39;t read by the app"),
+        ("https://careers.example.com/jobs/7", "To copy"),
     ],
 )
 def test_other_sites_forms_are_never_downloaded(client, conn, data_dir, web, link, line):
@@ -317,3 +317,42 @@ def test_write_answers_on_a_form_that_wants_your_own_words_says_so(client, conn,
     assert "Write these answers yourself" in client.get(f"/jobs/{job}/form").text
     assert "write these answers yourself" in press(client, job, "write").text
     assert one(conn, "SELECT count(*) FROM preparations WHERE kind = 'answers'")[0] == 0
+
+
+def test_i_submitted_it_records_what_the_app_prepared_and_never_a_second_time(client, conn, data_dir, job):
+    press(client, job, "answer", field=PAPER.key, answer="The robots.")
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert "What the app prepared (you applied by hand)" in text and "What was sent" not in text
+    assert "The site may hold different answers if you changed them there." in text
+    assert "Applied 2026-11-04" in text and "The robots." in text and "answered by you on the site" in text
+    assert "Resume v3" in text and ">I submitted it</button>" not in text and 'name="answer"' not in text
+    assert ">Write answers</button>" not in text and "Read again" not in text
+    assert "Already recorded on 2026-11-04" in press(client, job, "submitted", on="2026-11-05").text
+
+
+@pytest.mark.parametrize("day", ["yesterday", "", "1999-12-31", "2999-01-01"])
+def test_a_bad_date_records_nothing(client, conn, job, day):
+    assert "Choose the date you applied" in press(client, job, "submitted", on=day).text
+    assert one(conn, "SELECT count(*) FROM submissions")[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("link", "expected"),
+    [
+        (GREENHOUSE, '<a href="https://job-boards.greenhouse.io/acme/jobs/123" target="_blank" rel="noopener">'),
+        ("https://www.linkedin.com/jobs/view/7", '<a href="https://www.linkedin.com/jobs/view/7" target="_blank"'),
+    ],
+)
+def test_the_copy_panel_is_on_every_job(client, conn, data_dir, link, expected):
+    job = made_up_job(conn, data_dir, link)
+    client.app.state.forms_tried.add(job)
+    text = client.get(f"/jobs/{job}/form").text
+    assert expected in text and "sam@example.com" in text and "Sponsorship later" in text
+    assert f'<a href="/documents/{job}/resume-v3.pdf"' in text and ">I submitted it</button>" in text
+
+
+def test_a_simplify_job_never_gets_a_link(client, conn, data_dir):
+    job = made_up_job(conn, data_dir, "https://simplify.jobs/p/7")
+    text = client.get(f"/jobs/{job}/form").text
+    assert '<code class="address">https://simplify.jobs/p/7</code>' in text and 'href="https://simplify' not in text
+    assert "copy this into your browser yourself" in text

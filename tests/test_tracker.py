@@ -313,3 +313,11 @@ def test_re_linking_an_e_mail_moves_the_latest_e_mail_with_it(conn):
     cards = {card["id"]: card for card in lane(conn, "applied")["cards"]}
     assert cards[acme]["email"] is None and cards[acme]["stale"]
     assert cards[globex]["email"] is not None and not cards[globex]["stale"]
+
+
+def test_a_move_inside_a_bigger_save_rolls_back_with_it(conn):
+    job = add_job(conn, "ML Intern")
+    with pytest.raises(RuntimeError), conn:
+        assert tracker.moved(conn, job, "ready", "applied", DAY)
+        raise RuntimeError("the rest of the save failed")
+    assert tracker.stage(conn, job) is None and tracker.history(conn, job) == []

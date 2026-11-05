@@ -7,7 +7,7 @@ anything to a job site (owner rule: never a submission without your explicit aut
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import sqlcipher3
@@ -16,20 +16,19 @@ from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from app import questionnaire, sources, submit
+from app import questionnaire, sources, submit, tracker
 from app.collect import now
 from app.config import ConfigError, load_config
 from app.council import answers, flow, runs
 from app.council.answers import KEPT
 from app.fetch import FetchError
 from app.resume import CONTROL
-from app.submit import Field, FormError, greenhouse, lever, match
+from app.submit import Field, FormError, greenhouse, lever, match, record
 from app.web import queries
 
 READERS = {"greenhouse": (greenhouse, "api"), "lever": (lever, "page")}  # site -> its reader, and where it reads from
 READ_FROM = {"api": "Greenhouse's public job board", "page": "Lever's application page", "browser": "the browser"}
 ASHBY = "Ashby forms are read in the browser: press Fill in browser (coming in the next part)"
-OTHER = "This site's form isn't read by the app: the copy panel for it comes soon"
 NO_RESUME = "The form is read once the resume is prepared"
 ALREADY = "Already reading this form"
 TO_REMEMBER = ("text", "single", "multi")  # a required question no rule answers: kept in More answers to answer once
@@ -96,6 +95,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         conn, job = request.app.state.conn, _job(request, job_id)
         posting = sources.posting_of(job["apply_url"])
         first = job_id not in request.app.state.forms_tried and submit.load(conn, job_id) is None
+        first = first and record.recorded(conn, job_id) is None  # you applied: nothing more to read
         if posting and posting[0] in READERS and first and runs.last_done(conn, job_id):
             return await _read(request, job, posting)
         return _part(request, job)
@@ -230,6 +230,21 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         request.app.state.preparer.wake()
         return _part(request, job)
 
+    @app.post("/jobs/{job_id:int}/form/submitted")
+    async def submitted(request: Request, job_id: int) -> Response:
+        """I submitted it: records what you did on the site and moves the card to Applied. The app sends nothing."""
+        conn, job = request.app.state.conn, _job(request, job_id)
+        found = preview(conn, data_dir, job_id)
+        try:
+            on = date.fromisoformat(request.state.form.get("on", ""))
+        except ValueError:
+            return _part(request, job, failed=tracker.BAD_DATE)
+        try:
+            record.submit(conn, data_dir, job, on, found.lines if found else None)
+        except record.Refused as refused:
+            return _part(request, job, failed=str(refused))
+        return _part(request, job)
+
     @app.get("/jobs/{job_id:int}/form/writing")
     async def writing(request: Request, job_id: int) -> Response:
         """While the Writer writes the answers, the part's status line asks this every 3 s; once it is done the page
@@ -271,15 +286,19 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             request, "form.html", job_id=job_id, found=found, note=note, failed=failed,
             readable=site in READERS,
             waiting=NO_RESUME if site in READERS and not found and not runs.last_done(conn, job_id) else None,
-            elsewhere=ASHBY if site == "ashby" else None if site in READERS else OTHER,
+            elsewhere=ASHBY if site == "ashby" else None,
             read_on=found and _day(found.read_on), read_from=found and READ_FROM[found.read_from],
-            shown=[(line, _shown(line)) for line in lines if line.status != "hidden"],
+            shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
             kinds={line.field.key: match.consent_kind(line.field, job["company"]) for line in lines
                    if line.decision == "consent"},
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
+            job=job, record=record.recorded(conn, job_id), today=date.today().isoformat(),
+            panel=record.standard(questionnaire.load(conn)[0]),
+            papers=[(found_file[0], f"/documents/{job_id}/{found_file[1].name}")
+                    for found_file in match.documents(conn, data_dir, job_id).values() if found_file],
         )  # fmt: skip
 
 
@@ -350,21 +369,6 @@ def _writer_chosen() -> bool:
         return load_config().ai.writer is not None
     except ConfigError:  # shown on the Settings page
         return False
-
-
-def _shown(line: match.Line) -> str:
-    """A line's value as you'd read it: a choice's label (never its value), an upload's version (never its path)."""
-    field = line.field
-    if line.status != "fill":
-        return ""
-    if field.kind == "file":
-        return line.source
-    if field.kind == "consent" and line.value == match.TICKED:
-        return "ticked"
-    if isinstance(line.value, tuple):
-        labels = {choice.value: choice.label for choice in field.choices}
-        return ", ".join(labels.get(value, value) for value in line.value)
-    return line.value
 
 
 def _day(read_on: str) -> str:
