@@ -1,0 +1,23 @@
+<# The export's papers: a title, then sections of lines. Every << value >> is made safe by app/documents/latex.py. #>
+\documentclass[letterpaper,11pt]{article}
+\usepackage[margin=1in]{geometry}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+\sloppy
+\begin{document}
+\textbf{<< title >>}\par\vspace{2pt}\hrule
+<% for heading, lines in sections %>
+<% if heading %>
+\vspace{0.5em}\textbf{<< heading >>}\par
+<% if lines %>
+\nopagebreak
+<% endif %>
+<% endif %>
+<% for line in lines %>
+<< line >>\par
+<% endfor %>
+<% endfor %>
+<% if left_out %>
+\vspace{0.5em}\emph{<< left_out >> <% if left_out == 1 %>kind of character could not be shown here and was<% else %>kinds of character could not be shown here and were<% endif %> left out.}\par
+<% endif %>
+\end{document}

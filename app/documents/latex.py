@@ -28,6 +28,7 @@ SPECIAL_CHARACTER = re.compile("|".join(map(re.escape, SPECIAL)))
 WEB = re.compile(r"https?://", re.I)  # the only links the PDF shows
 FACTS = ("name", "rest", "right", "second", "second_right", "link")
 HEADER = ("email", "phone", "place", "linkedin", "github", "portfolio", "scholar", "other_link")
+LONG_WORD = 40  # LaTeX can't break a word with no hyphen pattern: longer ones run off the page, with no error
 
 
 class Raw(str):
@@ -69,6 +70,25 @@ def cover_letter(contact: dict, title: str, company: str, date: str, paragraphs:
     return ENVIRONMENT.get_template("cover-letter.tex").render(
         **_header(contact), title=title, company=company, date=date, paragraphs=paragraphs
     )
+
+
+def report(title: str, sections: list[tuple[str, str]], left_out: int = 0) -> str:
+    """One of the export's papers as LaTeX: `sections` are (heading, text), each line of a text its own paragraph.
+    `left_out`: how many kinds of character the last build couldn't show, said in a closing line."""
+    shown = [(_breakable(heading), [line for line in map(_breakable, text.splitlines()) if line])
+             for heading, text in sections]  # fmt: skip
+    return ENVIRONMENT.get_template("report.tex").render(title=_breakable(title), sections=shown, left_out=left_out)
+
+
+def _breakable(text: str) -> Raw:
+    """`escape`, with a place to break in every long word. The plain text is cut before it is escaped, so an escape is
+    never split. A lone surrogate, which JSON can hold, could not be written to the file. Each word and piece has a
+    source line of its own, which LaTeX reads the same: Tectonic can't read a line of over 200,000 bytes."""
+    return Raw("\n".join(map(_word, CONTROL.sub("", text.encode(errors="ignore").decode()).split())))
+
+
+def _word(word: str) -> str:
+    return "\\allowbreak{}%\n".join(escape(word[start : start + LONG_WORD]) for start in range(0, len(word), LONG_WORD))
 
 
 def _header(contact: dict) -> dict:

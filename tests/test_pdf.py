@@ -1,18 +1,23 @@
 """The PDF build, with a stand-in for Tectonic (no internet needed), plus one real build when Tectonic's files are
 already on this computer."""
 
+import ast
 import errno
 import json
 import os
+import shutil
 import stat
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import pytest
-from test_latex import CONTACT
+from test_latex import ATTACKS, CONTACT, SPECIAL
 from test_tiles import ARTICLE, JAKES, RESUME_CLS
 
+from app.config import PROJECT_DIR
 from app.documents import latex, pdf
 from app.documents.pdf import PdfError
 from app.documents.tiles import read_tiles
@@ -111,9 +116,81 @@ def test_no_tectonic_says_how_to_install_it(tmp_path, monkeypatch):
         pdf.build("x", tmp_path / "resume-v1.pdf")
 
 
-def test_one_build_at_a_time(fake, tmp_path):
-    with pdf._building, pytest.raises(PdfError, match="A PDF is being built"):
+def test_one_build_at_a_time(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf, "WAIT_SECONDS", 0.05)
+    with pdf._building, pytest.raises(PdfError, match="A PDF is being built; try again in a moment."):
         run(fake, tmp_path / "resume-v1.pdf")
+    assert not pdf._building.locked()  # the refused build took nothing
+
+
+def test_a_build_waits_as_long_as_the_limit_says():
+    assert pdf.WAIT_SECONDS == 30
+
+
+def test_a_build_goes_ahead_once_the_one_before_it_ends(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf, "WAIT_SECONDS", 10)
+    pdf._building.acquire()
+    timer = threading.Timer(0.1, pdf._building.release)
+    timer.start()
+    assert run(fake, tmp_path / "resume-v1.pdf").pages == 2
+    timer.join()
+    assert (tmp_path / "resume-v1.pdf").is_file() and not pdf._building.locked()
+
+
+def test_a_build_held_up_past_the_limit_is_refused_and_the_holder_is_undisturbed(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf, "WAIT_SECONDS", 0.05)
+    held, leave = threading.Event(), threading.Event()
+
+    def hold():
+        with pdf._building:
+            held.set()
+            leave.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    held.wait(10)
+    started = time.monotonic()
+    with pytest.raises(PdfError, match="A PDF is being built"):
+        run(fake, tmp_path / "resume-v1.pdf")
+    assert time.monotonic() - started >= 0.05 and pdf._building.locked()  # waited, and took nothing from the holder
+    leave.set()
+    holder.join()
+    assert not pdf._building.locked() and not (tmp_path / "resume-v1.pdf").exists()
+
+
+@pytest.mark.parametrize("text", ["%ERROR", "%SILENT"])
+def test_the_lock_is_free_after_a_build_that_fails(fake, tmp_path, text):
+    with pytest.raises(PdfError):
+        run(fake, tmp_path / "resume-v1.pdf", text)
+    assert not pdf._building.locked()
+
+
+def test_the_lock_is_free_after_an_unexpected_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf, "_build", lambda *_: (_ for _ in ()).throw(ValueError("odd")))
+    with pytest.raises(ValueError, match="odd"):
+        pdf.build("x", tmp_path / "resume-v1.pdf")
+    assert not pdf._building.locked()
+
+
+def test_two_threads_never_build_at_once(tmp_path, monkeypatch):
+    running, most, guard = [0], [0], threading.Lock()
+
+    def counted(latex, target, program):
+        with guard:
+            running[0] += 1
+            most[0] = max(most[0], running[0])
+        time.sleep(0.02)
+        with guard:
+            running[0] -= 1
+        return pdf.Built(1, ())
+
+    monkeypatch.setattr(pdf, "_build", counted)
+    threads = [threading.Thread(target=pdf.build, args=("x", tmp_path / "a.pdf")) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert most[0] == 1 and running[0] == 0 and not pdf._building.locked()
 
 
 def test_an_interrupted_builds_folder_is_cleaned_up_but_not_one_still_running(fake, tmp_path):
@@ -148,6 +225,87 @@ def test_a_real_build_of_a_resume_full_of_special_characters(tmp_path):
     assert not (tmp_path / "pwned").exists()
 
 
+LINE = "We train robots with reinforcement learning and ship them to real customers in 2026 every week now.\n"
+READABLE = CACHED and shutil.which("pdftotext") is not None
+real_reports = pytest.mark.skipif(not READABLE, reason="Tectonic's LaTeX files or pdftotext are not on this computer")
+
+
+def built_report(folder, title, sections, left_out=0):
+    """A real build of a report: what the build found, and all the text that really is on its pages."""
+    target = folder / "report.pdf"
+    found = pdf.build(latex.report(title, sections, left_out), target)
+    done = subprocess.run(  # noqa: S603 (fixed arguments, no shell)
+        ["pdftotext", str(target), "-"],  # noqa: S607 (checked for above)
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,  # noqa: S607
+    )
+    return found, done.stdout
+
+
+@real_reports
+def test_a_real_report_of_every_hard_case_prints_them_as_text(tmp_path):
+    hard = "\n".join([*ATTACKS, *SPECIAL, "a" * 39 + "\\" + "b" * 50, "\r\n", "\u2028next\x0clast", "x" * 41, "\ud800"])
+    found, text = built_report(tmp_path, hard, [(hard, hard), ("", ""), ("Nothing below", " \n ")], 3)
+    assert found.pages >= 1 and r"\write18{touch pwned}" in text and "<% include" in text
+    assert not (tmp_path / "pwned").exists() and not Path("pwned").exists()
+
+
+@real_reports
+@pytest.mark.parametrize("lines", [("x" * 3000, "Emoji 😀 here."), ("Emoji 😀 here.", "x" * 3000)])
+def test_a_real_report_keeps_a_long_word_whole_beside_a_missing_character(tmp_path, lines):
+    found, text = built_report(tmp_path, "Title", [("", "\n".join(lines))])
+    assert "😀" in found.missing and text.count("x") == 3000
+
+
+@real_reports
+def test_a_real_report_keeps_a_wide_long_word_in_its_title_and_heading(tmp_path):
+    _, text = built_report(tmp_path, "W" * 500, [("M" * 500, "W" * 500)])
+    assert text.count("W") == 1000 and text.count("M") == 500
+
+
+@real_reports
+def test_a_real_report_builds_a_chinese_ad_with_no_spaces(tmp_path):
+    found, _ = built_report(tmp_path, "招聘", [("", "我们正在寻找机器学习工程师" * 385)])
+    assert found.pages >= 1 and "机" in found.missing
+
+
+@real_reports
+def test_a_real_report_shows_all_of_a_long_address(tmp_path):
+    address = "https://example.com/careers/careers/" + "a1b2c3" * 120
+    _, text = built_report(tmp_path, "Title", [("Address", f"Applied at {address}")])
+    assert address in "".join(text.split())
+
+
+@real_reports
+def test_a_real_report_of_a_very_long_ad_with_ordinary_lines(tmp_path):
+    found, text = built_report(tmp_path, "Title", [("", LINE * 3225)])  # about 300,000 characters
+    assert found.pages > 80 and text.count("2026") == 3225
+
+
+@real_reports
+@pytest.mark.parametrize(
+    ("ad", "mark", "count"),
+    [
+        (LINE.replace("\n", " ") * 2967, "2026", 2967),  # 296,700 characters on one line
+        (LINE.strip().replace(" ", "-") * 1839, "2026", 1839),  # about 182,000, with no spaces
+        ("x" * 182_000, "x", 182_000),
+    ],
+    ids=["spaces", "hyphens", "one-word"],  # a name this long could not be passed on to Tectonic
+)
+def test_a_real_report_of_a_very_long_ad_with_no_line_breaks_at_all(tmp_path, ad, mark, count):
+    found, text = built_report(tmp_path, "Title", [("", ad)])
+    assert found.pages > 30 and "".join(text.split()).count(mark) == count
+
+
+@real_reports
+def test_a_real_report_of_headings_with_no_text_loses_none_at_the_bottom_of_a_page(tmp_path):
+    sections = [("", "A line.\n" * 45), *((f"Heading {number}.", "") for number in range(100)), ("Last", "The end.")]
+    found, text = built_report(tmp_path, "Title", sections)
+    assert found.pages >= 3 and all(f"Heading {number}." in text for number in range(100)) and "The end." in text
+
+
 def test_a_folder_that_cannot_be_written_or_a_full_disk_names_the_folder(fake, tmp_path, monkeypatch):
     (tmp_path / "documents").write_text("a file where the folder should be")
     with pytest.raises(PdfError, match=r"Could not write in .*documents \("):
@@ -164,3 +322,64 @@ def test_a_folder_that_cannot_be_written_or_a_full_disk_names_the_folder(fake, t
     with pytest.raises(PdfError, match=r"Could not save resume.tex in .* \(No space left on device\)"):
         run(fake, tmp_path / "resume-v1.pdf")
     assert list(tmp_path.glob(f"{pdf.BUILDING}*")) == [] and list(tmp_path.glob("*.partial")) == []
+
+
+BLOCKING = {"app.documents.pdf": {"build", "build_kept", "build_master"}, "app.council.flow": {"advance", "pending"}}
+
+
+def blocking(source: str) -> list[str]:
+    """What this code calls directly that can wait for a PDF: never on the dashboard's request loop. Handing it to
+    run_in_threadpool is no call."""
+    names, found = {}, []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names |= {alias.asname: alias.name for alias in node.names if alias.asname}
+        elif isinstance(node, ast.ImportFrom):
+            names |= {alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names}
+            found += [alias.name for alias in node.names if alias.name in BLOCKING.get(node.module, ())]
+            found += ["*" for alias in node.names if alias.name == "*" and node.module in BLOCKING]
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            module, _, last = ast.unparse(node.func).rpartition(".")
+            if last in BLOCKING.get(names.get(module, module), ()):
+                found.append(last)
+    return found
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from app.documents import pdf\npdf.build_kept(a, b, c)",
+        "from app.documents import pdf\npdf.build(a, b)",
+        "from app.documents import pdf as p\np.build_master(a, b, c)",
+        "import app.documents.pdf as p\np.build(a, b)",
+        "import app.documents.pdf\napp.documents.pdf.build(a, b)",
+        "from app.documents.pdf import build\nbuild(a, b)",
+        "from app.documents.pdf import build_kept as quick\nrun_in_threadpool(quick, a)",
+        "from app.documents.pdf import *",
+        "from app.council import flow\nflow.advance(a, b, c)",
+        "from app.council import flow as f\nf.pending(a, b, c)",
+        "from app.council.flow import advance",
+        "from app.documents import pdf\nasync def route():\n    def inner():\n        pdf.build(a, b)\n    inner()",
+    ],
+)
+def test_the_check_finds_a_blocking_call(source):
+    assert blocking(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from app.documents import pdf\nawait run_in_threadpool(pdf.build_kept, a, b, c)",
+        "from app.documents import pdf\npdf.built(a)\npdf.tailored(a, b, c)",
+        "from app.council import flow\nflow.start(a, b, c)\nflow.ask(a, b, c)",
+        "build(a)\nother.build(a)\nadvance(a)",
+    ],
+)
+def test_the_check_passes_what_never_waits_on_the_request_loop(source):
+    assert not blocking(source)
+
+
+def test_the_dashboard_never_waits_for_a_pdf_on_its_request_loop():
+    for path in (PROJECT_DIR / "app" / "web").glob("*.py"):
+        assert not blocking(path.read_text(encoding="utf-8")), path.name

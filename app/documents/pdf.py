@@ -17,6 +17,7 @@ from pathlib import Path
 BUNDLE = "https://data1b.fullyjustified.net/tlextras-2022.0r0.tar"  # given explicitly: an update can't change it
 INSTALL = "conda install -n auto_apply -c conda-forge tectonic=0.17.0=*_0"
 TIMEOUT_SECONDS = 300  # the first build downloads its LaTeX files (about 50 s); later ones take about a second
+WAIT_SECONDS = 30  # how long a build waits for the one before it: an export runs builds back to back
 BUILDING = "building-"  # the private folders of builds in progress
 LEFT_OVER_SECONDS = TIMEOUT_SECONDS + 60  # a build folder older than this was interrupted; a newer one may be busy
 FAILED = "failed-build"  # the generated LaTeX and the log of the last failed build, kept for checking by hand
@@ -84,7 +85,7 @@ def built(target: Path) -> Built | None:
 
 def build(latex: str, target: Path, program: Path | None = None) -> Built:
     """Build the PDF at target from the LaTeX. A failed build keeps the LaTeX and the log in target's folder."""
-    if not _building.acquire(blocking=False):
+    if not _building.acquire(timeout=WAIT_SECONDS):
         raise PdfError("A PDF is being built; try again in a moment.")
     try:
         return _build(latex, target, program or tectonic())
