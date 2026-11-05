@@ -33,6 +33,7 @@ DOCUMENTS = ((runs.KIND, "Resume"), (runs.LETTER, "Cover letter"))
 HEADING = {"browser": "What was sent", "by hand": "What the app prepared (you applied by hand)"}  # a record's `how`
 MAY_DIFFER = "The site may hold different answers if you changed them there."
 MOVED_BACK = "Your card was moved back on {}, after this record."
+NO_COPY = "the app had no copy of this file when this was recorded: it can't show which PDF you sent"
 
 
 class Refused(Exception):  # noqa: N818 (shown as it is)

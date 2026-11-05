@@ -2,9 +2,11 @@
 files hold personal data outside the encrypted database, so whatever is made here is yours alone from its first moment,
 and nothing you made or changed in the folder is replaced."""
 
+import errno
 import hashlib
 import os
 import re
+import stat
 import unicodedata
 from collections.abc import Iterable
 from contextlib import suppress
@@ -24,12 +26,18 @@ IN_GIT = "That folder is inside a git project, which could publish these files: 
 A_FILE = "That path leads to a file, not a folder"
 DEEPER = "Only the last part of the path can be new: check it for typing mistakes, or make the folders above it first"
 GONE = "The export folder isn't there: plug the drive in or choose it again"
+OPEN_TO_ALL = "Anyone on this computer can write in that folder: choose a folder only you can reach"
+NOT_WRITABLE = "That folder can't be written to"
 NOT_ITS_PLACE = "A link or a file stands where this application's folder should be: move it away and export again"
 BAD_SAVED_FOLDER = "This application's saved folder isn't a folder inside the export folder"
 COMPANY_BYTES, NAME_BYTES = 55, 110  # so _2 and on stay within 120, on every computer
 RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"{port}{number}" for port in ("COM", "LPT") for number in "123456789¹²³")}
 HISTORY = "status_history.txt"
-OWN_PARTIALS = ("*.pdf.partial", "*.txt.partial")  # any other .partial in the folder is yours
+OWN_PARTIALS = (  # any other .partial in the folder is yours
+    "resume.pdf.partial", "cover_letter.pdf.partial", "filled_answers.pdf.partial", "job_description.pdf.partial",
+    "council_notes.pdf.partial", "status_history.txt.partial", "status_history-*.txt.partial",
+)  # fmt: skip
+NO_HARD_LINKS = {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL}  # FAT: EINVAL on Windows
 NEW_FILE = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)  # never an existing file or link
 
 
@@ -57,8 +65,15 @@ def chosen(text: str, data_dir: Path) -> Path:
 
 
 def make(text: str, data_dir: Path) -> Path:
-    """Saving a folder: `chosen`, and a new last part is made, for you only."""
+    """Saving a folder: `chosen`, and a new last part is made, for you only. A folder others can write in, or you
+    can't, is refused here; a folder that turns open later isn't checked again, as it is yours to change."""
     path = chosen(text, data_dir)
+    place = path if path.is_dir() else path.parent
+    if place.is_dir():
+        if os.name == "posix" and place.stat().st_mode & stat.S_IWOTH:
+            raise Refused(OPEN_TO_ALL)
+        if not os.access(place, os.W_OK | os.X_OK):
+            raise Refused(NOT_WRITABLE)
     try:
         path.mkdir(mode=0o700, exist_ok=True)
     except FileNotFoundError:
@@ -95,11 +110,13 @@ def free(root: Path, day: str, base: str, taken: Iterable[str]) -> str:
 
 def enter(root: Path, relative: str) -> Path:
     """The application's folder inside `root`, made if needed, for you only, with the last visit's own .partial files
-    cleared. Each step must really be that folder: nothing is made or cleared through a link."""
+    cleared. `root` is the real path `ready` gave, and each step must really be that folder: nothing is made or
+    cleared through a link, even if the chosen folder became one since."""
     parts = Path(relative).parts
     if not parts or Path(relative).anchor or ".." in parts:
         raise Refused(BAD_SAVED_FOLDER)
-    root = root.resolve()
+    if os.path.realpath(root) != str(root):
+        raise Refused(NOT_ITS_PLACE)
     folder = root
     for part in parts:
         folder = folder / part
@@ -119,17 +136,36 @@ def missing(path: Path) -> bool:
     return not os.path.lexists(path)
 
 
-def write(target: Path, data: bytes) -> None:
-    """All or nothing: written beside its place, on the disk, then swapped in. Not pdf._write: data/documents is the
-    app's own, but this folder is yours and may hold anything, so a .partial already there is never opened."""
-    partial = target.with_name(f"{target.name}.partial")
-    descriptor = os.open(partial, NEW_FILE, 0o600)
+def write(target: Path, data: bytes) -> bool:
+    """A new file, whole or not at all; False when the name is taken: whatever is there stays. A hard link can't replace
+    anything, so even a file that appeared a moment ago is safe; on a disk with no hard links, one more look is all
+    there is."""
+    partial = _partial(target, data)
     try:
-        with open(descriptor, "wb") as file:
-            file.write(data)
-            file.flush()
-            os.fsync(file.fileno())
+        try:
+            os.link(partial, target)
+        except FileExistsError:
+            return False
+        except OSError as error:
+            if error.errno not in NO_HARD_LINKS:
+                raise
+            if not missing(target):
+                return False
+            os.replace(partial, target)
+        return True
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def replaced(target: Path, data: bytes, old: bytes) -> bool:
+    """The one file that is ever replaced, a status history that gains lines: only if it still holds `old`, read again
+    just before the swap. False, and nothing changed, if it doesn't."""
+    partial = _partial(target, data)
+    try:
+        if not _regular(target) or target.read_bytes() != old:
+            return False
         os.replace(partial, target)
+        return True
     finally:
         partial.unlink(missing_ok=True)
 
@@ -150,21 +186,18 @@ def history(folder: Path, text: str, today: str) -> str:
     since, so it is left, and the new text goes beside it, once. Says what happened: made, same, refreshed or beside."""
     target, new = folder / HISTORY, text.encode()
     if missing(target):
-        write(target, new)
-        return "made"
+        return "made" if write(target, new) else "same"
     if _regular(target):
         old = target.read_bytes()
         if old == new:
             return "same"
-        if old.endswith(b"\n") and new.startswith(old):
-            write(target, new)
+        if old.endswith(b"\n") and new.startswith(old) and replaced(target, new, old):
             return "refreshed"
     if any(_regular(found) and found.read_bytes() == new for found in folder.glob("status_history-*.txt")):
         return "same"
     for number in count(1):
         beside = folder / (f"status_history-{today}.txt" if number == 1 else f"status_history-{today}-{number}.txt")
-        if missing(beside):
-            write(beside, new)
+        if missing(beside) and write(beside, new):
             return "beside"
 
 
@@ -178,7 +211,9 @@ def _check(path: Path, data: Path, home: Path) -> None:
     above = (path, *path.parents)
     if any(_there(found / ".git") for found in above):
         raise Refused(IN_GIT)
-    nearest = next(found for found in above if found.exists())
+    nearest = next((found for found in above if found.exists()), None)
+    if nearest is None:  # a drive letter that isn't there
+        raise Refused(GONE)
     if not nearest.is_dir():
         raise Refused(A_FILE)
     if not os.access(nearest, os.R_OK | os.X_OK):
@@ -222,3 +257,19 @@ def _cut(text: str, limit: int) -> str:
 
 def _regular(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
+
+
+def _partial(target: Path, data: bytes) -> Path:
+    """The data on the disk, beside its place, yours alone. Not pdf._write: data/documents is the app's own, but this
+    folder is yours and may hold anything, so a .partial already there is never opened."""
+    partial = target.with_name(f"{target.name}.partial")
+    descriptor = os.open(partial, NEW_FILE, 0o600)
+    try:
+        with open(descriptor, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return partial

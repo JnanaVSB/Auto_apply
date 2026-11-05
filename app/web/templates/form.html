@@ -49,7 +49,7 @@
   </table>
   {% if record.files %}
   <ul class="reasons">
-    {% for file in record.files %}<li>{{ file.label }}{% if file.note %} <span class="error">{{ file.note }}</span>{% endif %}</li>{% endfor %}
+    {% for file in record.files %}<li>{{ file.label }}{% if file.note %} <span class="error">{{ no_copy }}</span>{% endif %}</li>{% endfor %}
   </ul>
   {% endif %}
   {% elif found %}

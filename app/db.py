@@ -667,7 +667,8 @@ UPGRADES = (
     CREATE TABLE exported (  -- where each application went, so a later export finds its folder
         job_id INTEGER PRIMARY KEY REFERENCES jobs (id),
         folder TEXT NOT NULL UNIQUE,  -- inside the chosen folder, e.g. 2026-10-17/Acme_ML-Engineer
-        exported_on TEXT NOT NULL
+        exported_on TEXT NOT NULL,
+        finished_on TEXT  -- when nothing was left that a later run could put right; NULL: a run comes back
     );
     CREATE TABLE export_runs (  -- one row: when the schedule next runs, and what the page shows
         id INTEGER PRIMARY KEY CHECK (id = 1),

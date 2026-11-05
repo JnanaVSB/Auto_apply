@@ -403,3 +403,11 @@ def test_the_minute_check_includes_the_export(client, monkeypatch):
 def test_main_gets_only_its_three_touches():
     source = Path(main.__file__).read_text(encoding="utf-8")
     assert source.count("export_settings") == 2 and source.count("exporter") == 1
+
+
+def test_a_press_with_nothing_to_export_says_so_in_plain_words(client, chosen, built):  # noqa: F811
+    post(client, "/run", tick="on")
+    thread = client.app.state.exporter._thread
+    if thread:
+        thread.join(10)
+    assert "No applications to export yet" in client.get(PAGE).text

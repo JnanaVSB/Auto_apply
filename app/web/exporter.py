@@ -94,7 +94,7 @@ class Exporter:
     def _export(self, conn: sqlcipher3.Connection, config: Config, press: Press) -> str:
         start, end = press or (export.since(conn, config.export.every_days), None)
         result = export.run(
-            conn, self.data_dir, config.export.folder, start, end, step=self._step, unexported=press is None
+            conn, self.data_dir, config.export.folder, start, end, step=self._step, unfinished=press is None
         )
         self.problems = result.problems
         with conn:

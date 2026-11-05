@@ -1,6 +1,7 @@
 """The job box's Application form part: reading a form from its site (a fake web, never the network), the preview and
 what is left for you, with a made-up person, job and forms."""
 
+import html
 import re
 from datetime import date
 from pathlib import Path
@@ -760,6 +761,13 @@ def test_a_records_sentences_live_in_one_place_only():
         assert words not in template
     for sentence in (*record.HEADING.values(), record.MAY_DIFFER, *record.MOVED_BACK.split("{}")):
         assert sentence not in template
+
+
+def test_a_file_the_app_had_no_copy_of_says_so_plainly(client, conn, data_dir, job):
+    pdf.tailored(data_dir, job, 3).unlink()
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert html.escape(record.NO_COPY, quote=True).replace("&#x27;", "&#39;") in text and "file was missing" not in text
+    assert one(conn, "SELECT files FROM submissions")[0].count(record.MISSING) == 1  # the saved record isn't changed
 
 
 def test_a_records_upload_shows_its_version_once(client, conn, data_dir):

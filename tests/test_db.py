@@ -926,14 +926,17 @@ def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, mo
 def test_the_export_tables_hold_what_they_should_and_nothing_else(conn):
     with conn:
         conn.execute("INSERT INTO export_runs (id, tried_on) VALUES (1, 'now')")
-        conn.execute("INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')")
+        conn.execute(
+            "INSERT INTO exported (job_id, folder, exported_on) VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')"
+        )
     for refused in (
         "INSERT INTO export_runs (id) VALUES (2)",  # one row only
         "INSERT INTO export_runs (id) VALUES (0)",
-        "INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer_2', 'now')",  # one folder per job
-        "INSERT INTO exported VALUES (8, '2026-10-17/Acme_ML-Engineer', 'now')",  # one job per folder
-        "INSERT INTO exported VALUES (8, NULL, 'now')",
-        "INSERT INTO exported VALUES (8, 'folder', NULL)",
+        # one folder per job, one job per folder
+        "INSERT INTO exported (job_id, folder, exported_on) VALUES (7, '2026-10-17/Acme_ML-Engineer_2', 'now')",
+        "INSERT INTO exported (job_id, folder, exported_on) VALUES (8, '2026-10-17/Acme_ML-Engineer', 'now')",
+        "INSERT INTO exported (job_id, folder, exported_on) VALUES (8, NULL, 'now')",
+        "INSERT INTO exported (job_id, folder, exported_on) VALUES (8, 'folder', NULL)",
     ):
         with pytest.raises(sqlcipher3.IntegrityError):
             conn.execute(refused)
@@ -944,7 +947,9 @@ def test_the_export_tables_hold_what_they_should_and_nothing_else(conn):
 
 def test_a_database_already_up_to_date_opens_with_no_change(data_dir):
     with closing(db.connect(data_dir)) as conn, conn:
-        conn.execute("INSERT INTO exported VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')")
+        conn.execute(
+            "INSERT INTO exported (job_id, folder, exported_on) VALUES (7, '2026-10-17/Acme_ML-Engineer', 'now')"
+        )
     before = (data_dir / db.DB_FILE).read_bytes()
     with closing(db.connect(data_dir)) as conn:
         assert conn.execute("SELECT folder FROM exported").fetchall() == [("2026-10-17/Acme_ML-Engineer",)]
@@ -1202,3 +1207,9 @@ def test_a_short_new_password_is_refused_before_typing_it_again(monkeypatch):
     with pytest.raises(db.DatabaseError, match="at least"):
         db.ask_new_password()
     assert len(prompts) == 1
+
+
+def test_a_new_row_in_exported_isnt_finished_yet(conn):
+    with conn:
+        conn.execute("INSERT INTO exported (job_id, folder, exported_on) VALUES (7, 'a', 'now')")
+    assert conn.execute("SELECT finished_on FROM exported").fetchone() == (None,)

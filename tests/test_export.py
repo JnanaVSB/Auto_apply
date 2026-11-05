@@ -38,12 +38,15 @@ def built(monkeypatch):
     class Builds(list):
         fail = staticmethod(lambda number: False)
         missing = ()
+        refused = ()  # words: a build whose text holds one fails
+        during = staticmethod(lambda target: None)  # called in the middle of each build
 
     builds = Builds()
 
     def build(data_dir, target, source):
         builds.append((target, source))
-        if builds.fail(len(builds)):
+        builds.during(target)
+        if builds.fail(len(builds)) or any(word in " ".join(source.split()) for word in builds.refused):
             raise pdf.PdfError("The PDF could not be built: a made-up reason.")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"%PDF " + source.encode())
@@ -162,15 +165,15 @@ def test_a_date_of_tomorrow_is_listed_with_no_end_date(conn, data_dir):
     assert export.applications(conn, date(2098, 1, 1), None) == [(job, "2099-01-01")]
 
 
-def test_unexported_also_takes_what_isnt_exported_whatever_its_date(conn, data_dir, root, built):
+def test_unfinished_also_takes_what_isnt_exported_whatever_its_date(conn, data_dir, root, built):
     old = by_hand(conn, data_dir, "Old", on=date(2026, 1, 5))
     done = by_hand(conn, data_dir, "Done", on=date(2026, 1, 6))
     recent = by_hand(conn, data_dir, "Recent", on=date(2026, 10, 20))
     run(conn, data_dir, root, date(2026, 1, 6), date(2026, 1, 6))
     window = date(2026, 10, 1), None
     assert export.applications(conn, *window) == [(recent, "2026-10-20")]
-    assert export.applications(conn, *window, unexported=True) == [(old, "2026-01-05"), (recent, "2026-10-20")]
-    assert done not in dict(export.applications(conn, *window, unexported=True))
+    assert export.applications(conn, *window, unfinished=True) == [(old, "2026-01-05"), (recent, "2026-10-20")]
+    assert done not in dict(export.applications(conn, *window, unfinished=True))
 
 
 def test_a_first_export_makes_every_file_for_a_record(conn, data_dir, root, built):
@@ -221,7 +224,8 @@ def test_a_record_with_no_files_never_falls_back_to_the_newest(conn, data_dir, r
 
 def filled(built):
     """The filled answers' LaTeX, with its source lines joined."""
-    return next(text for text in (" ".join(source.split()) for _, source in built) if "What the app prepared" in text)
+    texts = (" ".join(source.split()).replace(r"\textquotesingle{}", "'") for _, source in built)
+    return next(text for text in texts if "What the app prepared" in text)
 
 
 def test_a_pdf_gone_is_left_out_and_said_on_the_page_and_in_the_paper(conn, data_dir, root, built):
@@ -229,7 +233,8 @@ def test_a_pdf_gone_is_left_out_and_said_on_the_page_and_in_the_paper(conn, data
     pdf.tailored(data_dir, job, 1).unlink()
     result = run(conn, data_dir, root)
     assert not (where(conn, root, job) / "resume.pdf").exists()
-    assert record.MISSING in filled(built) and [line for line in result.problems if record.MISSING in line]
+    assert papers.GONE in filled(built) and [line for line in result.problems if papers.GONE in line]
+    assert record.MISSING not in filled(built) and not [line for line in result.problems if record.MISSING in line]
 
 
 def test_a_pdf_rebuilt_since_is_copied_and_said_to_differ(conn, data_dir, root, built):
@@ -265,7 +270,7 @@ def test_a_file_missing_when_you_applied_but_back_now_is_copied_and_says_both(co
     target.write_bytes(b"%PDF back")
     run(conn, data_dir, root)
     assert (where(conn, root, job) / "resume.pdf").read_bytes() == b"%PDF back"
-    assert record.MISSING in filled(built) and papers.NOT_RECORDED in filled(built)
+    assert record.NO_COPY in filled(built) and papers.NOT_RECORDED in filled(built)
 
 
 def test_a_resume_already_there_and_not_the_version_named_is_left_and_said(conn, data_dir, root, built):
@@ -383,7 +388,7 @@ def test_a_deleted_folders_name_stays_its_own(conn, data_dir, root, built):
     with conn:  # different papers, so a mix-up would show
         conn.execute("UPDATE jobs SET description = 'Second job.' WHERE id = ?", (second,))
     pdf.tailored(data_dir, second, 1).write_bytes(b"%PDF second")
-    run(conn, data_dir, root, date(2026, 11, 1), None, unexported=True)
+    run(conn, data_dir, root, date(2026, 11, 1), None, unfinished=True)
     assert where(conn, root, second).name == "Acme_ML-Engineer_2" and not place.exists()
     run(conn, data_dir, root)
     assert (place / "resume.pdf").read_bytes() == b"%PDF resume v1"
@@ -405,7 +410,7 @@ def test_a_new_chosen_folder_gets_a_full_copy_and_the_old_one_is_left(conn, data
 def test_a_stored_folder_leading_out_is_refused_with_a_line_and_nothing_written(conn, data_dir, root, built, stored):
     job = by_hand(conn, data_dir)
     with conn:
-        conn.execute("INSERT INTO exported VALUES (?, ?, 'then')", (job, stored))
+        conn.execute("INSERT INTO exported (job_id, folder, exported_on) VALUES (?, ?, 'then')", (job, stored))
     before = listing(root.parent)
     result = run(conn, data_dir, root)
     assert listing(root.parent) == before and result.again == 0 and len(result.problems) == 1
@@ -780,10 +785,12 @@ def test_the_summary_counts_in_plain_words():
 
 def test_the_summary_says_when_nothing_was_new_or_nothing_was_selected():
     assert export.Result(selected=3).summary() == "Nothing new"
-    assert export.Result(selected=0).summary() == "No applications between those dates"
-    assert export.Result(selected=0, refreshed=2).summary() == (
+    between = export.Result(selected=0, none_chosen=export.NONE_BETWEEN)
+    assert between.summary() == "No applications between those dates"
+    assert export.Result(selected=0, none_chosen=export.NONE_BETWEEN, refreshed=2).summary() == (
         "No applications between those dates; 2 status histories refreshed"
     )
+    assert export.Result(selected=0).summary() == "Nothing new"
 
 
 def test_a_run_stopped_before_it_chose_never_says_there_were_no_applications():
@@ -808,3 +815,222 @@ def test_a_second_connection_sees_the_row_before_any_file_is_written(conn, data_
     monkeypatch.setattr(folder, "write", look)
     run(conn, data_dir, root)
     assert seen and seen[0] == 1
+
+
+def test_with_no_dates_and_nothing_to_export_it_says_so(conn, data_dir, root, built):
+    assert run(conn, data_dir, root).summary() == "No applications to export yet"
+
+
+def test_with_dates_and_nothing_in_them_it_says_so(conn, data_dir, root, built):
+    by_hand(conn, data_dir)
+    assert run(conn, data_dir, root, date(2026, 11, 1), None).summary() == "No applications between those dates"
+
+
+def test_on_a_schedule_nothing_to_do_is_nothing_new(conn, data_dir, root, built):
+    assert run(conn, data_dir, root, date(2026, 11, 1), None, unfinished=True).summary() == "Nothing new"
+
+
+def test_a_run_stopped_with_nothing_done_says_the_reason_alone():
+    assert export.Result(selected=4, stopped="Permission denied").words() == "Permission denied"
+    assert export.Result(selected=4, files=1, stopped="Permission denied").words() == "1 file added. Permission denied"
+
+
+@pytest.mark.parametrize(("count", "words"), [
+    (1, "1 application not finished: the next export tries it again"),
+    (2, "2 applications not finished: the next export tries them again"),
+])  # fmt: skip
+def test_what_isnt_finished_is_said_and_nothing_new_never_stands_alone(count, words):
+    assert export.Result(selected=1, unfinished=count).summary() == words
+    assert export.Result(selected=1, files=1, unfinished=count).summary() == f"1 file added, {words}"
+
+
+def finished_on(conn, job):
+    return conn.execute("SELECT finished_on FROM exported WHERE job_id = ?", (job,)).fetchone()[0]
+
+
+def test_an_application_with_everything_made_is_finished_and_stays_so(conn, data_dir, root, built):
+    job = by_hand(conn, data_dir)
+    run(conn, data_dir, root)
+    first = finished_on(conn, job)
+    assert first
+    with conn:
+        conn.execute("UPDATE exported SET finished_on = 'kept' WHERE job_id = ?", (job,))
+    run(conn, data_dir, root)
+    assert finished_on(conn, job) == "kept"
+
+
+def test_a_paper_that_fails_leaves_it_unfinished_and_a_later_failure_undoes_finished(conn, data_dir, root, built):
+    job = by_hand(conn, data_dir)
+    built.fail = lambda number: number == 1
+    assert run(conn, data_dir, root).unfinished == 1 and finished_on(conn, job) is None
+    built.fail = lambda number: False
+    assert run(conn, data_dir, root).unfinished == 0 and finished_on(conn, job)
+    (where(conn, root, job) / "job_description.pdf").unlink()
+    built.fail = lambda number: True
+    assert run(conn, data_dir, root).unfinished == 1 and finished_on(conn, job) is None
+
+
+def test_no_text_and_a_gone_pdf_are_finished_as_no_later_run_could_help(conn, data_dir, root, built):
+    no_text = job_row(conn, "No text", description=None)
+    tracker.move(conn, no_text, "ready", "applied", ON)
+    gone = by_hand(conn, data_dir, "Gone")
+    pdf.tailored(data_dir, gone, 1).unlink()
+    result = run(conn, data_dir, root)
+    assert result.unfinished == 0 and finished_on(conn, no_text) and finished_on(conn, gone)
+    assert export.applications(conn, date(2026, 11, 1), None, unfinished=True) == []
+
+
+def test_a_damaged_record_and_a_refused_folder_are_unfinished(conn, data_dir, root, built):
+    damaged, refused = by_hand(conn, data_dir, "Damaged"), by_hand(conn, data_dir, "Refused")
+    with conn:
+        conn.execute("UPDATE submissions SET fields = '[not json' WHERE job_id = ?", (damaged,))
+        conn.execute("INSERT INTO exported (job_id, folder, exported_on, finished_on) VALUES (?, '../x', 'a', 'a')",
+                     (refused,))  # fmt: skip
+    result = run(conn, data_dir, root)
+    assert result.unfinished == 2 and finished_on(conn, damaged) is None and finished_on(conn, refused) is None
+
+
+def test_a_crash_leaves_finished_as_it_was(conn, data_dir, root, built, monkeypatch):
+    job = by_hand(conn, data_dir)
+    run(conn, data_dir, root)
+    before = finished_on(conn, job)
+    (where(conn, root, job) / "job_description.pdf").unlink()
+    with monkeypatch.context() as crash:
+        crash.setattr(folder, "write", lambda *_: (_ for _ in ()).throw(RuntimeError("the power went")))
+        with pytest.raises(RuntimeError):
+            run(conn, data_dir, root)
+    assert finished_on(conn, job) == before
+
+
+def test_what_failed_before_goes_last_so_a_new_job_always_gets_through(conn, data_dir, root, built):
+    stuck = [by_hand(conn, data_dir, name, on=date(2026, 1, day)) for day, name in ((1, "Stuck one"), (2, "Stuck two"))]
+    built.refused = ("Stuck one", "Stuck two")
+    run(conn, data_dir, root)
+    new = by_hand(conn, data_dir, "New job", on=date(2026, 10, 1))
+    assert [job for job, _ in export.applications(conn, None, None)] == [new, *stuck]
+    assert [job for job, _ in export.applications(conn, date(2026, 11, 1), None, unfinished=True)] == [new, *stuck]
+    run(conn, data_dir, root, date(2026, 11, 1), None, unfinished=True)
+    assert finished_on(conn, new) and (where(conn, root, new) / "filled_answers.pdf").is_file()
+
+
+def test_a_card_moved_back_isnt_counted_as_unfinished_for_ever(conn, data_dir, root, built):
+    job = no_record(conn)
+    built.fail = lambda number: True
+    assert run(conn, data_dir, root).unfinished == 1
+    tracker.move(conn, job, "applied", "ready", ON)
+    assert run(conn, data_dir, root).unfinished == 0
+
+
+def test_the_refresh_never_touches_finished(conn, data_dir, root, built):
+    job = by_hand(conn, data_dir)
+    run(conn, data_dir, root)
+    with conn:
+        conn.execute("UPDATE exported SET finished_on = 'kept'")
+    tracker.move(conn, job, "applied", "offer", ON)
+    assert run(conn, data_dir, root, date(2026, 11, 1), None).refreshed == 1 and finished_on(conn, job) == "kept"
+
+
+def test_a_file_that_appears_during_a_build_is_left_and_not_counted(conn, data_dir, root, built):
+    job = by_hand(conn, data_dir)
+    run(conn, data_dir, root)
+    place = where(conn, root, job)
+    (place / "job_description.pdf").unlink()
+    built.during = lambda target: (place / "job_description.pdf").write_bytes(b"yours")
+    result = run(conn, data_dir, root)
+    assert (place / "job_description.pdf").read_bytes() == b"yours" and result.files == 0
+    assert result.summary() == "Nothing new" and not list(root.rglob("*.partial"))
+
+
+def test_a_file_that_appears_during_a_copy_is_left_and_not_counted(conn, data_dir, root, built, monkeypatch):
+    job = by_hand(conn, data_dir)
+    run(conn, data_dir, root)
+    target = where(conn, root, job) / "resume.pdf"
+    target.unlink()
+    read = Path.read_bytes
+
+    def appears(path):
+        data = read(path)
+        if path == pdf.tailored(data_dir, job, 1):
+            target.write_bytes(b"yours")
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", appears)
+    result = run(conn, data_dir, root)
+    assert read(target) == b"yours" and result.files == 0
+
+
+def test_an_odd_item_is_a_line_with_the_reason_and_the_next_application_goes_on(conn, data_dir, root, built):
+    odd, fine = by_hand(conn, data_dir, "Odd"), by_hand(conn, data_dir, "Fine")
+    run(conn, data_dir, root)
+    place = where(conn, root, odd)
+    (place / "resume.pdf").unlink()
+    (where(conn, root, fine) / "resume.pdf").unlink()
+    (place / "resume.pdf.partial").mkdir()
+    result = run(conn, data_dir, root)
+    (line,) = result.problems
+    assert result.stopped is None and "Acme, Odd" in line and "File exists" in line and str(root) not in line
+    assert result.unfinished == 1 and (where(conn, root, fine) / "resume.pdf").is_file()
+    assert finished_on(conn, odd) is None and finished_on(conn, fine)
+
+
+def test_a_history_closed_to_you_is_a_line_not_a_stop(conn, data_dir, root, built):
+    closed, fine = by_hand(conn, data_dir, "Closed"), by_hand(conn, data_dir, "Fine")
+    run(conn, data_dir, root)
+    history = where(conn, root, closed) / "status_history.txt"
+    tracker.move(conn, fine, "applied", "offer", ON)
+    tracker.move(conn, closed, "applied", "offer", ON)
+    history.chmod(0)
+    try:
+        result = run(conn, data_dir, root, date(2026, 11, 1), None)
+    finally:
+        history.chmod(0o600)
+    assert result.stopped is None and result.refreshed == 1
+    assert len(result.problems) == 1 and "Permission denied" in result.problems[0]
+
+
+def test_a_whole_folder_closed_to_you_stops_with_one_message_not_hundreds(conn, data_dir, root, built):
+    for number in range(8):
+        by_hand(conn, data_dir, f"Job {number}")
+    root.chmod(0o500)
+    try:
+        result = run(conn, data_dir, root)
+    finally:
+        root.chmod(0o700)
+    assert "Permission denied" in result.stopped and str(root) not in result.stopped and len(result.problems) == 5
+
+
+def test_a_full_disk_still_stops_the_run_at_once(conn, data_dir, root, built, monkeypatch):
+    by_hand(conn, data_dir, "One")
+    by_hand(conn, data_dir, "Two")
+    monkeypatch.setattr(folder, "write", lambda *_: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    result = run(conn, data_dir, root)
+    assert result.stopped.startswith("No space left on device") and result.problems == []
+
+
+def exported_jobs(conn, data_dir, root, count):
+    """Applications on days in a row, all their files made, so a run has nothing to build."""
+    jobs = [by_hand(conn, data_dir, f"Job {day}", on=date(2026, 10, day)) for day in range(1, count + 1)]
+    run(conn, data_dir, root)
+    return jobs
+
+
+def in_the_way(conn, root, job):
+    place = where(conn, root, job)
+    (place / "resume.pdf").unlink()
+    (place / "resume.pdf.partial").mkdir()
+
+
+def test_five_odd_items_with_fine_applications_between_are_not_in_a_row(conn, data_dir, root, built):
+    jobs = exported_jobs(conn, data_dir, root, 10)
+    for job in jobs[::2]:
+        in_the_way(conn, root, job)
+    built.clear()
+    result = run(conn, data_dir, root)
+    assert result.stopped is None and len(result.problems) == 5 and result.unfinished == 5 and built == []
+
+
+def test_five_odd_items_in_a_row_stop_the_run(conn, data_dir, root, built):
+    jobs = exported_jobs(conn, data_dir, root, 6)
+    for job in jobs[:5]:
+        in_the_way(conn, root, job)
+    assert "File exists" in run(conn, data_dir, root).stopped

@@ -21,9 +21,19 @@ APPLIED = """SELECT job_id, submitted_on FROM submissions UNION ALL SELECT job_i
     WHERE stage != 'ready' AND job_id NOT IN (SELECT job_id FROM submissions)"""
 JOB = "SELECT company, title, locations, apply_url, description FROM jobs WHERE id = ?"
 SAVE = "INSERT INTO exported (job_id, folder, exported_on) VALUES (?, ?, ?)"
+FINISHED = "UPDATE exported SET finished_on = ? WHERE job_id = ? AND finished_on IS NULL"
+NOT_FINISHED = "UPDATE exported SET finished_on = NULL WHERE job_id = ?"
+LEFT = f"SELECT count(*) FROM exported WHERE finished_on IS NULL AND job_id IN (SELECT job_id FROM ({APPLIED}))"  # noqa: S608
 DOCUMENT_FILES = {runs.KIND: "resume.pdf", runs.LETTER: "cover_letter.pdf"}
 ANSWERS_PDF, POSTING_PDF, NOTES_PDF = "filled_answers.pdf", "job_description.pdf", "council_notes.pdf"
-STOP_AFTER = 5  # failed builds in a row: a broken Tectonic gives one message, not hundreds
+NONE_BETWEEN, NONE_YET = "No applications between those dates", "No applications to export yet"
+STOP_AFTER = 5  # failures in a row: a broken Tectonic or a closed folder gives one message, not hundreds
+ODD_ITEM = (
+    FileExistsError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
+)  # one thing in the way, not the disk
 DAMAGED = (ValueError, KeyError, TypeError, AttributeError)  # a record or a paper that can't be read as it should
 log = logging.getLogger("app.export")
 
@@ -36,30 +46,34 @@ class Result:
     files: int = 0
     refreshed: int = 0
     beside: int = 0
+    unfinished: int = 0  # the next export tries them again
+    none_chosen: str = ""  # the words when none were chosen; on a schedule, none needed
     problems: list[str] = field(default_factory=list)  # each names an application: for the page only, never saved
     stopped: str | None = None
 
     def summary(self) -> str:
         """Counts only, in plain words: this is what is saved."""
-        counts = [
+        words = self._counts()
+        if self.selected == 0 and self.none_chosen:
+            return "; ".join(filter(None, (self.none_chosen, words)))
+        return words or "Nothing new"
+
+    def words(self) -> str:
+        """The run's last words, for the page and the database: the summary and why it stopped, or only why, when
+        nothing was done."""
+        return ". ".join(filter(None, (self._counts(), self.stopped))) if self.stopped else self.summary()
+
+    def _counts(self) -> str:
+        return ", ".join(filter(None, (
             _count(self.folders, "new folder", "new folders"),
             _count(self.again, "folder made again", "folders made again"),
             _count(self.files, "file added", "files added"),
             _count(self.refreshed, "status history refreshed", "status histories refreshed"),
             _count(self.beside, "status history left alone (it no longer matches: the new one is beside it)",
                    "status histories left alone (they no longer match: the new ones are beside them)"),
-        ]  # fmt: skip
-        words = ", ".join(filter(None, counts))
-        if self.selected == 0:
-            return "; ".join(filter(None, ("No applications between those dates", words)))
-        return words or "Nothing new"
-
-    def words(self) -> str:
-        """The run's last words, for the page and the database: the summary and why it stopped, or only why, when it
-        stopped before choosing any."""
-        if self.stopped and self.selected is None:
-            return self.stopped
-        return ". ".join(filter(None, (self.summary(), self.stopped)))
+            _count(self.unfinished, "application not finished: the next export tries it again",
+                   "applications not finished: the next export tries them again"),
+        )))  # fmt: skip
 
 
 class _Stopped(Exception):  # noqa: N818 (the run ends here, with its reason)
@@ -67,18 +81,18 @@ class _Stopped(Exception):  # noqa: N818 (the run ends here, with its reason)
 
 
 def applications(
-    conn: sqlcipher3.Connection, start: date | None, end: date | None, unexported: bool = False
+    conn: sqlcipher3.Connection, start: date | None, end: date | None, unfinished: bool = False
 ) -> list[tuple[int, str]]:
     """The applications to export, as (job, day), oldest first: every record on the date you chose, wherever its card
-    is now, and cards past Ready with no record on the card's date. `unexported`: also all not exported yet, whatever
-    their date."""
+    is now, and cards past Ready with no record on the card's date. `unfinished`: also all not exported yet or left
+    half-made, whatever their date. What failed before goes last, so that it can never hold up a new one."""
     first, last = start and start.isoformat(), end and end.isoformat()
-    kept = {row[0] for row in conn.execute("SELECT job_id FROM exported")}
-    found = sorted((day, job) for job, day in conn.execute(APPLIED))
+    kept = dict(conn.execute("SELECT job_id, finished_on FROM exported").fetchall())
+    found = sorted((job in kept and kept[job] is None, day, job) for job, day in conn.execute(APPLIED))
     return [
         (job, day)
-        for day, job in found
-        if (unexported and job not in kept) or ((not first or first <= day) and (not last or day <= last))
+        for again, day, job in found
+        if (unfinished and (again or job not in kept)) or ((not first or first <= day) and (not last or day <= last))
     ]
 
 
@@ -92,7 +106,7 @@ def since(conn: sqlcipher3.Connection, every_days: int) -> date:
 
 def run(
     conn: sqlcipher3.Connection, data_dir: Path, folder_text: str, start: date | None, end: date | None,
-    step: Callable[[int, int], None], unexported: bool = False,
+    step: Callable[[int, int], None], unfinished: bool = False,
 ) -> Result:  # fmt: skip
     """One export to the folder `folder_text`, then the status history of every other application exported before.
     `step` hears (done, total). Disk full or no rights stop it with the system's reason; what's done stays."""
@@ -101,11 +115,14 @@ def run(
         root = folder.ready(folder_text, data_dir)
         if pdf.tectonic() is None:
             raise _Stopped(f"Tectonic isn't installed: install it with: {pdf.INSTALL}")
-        chosen = applications(conn, start, end, unexported)
+        chosen = applications(conn, start, end, unfinished)
         result.selected = len(chosen)
+        result.none_chosen = "" if unfinished else NONE_BETWEEN if start or end else NONE_YET
         _Run(conn, data_dir, root, result).export_all(chosen, step)
     except (folder.Refused, _Stopped) as reason:
         result.stopped = str(reason)
+    if result.selected is not None:
+        result.unfinished = conn.execute(LEFT).fetchone()[0]
     log.info("Export: %d applications, %d new folders, %d files added, %d problems, stopped: %s", result.selected or 0,
              result.folders, result.files, len(result.problems), result.stopped is not None)  # fmt: skip
     return result
@@ -118,14 +135,17 @@ class _Run:
     root: Path
     result: Result
     today: str = field(default_factory=lambda: date.today().isoformat())
-    failed: int = 0  # builds in a row
+    failed: int = 0  # builds and odd items in a row
+    again: bool = False  # the application at hand has something a later run could put right
 
     def export_all(self, chosen: list[tuple[int, str]], step: Callable[[int, int], None]) -> None:
         done = 0
         step(done, len(chosen))
         try:
             for job_id, day in chosen:
+                self.again = False
                 self._safely(self._application, job_id, day, name=f"Application {job_id}", file="its details")
+                self._finish(job_id)
                 done += 1
                 step(done, len(chosen))
             self._refresh({job_id for job_id, _ in chosen})
@@ -133,14 +153,30 @@ class _Run:
             raise _Stopped(f"{error.strerror or type(error).__name__}: stopped after {done} of {len(chosen)} "
                            "applications; what's done stays") from None  # fmt: skip
 
+    def _finish(self, job_id: int) -> None:
+        """Only here, at the end of an application: a run stopped or closed earlier leaves things as they were."""
+        with self.conn:
+            if self.again:
+                self.conn.execute(NOT_FINISHED, (job_id,))
+            else:
+                self.failed = 0
+                self.conn.execute(FINISHED, (collect.now(), job_id))
+
     def _application(self, job_id: int, day: str) -> None:
         job = self._job(job_id)
+        name = _name(job)
+        try:
+            self._files(job_id, day, job, name)
+        except ODD_ITEM as error:
+            self._odd_item(name, error)
+
+    def _files(self, job_id: int, day: str, job: dict, name: str) -> None:
         recorded, damaged = self._read_record(job_id)
         where, new = self._place(job_id, day, job)
         if where is None:
             return
-        name = _name(job)
         if damaged:
+            self.again = True
             self._problem(name, "its record can't be read, so its answers and files are left out")
         elif recorded:
             self._safely(self._recorded_copies, where, job_id, recorded, name, name=name, file="its files")
@@ -189,6 +225,7 @@ class _Run:
         try:
             where = folder.enter(self.root, relative)
         except folder.Refused as refusal:
+            self.again = True
             self._problem(_name(job), str(refusal))
             return None, False
         if row is None:
@@ -205,8 +242,7 @@ class _Run:
         """The very version the record names, or nothing: never the newest instead, never built again."""
         target = where / DOCUMENT_FILES[row["slot"]]
         source = pdf.tailored(self.data_dir, job_id, row["version"], row["slot"])
-        if folder.missing(target) and source.is_file():
-            folder.write(target, source.read_bytes())
+        if folder.missing(target) and source.is_file() and folder.write(target, source.read_bytes()):
             self.result.files += 1
 
     def _newest(self, where: Path, job_id: int, name: str) -> None:
@@ -217,8 +253,8 @@ class _Run:
             if document[1].stat().st_size == 0:
                 self._problem(name, f"{target.name}: the app's copy is empty, so it was left out")
                 continue
-            folder.write(target, document[1].read_bytes())
-            self.result.files += 1
+            if folder.write(target, document[1].read_bytes()):
+                self.result.files += 1
 
     def _history(self, where: Path, job_id: int, recorded: dict | None, name: str) -> None:
         happened = folder.history(where, papers.history(self.conn, job_id, recorded), self.today)
@@ -244,10 +280,10 @@ class _Run:
                   for row in recorded["files"] if row["slot"] in DOCUMENT_FILES}  # fmt: skip
         back = record.moved_back(self.conn, job_id, recorded)
         paper = papers.filled_answers(job, recorded, back and papers.day(back), states)
-        words = {"gone": record.MISSING, "different": papers.NOT_RECORDED}
-        for slot, state in states.items():
-            if state in words:
-                self._problem(name, f"{DOCUMENT_FILES[slot]}: {words[state]}")
+        for row in recorded["files"]:
+            if row["slot"] in states and states[row["slot"]] != "same":
+                notes = "; ".join(papers.file_notes(row, states[row["slot"]]))
+                self._problem(name, f"{DOCUMENT_FILES[row['slot']]}: {notes}")
         return paper
 
     def _paper(
@@ -274,8 +310,7 @@ class _Run:
                 built = self._build(work, name, file, latex.report(*paper, left_out=len(built.missing)))
                 if built:
                     self._problem(name, f"{file}: some characters could not be shown and were left out")
-            if built:
-                folder.write(target, work.read_bytes())
+            if built and folder.write(target, work.read_bytes()):
                 self.result.files += 1
         finally:
             work.unlink(missing_ok=True)
@@ -285,13 +320,24 @@ class _Run:
         try:
             built = pdf.build_kept(self.data_dir, work, source)
         except pdf.PdfError as error:
-            self.failed += 1
-            self._problem(name, f"{file}: {error}")
-            if self.failed >= STOP_AFTER:
-                raise _Stopped(str(error)) from None
+            self._failed(name, f"{file}: {error}", str(error))
             return None
         self.failed = 0
         return built
+
+    def _odd_item(self, name: str, error: OSError) -> None:
+        """One thing in the way, such as a file closed to you: this application waits and the next one goes on."""
+        reason = error.strerror or type(error).__name__
+        self._failed(
+            name, f"{reason}: the next export tries this application again", f"{reason}: check the export folder"
+        )
+
+    def _failed(self, name: str, line: str, reason: str) -> None:
+        self.again = True
+        self.failed += 1
+        self._problem(name, line)
+        if self.failed >= STOP_AFTER:
+            raise _Stopped(reason)
 
     def _refresh(self, seen: set[int]) -> None:
         """Every other application's status history, whatever its date: only that text file, and never a folder or a
@@ -303,11 +349,11 @@ class _Run:
     def _refresh_one(self, job_id: int, relative: str) -> None:
         name = _name(self._job(job_id))
         try:
-            where = folder.enter(self.root, relative)
+            self._history(folder.enter(self.root, relative), job_id, self._read_record(job_id)[0], name)
         except folder.Refused as refusal:
             self._problem(name, str(refusal))
-            return
-        self._history(where, job_id, self._read_record(job_id)[0], name)
+        except ODD_ITEM as error:
+            self._odd_item(name, error)
 
     def _safely(self, work: Callable[..., None], *values: object, name: str, file: str) -> None:
         """One file or application that can't be read as it should is a line, and the rest carries on."""
@@ -317,6 +363,7 @@ class _Run:
             self._damaged(name, file, error)
 
     def _damaged(self, name: str, file: str, error: Exception) -> None:
+        self.again = True
         log.warning("Export: damaged data skipped: %s", type(error).__name__)
         self._problem(name, f"{file}: its saved data is damaged, so this was left out")
 

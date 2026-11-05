@@ -1,10 +1,12 @@
 """Where an export may go, what its folders are called and how its files are written: all on a made-up home, project
 and data folder in a temporary folder, never the real ones."""
 
+import errno
 import hashlib
 import os
 import stat
 import unicodedata
+from pathlib import Path
 
 import pytest
 
@@ -234,13 +236,50 @@ def test_saving_refuses_a_file(home, data):
     assert (home / "file.txt").read_text(encoding="utf-8") == "x"
 
 
-def test_saving_where_it_cant_write_gives_the_reason(home, data):
+def test_saving_where_it_cant_write_says_so(home, data):
     (home / "read-only").mkdir()
     (home / "read-only").chmod(0o500)
     try:
-        refused(home / "read-only" / "new", data, check=folder.make, words="Permission denied")
+        refused(home / "read-only" / "new", data, check=folder.make, words="can't be written to")
+        refused(home / "read-only", data, check=folder.make, words="can't be written to")
     finally:
         (home / "read-only").chmod(0o700)
+
+
+@pytest.mark.parametrize("path", ["/proc", "/sys", "/proc/new-folder"])
+def test_saving_a_system_folder_is_refused_at_save(data, path):
+    refused(path, data, check=folder.make)
+
+
+def test_a_folder_anyone_can_write_in_is_refused_at_save(home, data):
+    (home / "open").mkdir()
+    (home / "open").chmod(0o777)
+    refused(home / "open", data, check=folder.make, words="Anyone on this computer")
+    refused(home / "open" / "new", data, check=folder.make, words="Anyone on this computer")
+    assert not (home / "open" / "new").exists()
+
+
+def test_the_shared_temporary_folder_is_refused_but_a_private_one_inside_it_is_fine(tmp_path, data):
+    new = Path("/tmp") / f"{tmp_path.name}-new"  # noqa: S108
+    refused(new, data, check=folder.make, words="Anyone on this computer")
+    assert not new.exists()
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    assert folder.make(str(private), data) == private
+    assert folder.make(str(private / "new"), data) == private / "new"
+
+
+def test_a_folder_that_turns_open_later_isnt_refused_at_a_run(home, data):
+    folder.make(str(home / "exports"), data)
+    (home / "exports").chmod(0o777)
+    assert folder.ready(str(home / "exports"), data) == home / "exports"
+
+
+def test_a_drive_that_isnt_there_says_plug_it_in(home, data, monkeypatch):
+    """Windows: on a missing drive letter nothing on the path exists, not even the top."""
+    monkeypatch.setattr(folder.Path, "exists", lambda _: False)
+    refused(home / "unplugged", data, check=folder.ready, words="plug the drive in")
+    refused(home / "unplugged", data, check=folder.make, words="plug the drive in")
 
 
 def test_a_run_finds_the_folder_and_never_makes_it(home, data):
@@ -399,11 +438,15 @@ def test_entering_clears_only_the_app_s_own_partials(root):
     made = folder.enter(root, f"{TODAY}/Acme_ML")
     (made / "notes.partial").write_text("yours", encoding="utf-8")
     (made / "report.docx.partial").write_text("yours", encoding="utf-8")
-    (made / "old.pdf.partial").mkdir()  # a folder is never the app's
+    (made / "old.pdf.partial").write_text("yours", encoding="utf-8")
+    (made / "my-notes.txt.partial").write_text("yours", encoding="utf-8")
+    (made / "folder.pdf.partial").mkdir()
+    (made / "filled_answers.pdf.partial").mkdir()  # a folder is never the app's
     (made / "resume.pdf.partial").write_bytes(b"ha")
     (made / "status_history-2026-11-05.txt.partial").write_bytes(b"ha")
     folder.enter(root, f"{TODAY}/Acme_ML")
-    assert names(made) == ["notes.partial", "old.pdf.partial", "report.docx.partial"]
+    assert names(made) == ["filled_answers.pdf.partial", "folder.pdf.partial", "my-notes.txt.partial", "notes.partial",
+                           "old.pdf.partial", "report.docx.partial"]  # fmt: skip
 
 
 def test_clearing_a_partial_link_never_touches_what_it_points_at(root, tmp_path):
@@ -466,10 +509,22 @@ def test_a_saved_folder_written_as_a_full_path_is_refused_even_inside_the_chosen
     assert list(root.iterdir()) == []
 
 
-def test_a_chosen_folder_reached_through_a_link_is_fine(root, tmp_path):
-    (tmp_path / "shortcut").symlink_to(root)
-    made = folder.enter(tmp_path / "shortcut", f"{TODAY}/Acme_ML")
-    assert (root / TODAY / "Acme_ML").is_dir() and made.resolve() == root / TODAY / "Acme_ML"
+def test_a_chosen_folder_reached_through_a_link_is_fine(home, data):
+    (home / "real").mkdir()
+    (home / "shortcut").symlink_to(home / "real")
+    made = folder.enter(folder.ready(str(home / "shortcut"), data), f"{TODAY}/Acme_ML")
+    assert made == home / "real" / TODAY / "Acme_ML" and made.is_dir()
+
+
+def test_a_chosen_folder_swapped_for_a_link_during_a_run_is_refused_and_nothing_made_there(home, data):
+    (home / "exports").mkdir()
+    (home / "other").mkdir()
+    checked = folder.ready(str(home / "exports"), data)
+    (home / "exports").rmdir()
+    (home / "exports").symlink_to(home / "other")
+    with pytest.raises(folder.Refused):
+        folder.enter(checked, f"{TODAY}/Acme_ML")
+    assert list((home / "other").iterdir()) == []
 
 
 def test_missing_means_nothing_at_all_there(root):
@@ -484,13 +539,13 @@ def test_missing_means_nothing_at_all_there(root):
 
 def test_a_file_is_written_for_you_only_from_the_first_moment(root, loose_umask, monkeypatch):
     seen = []
-    swap = os.replace
+    link = os.link
 
-    def replace(source, target):
+    def linked(source, target):
         seen.append(rights(source))
-        swap(source, target)
+        link(source, target)
 
-    monkeypatch.setattr(folder.os, "replace", replace)
+    monkeypatch.setattr(folder.os, "link", linked)
     folder.write(root / "a.txt", b"text")
     folder.write(root / "b.txt", b"text")
     assert seen == [0o600, 0o600] and rights(root / "a.txt") == 0o600 and rights(root / "b.txt") == 0o600
@@ -539,31 +594,35 @@ def unchanged(path):
 def test_a_failed_swap_leaves_the_old_file_and_no_partial(old_file, monkeypatch):
     monkeypatch.setattr(folder.os, "replace", lambda *_: (_ for _ in ()).throw(PermissionError(13, "in use")))
     with pytest.raises(PermissionError):
-        folder.write(old_file, b"new")
+        folder.replaced(old_file, b"new", b"old")
     assert unchanged(old_file)
 
 
 def test_a_full_disk_leaves_the_old_file_and_no_partial(old_file, monkeypatch):
     monkeypatch.setattr(folder.os, "fsync", lambda _: (_ for _ in ()).throw(OSError(28, "No space left on device")))
-    with pytest.raises(OSError, match="No space"):
-        folder.write(old_file, b"new")
-    assert unchanged(old_file)
+    for writes in (
+        lambda: folder.write(old_file.with_name("b.txt"), b"new"),
+        lambda: folder.replaced(old_file, b"new", b"old"),
+    ):
+        with pytest.raises(OSError, match="No space"):
+            writes()
+    assert unchanged(old_file) and folder.missing(old_file.with_name("b.txt"))
 
 
 def test_an_unexpected_failure_leaves_no_partial_either(old_file, monkeypatch):
     monkeypatch.setattr(folder.os, "fsync", lambda _: (_ for _ in ()).throw(ValueError("odd")))
     with pytest.raises(ValueError, match="odd"):
-        folder.write(old_file, b"new")
+        folder.replaced(old_file, b"new", b"old")
     assert unchanged(old_file)
 
 
 def test_the_data_reaches_the_disk_before_the_swap(root, monkeypatch):
     order = []
-    sync, swap = os.fsync, os.replace
+    sync, link = os.fsync, os.link
     monkeypatch.setattr(folder.os, "fsync", lambda number: (order.append("synced"), sync(number))[1])
-    monkeypatch.setattr(folder.os, "replace", lambda *names: (order.append("swapped"), swap(*names))[1])
+    monkeypatch.setattr(folder.os, "link", lambda *names: (order.append("linked"), link(*names))[1])
     folder.write(root / "a.txt", b"text")
-    assert order == ["synced", "swapped"]
+    assert order == ["synced", "linked"]
 
 
 def test_a_digest_is_the_file_s_sha_256(root):
@@ -713,3 +772,94 @@ def test_a_failed_refresh_leaves_the_old_history(root, monkeypatch):
     with pytest.raises(OSError):
         history(root, NEW)
     assert (root / "status_history.txt").read_bytes() == OLD and names(root) == ["status_history.txt"]
+
+
+def test_a_name_taken_is_never_overwritten(root):
+    (root / "a.txt").write_bytes(b"yours")
+    assert folder.write(root / "a.txt", b"new") is False
+    assert (root / "a.txt").read_bytes() == b"yours" and names(root) == ["a.txt"]
+
+
+def test_a_new_name_says_so(root, loose_umask):
+    assert folder.write(root / "a.txt", b"new") is True
+    assert (root / "a.txt").read_bytes() == b"new" and rights(root / "a.txt") == 0o600 and names(root) == ["a.txt"]
+    assert (root / "a.txt").stat().st_nlink == 1
+
+
+def test_a_broken_link_at_the_name_is_left_alone(root, tmp_path):
+    (root / "a.txt").symlink_to(tmp_path / "made-by-accident")
+    assert folder.write(root / "a.txt", b"new") is False
+    assert (root / "a.txt").is_symlink() and not (tmp_path / "made-by-accident").exists() and names(root) == ["a.txt"]
+
+
+NO_LINKS = [errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL]
+
+
+@pytest.mark.parametrize("code", NO_LINKS)
+def test_a_disk_with_no_hard_links_falls_back(root, monkeypatch, loose_umask, code):
+    monkeypatch.setattr(folder.os, "link", lambda *_: (_ for _ in ()).throw(OSError(code, "No links here")))
+    assert folder.write(root / "a.txt", b"new") is True
+    assert (root / "a.txt").read_bytes() == b"new" and rights(root / "a.txt") == 0o600 and names(root) == ["a.txt"]
+
+
+@pytest.mark.parametrize("code", NO_LINKS)
+def test_a_disk_with_no_hard_links_still_leaves_a_name_taken_alone(root, monkeypatch, code):
+    (root / "a.txt").write_bytes(b"yours")
+    monkeypatch.setattr(folder.os, "link", lambda *_: (_ for _ in ()).throw(OSError(code, "No links here")))
+    assert folder.write(root / "a.txt", b"new") is False
+    assert (root / "a.txt").read_bytes() == b"yours" and names(root) == ["a.txt"]
+
+
+def test_any_other_failure_to_link_is_not_hidden(root, monkeypatch):
+    monkeypatch.setattr(folder.os, "link", lambda *_: (_ for _ in ()).throw(OSError(errno.ENOSPC, "No space left")))
+    with pytest.raises(OSError, match="No space"):
+        folder.write(root / "a.txt", b"new")
+    assert names(root) == []
+
+
+def test_a_crash_after_the_link_leaves_a_whole_file_and_the_next_visit_clears_the_partial(root):
+    made = folder.enter(root, f"{TODAY}/Acme_ML")
+    (made / "resume.pdf").write_bytes(b"whole")
+    os.link(made / "resume.pdf", made / "resume.pdf.partial")  # as a crash leaves them
+    folder.enter(root, f"{TODAY}/Acme_ML")
+    assert names(made) == ["resume.pdf"] and (made / "resume.pdf").read_bytes() == b"whole"
+
+
+def test_a_history_that_appears_before_its_write_is_left(root, monkeypatch):
+    real = folder.write
+
+    def appears(target, data):
+        target.write_bytes(b"yours\n")
+        return real(target, data)
+
+    monkeypatch.setattr(folder, "write", appears)
+    assert history(root) == "same" and (root / "status_history.txt").read_bytes() == b"yours\n"
+
+
+def test_a_beside_file_that_appears_moves_on_to_the_next_number(root, monkeypatch):
+    (root / "status_history.txt").write_bytes(b"edited\n")
+    real = folder.write
+
+    def appears(target, data):
+        if target.name == f"status_history-{TODAY}.txt":
+            target.write_bytes(b"yours\n")
+        return real(target, data)
+
+    monkeypatch.setattr(folder, "write", appears)
+    assert history(root) == "beside"
+    assert (root / f"status_history-{TODAY}.txt").read_bytes() == b"yours\n"
+    assert (root / f"status_history-{TODAY}-2.txt").read_bytes() == OLD
+
+
+def test_a_history_changed_just_before_its_refresh_is_left_and_the_new_one_goes_beside_it(root, monkeypatch):
+    history(root)
+    sync = os.fsync
+
+    def changed(number):
+        (root / "status_history.txt").write_bytes(b"edited just now\n")
+        sync(number)
+
+    monkeypatch.setattr(folder.os, "fsync", changed)
+    assert history(root, NEW) == "beside"
+    assert (root / "status_history.txt").read_bytes() == b"edited just now\n"
+    assert (root / f"status_history-{TODAY}.txt").read_bytes() == NEW

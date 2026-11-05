@@ -66,8 +66,8 @@ def runs(monkeypatch):
 
     calls = Runs()
 
-    def run(conn, data_dir, text, start, end, unexported=False, step=None):
-        calls.append({"text": text, "start": start, "end": end, "unexported": unexported,
+    def run(conn, data_dir, text, start, end, unfinished=False, step=None):
+        calls.append({"text": text, "start": start, "end": end, "unfinished": unfinished,
                       "thread": threading.current_thread(), "step": step})  # fmt: skip
         if calls.gate:
             calls.gate.wait(10)
@@ -132,7 +132,7 @@ def test_no_run_yet_is_due_at_once_and_never_on_the_callers_thread(conn, setting
     exporter.tick(conn)
     finish(exporter)
     assert len(runs) == 1 and runs[0]["thread"] is not threading.current_thread()
-    assert runs[0]["text"] == str(tmp_path) and runs[0]["unexported"] is True and runs[0]["end"] is None
+    assert runs[0]["text"] == str(tmp_path) and runs[0]["unfinished"] is True and runs[0]["end"] is None
 
 
 @pytest.mark.parametrize(("ago", "due"), [(timedelta(days=7), True), (timedelta(days=7, seconds=-1), False),
@@ -188,7 +188,7 @@ def test_a_press_counts_as_the_last_try(conn, settings, exporter, runs, tmp_path
     exporter.tick(conn)
     finish(exporter)
     assert len(runs) == 1 and (runs[0]["start"], runs[0]["end"]) == (date(2026, 10, 1), date(2026, 10, 31))
-    assert runs[0]["unexported"] is False
+    assert runs[0]["unfinished"] is False
 
 
 def test_a_folder_that_fails_the_check_says_why_and_waits(conn, settings, exporter, built, by_hand_job, tmp_path):  # noqa: F811
@@ -333,7 +333,7 @@ def test_progress_is_there_for_the_page_while_it_runs(data_dir, settings, export
     settings(str(tmp_path))
     seen, reached, gate = [], threading.Event(), threading.Event()
 
-    def run(conn, data_dir, text, start, end, unexported=False, step=None):
+    def run(conn, data_dir, text, start, end, unfinished=False, step=None):
         step(0, 40)
         step(12, 40)
         seen.append((exporter.done, exporter.total))
@@ -382,7 +382,7 @@ def test_an_unexpected_error_never_leaves_the_runner_stuck(conn, settings, expor
     monkeypatch.setattr(exporter_module.export, "run", lambda *_, **__: export.Result(selected=0))
     assert exporter.start(None, None) is None
     finish(exporter)
-    assert exporter.notice == "No applications between those dates"
+    assert exporter.notice == "Nothing new"
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
@@ -460,3 +460,114 @@ def test_a_real_run_end_to_end(conn, data_dir, settings, exporter, built, root, 
     assert exporter.notice == "1 new folder, 5 files added" and exporter.problems == []
     assert (exporter.done, exporter.total) == (1, 1) and saved(conn)[0][2] == exporter.notice
     assert SECRET not in caplog.text and str(root) not in caplog.text
+
+
+def scheduled(exporter):
+    """One scheduled run, as the minute check starts it, through the real export."""
+    exporter._begin(None)
+    finish(exporter)
+    return exporter.notice
+
+
+def days_ago(days):
+    return date.today() - timedelta(days=days)
+
+
+def papers_of(conn, chosen):
+    found = conn.execute("SELECT folder FROM exported ORDER BY job_id").fetchall()
+    return [sorted(path.name for path in (chosen / folder_).iterdir()) for (folder_,) in found]
+
+
+ALL_OF_THEM = ["council_notes.pdf", "filled_answers.pdf", "job_description.pdf", "resume.pdf", "status_history.txt"]
+
+
+def test_a_schedule_finishes_what_a_closed_dashboard_left(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    for number in range(4):
+        by_hand(conn, data_dir, f"Old {number}", on=date(2026, 1, 5 + number))
+    settings(str(root), 1)
+
+    def closed(number):
+        if number == 5:
+            raise RuntimeError("the dashboard closed")
+        return False
+
+    built.fail = closed
+    assert scheduled(exporter) == exporter_module.UNEXPECTED
+    built.fail = lambda number: False
+    assert "2 new folders" in scheduled(exporter)
+    assert papers_of(conn, root) == [ALL_OF_THEM] * 4
+    assert scheduled(exporter) == "Nothing new"
+    assert one(conn, "SELECT count(*) FROM exported WHERE finished_on IS NULL")[0] == 0
+
+
+@pytest.mark.parametrize(("every_days", "ago"), [(1, 2), (7, 8)])
+def test_a_paper_that_failed_is_tried_again_when_the_window_has_moved_on(
+    conn, data_dir, settings, exporter, built, root, every_days, ago,  # noqa: F811
+):  # fmt: skip
+    job = by_hand(conn, data_dir, on=days_ago(ago))
+    settings(str(root), every_days)
+    built.fail = lambda number: number == 1
+    words = scheduled(exporter)
+    assert "1 application not finished: the next export tries it again" in words and exporter.problems
+    assert saved(conn)[0][2] == words and saved(conn)[0][1]  # said in last_result, and good_on keeps its meaning
+    assert scheduled(exporter) == "1 file added"
+    assert papers_of(conn, root) == [ALL_OF_THEM] and one(conn, "SELECT finished_on FROM exported")[0]
+    assert export.applications(conn, export.since(conn, every_days), None, unfinished=True) == []
+    assert job
+
+
+def test_tectonic_failing_on_the_first_run_then_working(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    for number in range(3):
+        by_hand(conn, data_dir, f"Job {number}", on=days_ago(30 + number))
+    settings(str(root), 1)
+    built.fail = lambda number: True
+    assert "a made-up reason" in scheduled(exporter) and saved(conn)[0][1] is None
+    built.fail = lambda number: False
+    scheduled(exporter)
+    assert papers_of(conn, root) == [ALL_OF_THEM] * 3
+    assert scheduled(exporter) == "Nothing new"
+
+
+def test_a_paper_that_always_fails_is_tried_each_run_until_it_works(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    by_hand(conn, data_dir, on=days_ago(30))
+    settings(str(root), 1)
+    built.refused = ("What the app prepared",)
+    for _ in range(3):
+        words = scheduled(exporter)
+        assert "1 application not finished" in words and len(exporter.problems) == 1
+    assert papers_of(conn, root) == [[name for name in ALL_OF_THEM if name != "filled_answers.pdf"]]
+    built.refused = ()
+    assert scheduled(exporter) == "1 file added" and exporter.problems == []
+    assert scheduled(exporter) == "Nothing new"
+
+
+def test_two_stuck_applications_never_block_a_new_one(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    by_hand(conn, data_dir, "Stuck one", on=days_ago(40))
+    by_hand(conn, data_dir, "Stuck two", on=days_ago(39))
+    settings(str(root), 1)
+    built.refused = ("Stuck",)
+    scheduled(exporter)
+    new = by_hand(conn, data_dir, "New job", on=days_ago(30))
+    scheduled(exporter)
+    assert one(conn, "SELECT finished_on FROM exported WHERE job_id = ?", new)[0]
+
+
+def test_no_text_and_a_gone_pdf_are_not_retried_on_a_schedule(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    gone = by_hand(conn, data_dir, on=days_ago(30))
+    (exporter.data_dir / "documents" / str(gone) / "resume-v1.pdf").unlink()
+    with conn:
+        conn.execute("UPDATE jobs SET description = NULL")
+    settings(str(root), 1)
+    words = scheduled(exporter)
+    assert "not finished" not in words and exporter.problems
+    built.clear()
+    assert scheduled(exporter) == "Nothing new" and exporter.problems == [] and len(built) == 0
+
+
+def test_a_damaged_record_is_said_on_each_scheduled_run(conn, data_dir, settings, exporter, built, root):  # noqa: F811
+    by_hand(conn, data_dir, on=days_ago(30))
+    with conn:
+        conn.execute("UPDATE submissions SET fields = '[not json'")
+    settings(str(root), 1)
+    for _ in range(2):
+        assert "1 application not finished" in scheduled(exporter) and len(exporter.problems) == 1

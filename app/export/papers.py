@@ -12,6 +12,7 @@ from app.submit import record
 from app.tracker import ROUNDS, STAGES
 
 NOT_RECORDED = "this copy is not the file recorded"
+GONE = "the app no longer holds this file: it can't show which PDF you sent"
 NO_RECORD = (
     "No record of what was sent: this application wasn't recorded with I submitted it. Any resume here is the newest "
     "the app prepared and may not be what you sent."
@@ -66,6 +67,12 @@ def council_notes(conn: sqlcipher3.Connection, job_id: int, versions: list[tuple
     return (COUNCIL_TITLE, sections) if sections else None
 
 
+def file_notes(row: dict, state: str | None) -> list[str]:
+    """What is true of a recorded file now, in words: for the paper and the run's problem lines alike."""
+    notes = [record.NO_COPY] if row["note"] else [GONE] if state == "gone" else []
+    return notes + [NOT_RECORDED] if state == "different" else notes
+
+
 def day(moment: str) -> str:
     return datetime.fromisoformat(moment).astimezone().date().isoformat()
 
@@ -86,12 +93,11 @@ def _answer(row: dict) -> str:
 def _files(rows: list[dict], states: dict[str, str]) -> str:
     lines = []
     for row in rows:
-        state = states.get(row["slot"])
-        notes = (row["note"], record.MISSING if state == "gone" else "", NOT_RECORDED if state == "different" else "")
+        notes = file_notes(row, states.get(row["slot"]))
         lines += [
             row["label"],
             *([f"SHA-256: {row['sha256']}"] if row["sha256"] else []),
-            *dict.fromkeys(filter(None, notes)),
+            *notes,
         ]
     return "\n".join(lines) or NO_FILES
 

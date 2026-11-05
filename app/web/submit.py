@@ -307,7 +307,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE, writer=WRITER,
             max_line=MAX_LINE, max_long=MAX_LONG,
             job=job, record=recorded, heading=recorded and record.HEADING[recorded["how"]],
-            may_differ=record.MAY_DIFFER, moved_back=back and record.MOVED_BACK.format(_day(back)),
+            may_differ=record.MAY_DIFFER, no_copy=record.NO_COPY,
+            moved_back=back and record.MOVED_BACK.format(_day(back)),
             today=date.today().isoformat(),
             panel=record.standard(questionnaire.load(conn)[0]),
             papers=[(found_file[0], f"/documents/{job_id}/{found_file[1].name}")

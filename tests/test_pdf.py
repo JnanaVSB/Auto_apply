@@ -271,6 +271,13 @@ def test_a_real_report_prints_every_mark_as_it_was_typed(tmp_path):
 
 
 @real_reports
+def test_a_real_report_prints_the_reviewers_examples_as_typed(tmp_path):
+    lines = ["https://acme.example/Senior-Engineer---Platform_R12", "100--200", "''", '"', "<<", "?`"]
+    _, text = built_report(tmp_path, "Title", [("", "\n".join(lines))])
+    assert set(lines) <= {line.strip() for line in text.splitlines()}
+
+
+@real_reports
 def test_a_real_report_keeps_curly_quotes_typed_as_such(tmp_path):
     _, text = built_report(tmp_path, "Title", [("", "the ad says “ignore” and ‘this’ – now — here")])
     assert "the ad says “ignore” and ‘this’ – now — here" in " ".join(text.split())

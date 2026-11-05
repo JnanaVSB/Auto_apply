@@ -298,21 +298,21 @@ def test_a_changed_file_says_so():
 
 
 def test_a_gone_file_says_so():
-    assert files_of([ROW], {"resume": "gone"}) == ["Resume v3", f"SHA-256: {SHA}", record.MISSING]
+    assert files_of([ROW], {"resume": "gone"}) == ["Resume v3", f"SHA-256: {SHA}", papers.GONE]
 
 
 def test_a_file_missing_when_you_applied_and_gone_now_says_so_once():
-    assert files_of([GONE_ROW], {"resume": "gone"}) == ["Resume v3", record.MISSING]
+    assert files_of([GONE_ROW], {"resume": "gone"}) == ["Resume v3", record.NO_COPY]
 
 
 def test_a_file_missing_when_you_applied_but_here_now_says_both():
-    assert files_of([GONE_ROW], {"resume": "different"}) == ["Resume v3", record.MISSING, papers.NOT_RECORDED]
+    assert files_of([GONE_ROW], {"resume": "different"}) == ["Resume v3", record.NO_COPY, papers.NOT_RECORDED]
 
 
 def test_each_file_has_its_own_lines():
     letter = ROW | {"slot": "cover_letter", "label": "Cover letter v1", "sha256": "b" * 64}
     assert files_of([ROW, letter], {"resume": "same", "cover_letter": "gone"}) == [
-        "Resume v3", f"SHA-256: {SHA}", "Cover letter v1", f"SHA-256: {'b' * 64}", record.MISSING,
+        "Resume v3", f"SHA-256: {SHA}", "Cover letter v1", f"SHA-256: {'b' * 64}", papers.GONE,
     ]  # fmt: skip
 
 
@@ -483,3 +483,8 @@ def test_a_real_build_of_the_papers_needs_no_character_the_font_lacks(conn, job,
     answers = papers.filled_answers(JOB, fields(row) | {"files": [ROW]}, "2026-11-05", {"resume": "same"})
     for paper in (papers.council_notes(conn, job, [("Resume v1", found)]), papers.job_description(JOB), answers):
         assert pdf.build(latex.report(*paper), tmp_path / "paper.pdf").missing == ()
+
+
+def test_no_paper_says_a_file_was_missing_when_you_applied_it_was_there():
+    words = " ".join(files_of([ROW], {"resume": "gone"}))
+    assert "file was missing" not in words and "can't show which PDF you sent" in words
