@@ -150,6 +150,6 @@ def settings(data_dir, extra_boards=()):
         data_dir=data_dir,
         roles=RoleSettings(simplify_categories=["AI/ML/Data"], keywords=["ML"]),
         sources=SourceSettings(
-            simplify_lists=[SimplifyList(url=LIST, level="intern")], extra_boards=list(extra_boards)
+            simplify_lists=[SimplifyList(url=LIST, level="intern")], extra_boards=list(extra_boards), hacker_news=False
         ),
     )
