@@ -43,6 +43,7 @@
   <h3>{{ "What was sent" if record.how == "browser" else "What the app prepared (you applied by hand)" }}</h3>
   {% if record.how != "browser" %}<p class="muted">The site may hold different answers if you changed them there.</p>{% endif %}
   <p>Applied {{ record.submitted_on }} at <code class="address">{{ record.address }}</code></p>
+  {% if moved_back %}<p class="error">Your card was moved back on {{ moved_back }}, after this record.</p>{% endif %}
   <table class="jobs">
     <thead><tr><th>Question</th><th>Answer</th><th>From</th></tr></thead>
     <tbody>
@@ -106,7 +107,7 @@
   {% elif writing %}{{ writing_line() }}
   {% else %}{{ post("write", "Write answers") }}{% endif %}
   {% if stopped and not writing %}<p class="error">The last Write answers stopped: {{ stopped }}</p>{% endif %}
-  {% for line, limit, numbers in longs %}
+  {% for line, limit, numbers, over in longs %}
   <form method="post" action="/jobs/{{ job_id }}/form/answer" hx-post="/jobs/{{ job_id }}/form/answer" hx-target="#form-part" hx-swap="outerHTML" class="stacked">
     <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="field" value="{{ line.field.key }}">
     <label>{{ line.field.label }}{% if line.field.required %} <span class="mark">required</span>{% endif %}
@@ -114,6 +115,7 @@
       <textarea name="answer" rows="6" maxlength="20000">{{ line.value if line.status == "fill" else "" }}</textarea></label>
     {% if line.field.help %}<p class="muted">{{ line.field.help }}</p>{% endif %}
     {% if numbers and line.source == "Writer draft" %}<p class="error">Check these numbers: {{ numbers }}</p>{% endif %}
+    {% if over %}<p class="error">{{ over }}</p>{% endif %}
     <p><button type="submit">Save</button></p>
   </form>
   {% endfor %}

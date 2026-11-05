@@ -42,6 +42,7 @@ DOUBTS = {  # the job page's pop-up asks before the Writer works on such a job: 
 ANYWAY = " Press OK to proceed anyway."
 NO_WRITER = "Choose the Writer's model on the Writer settings page (Settings, then Writer settings) first."
 NO_COUNCIL = "Choose the council's members in Settings first, or press Resume only for the Writer alone."
+OUT_OF_DATE = "This page is out of date: reload it"
 BUSY_JOB = "The Writer is still working on this job: try again when it's done."
 MAX_FEEDBACK = 2000
 
@@ -59,11 +60,16 @@ def add_routes(
 
     @app.post("/questionnaire")
     async def save_questionnaire(request: Request) -> Response:
-        values = questionnaire.typed(request.state.form)
+        conn, opened_at = request.app.state.conn, request.state.form.get("saved_on", "")
+        stored, saved_on, _ = questionnaire.load(conn)
+        values = questionnaire.with_askers(questionnaire.typed(request.state.form), stored.get("more") or [])
+        typed = {"values": values, "saved_on": opened_at}  # what was typed stays on the page; nothing saved
+        if opened_at != (saved_on or ""):  # saved elsewhere since this page opened: its rows would be lost
+            return page(request, "questionnaire.html", **CHOICES, **typed, problem=OUT_OF_DATE)
         try:
-            questionnaire.save(request.app.state.conn, questionnaire.check(values))
-        except questionnaire.QuestionnaireError as error:  # nothing saved; what was typed stays on the page
-            return page(request, "questionnaire.html", **CHOICES, values=values, problem=str(error))
+            questionnaire.save(conn, questionnaire.check(values))
+        except questionnaire.QuestionnaireError as error:
+            return page(request, "questionnaire.html", **CHOICES, **typed, problem=str(error))
         return RedirectResponse("/questionnaire?saved=1", 303)  # so reloading the page never saves twice
 
     @app.get("/questionnaire/download")

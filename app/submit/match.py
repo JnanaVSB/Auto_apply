@@ -17,7 +17,17 @@ import sqlcipher3
 from app import places, questionnaire
 from app.council import runs
 from app.documents import pdf
-from app.questionnaire import DISABILITY, MAX_PAIRS, MONTH, NO_ANSWER, RACES, SECTIONS, VETERAN, QuestionnaireError
+from app.questionnaire import (
+    DISABILITY,
+    MAX_PAIRS,
+    MONTH,
+    NO_ANSWER,
+    RACES,
+    SECTIONS,
+    VETERAN,
+    QuestionnaireError,
+    clean,
+)
 from app.submit import Choice, Field, Form
 
 STATUSES = ("fill", "empty", "hidden", "write", "decide", "left")  # left: you tick it yourself in the window
@@ -25,7 +35,6 @@ DECISIONS = {  # the "Decision required" reasons, as the preview words them
     "unknown": "Unknown question", "non_pdf": "Non-PDF upload", "choose_file": "A file you need to choose",
     "consent": "A promise or consent", "cover_letter": "Cover letter required",
 }  # fmt: skip
-WORDS = re.compile(r"[^\W_]+")  # a run of letters or digits
 OLD_MARKER = "[company]"  # in a More answers row from before questions naming a company became this-job-only
 TICKED = "yes"  # a consent box to tick
 IN_WINDOW, LEFT_EMPTY = "[in the window]", "[left empty]"  # your choice for one job's question, kept as its answer
@@ -136,6 +145,8 @@ YES_OR_NO = re.compile(r"(?:(?:do|are|can|have|will|would|did) you|is your)\b") 
 EYE = "the wording needs your eye"
 YOURS_TO_WRITE = "this one is yours to write"
 CHANGED = "the question changed since you answered it"
+LOST = "your saved answer is no longer one of the choices"
+TWO_FIT = "your saved answer fits more than one of the choices"
 
 NO_WORD = r"not|no|never|refrain\w*|prohibit\w*|reject\w*|avoid\w*|without|discourag\w*|forbid\w*|unacceptable"
 NO_AI = re.compile(  # on cleaned wording: when unsure, warn
@@ -163,11 +174,6 @@ class Line:
     decision: str = ""  # a DECISIONS key when status is "decide"
     note: str = ""  # e.g. "split from your full name"
     askable: bool = False  # optional and left empty only because no rule answers it (never a promise): you still may
-
-
-def clean(text: str) -> str:
-    """Wording to compare: lower case, every run of other characters one space."""
-    return " ".join(WORDS.findall(text.lower()))
 
 
 def names(text: str, company: str) -> bool:
@@ -331,7 +337,9 @@ class _Matcher:
             return Line(field, "left", source=source, note="you do this in the window")
         if answer == LEFT_EMPTY:
             return Line(field, "empty", source=source, note="you chose to leave it empty")
-        return self._given(field, answer, source, "your saved answer is no longer one of the choices")
+        texts = list(filter(str.strip, answer.splitlines()))
+        lost = field.kind in ("single", "multi") and not all(_named(field, text) for text in texts)
+        return self._given(field, answer, source, LOST if lost else TWO_FIT, own=True)
 
     def _standard(self, field: Field, words: str) -> Line | None:
         if field.key in ("first_name", "last_name"):
@@ -441,20 +449,23 @@ class _Matcher:
         source = f"Questionnaire: {SECTIONS[section]}"
         return self._given(field, value, source, NOT_A_CHOICE.format("Questionnaire answer"), note)
 
-    def _given(self, field: Field, answer: str, source: str, unmatched: str, note: str = "") -> Line:
-        """An answer filled in as it is, or for a choice field as the one choice it names."""
+    def _given(self, field: Field, answer: str, source: str, unmatched: str, note: str = "", own: bool = False) -> Line:
+        """An answer filled in as it is, or for a choice field as the one choice it names; `own`: your pick for this
+        job, stored as the choice's label."""
         if field.kind not in ("single", "multi"):
             return Line(field, "fill", answer, source, note=note)
-        if chosen := self._choose(field, answer):
+        if chosen := self._choose(field, answer, own):
             return Line(field, "fill", chosen, source, note=note)
         return Line(field, "decide", decision="unknown", note=unmatched)
 
-    def _choose(self, field: Field, answer: str) -> tuple[str, ...]:
+    def _choose(self, field: Field, answer: str, own: bool = False) -> tuple[str, ...]:
         """The values of the choices the answer names (for a multi field, one a line); () unless each names exactly
-        one choice."""
+        one choice. Your own pick is found by its exact label first."""
         chosen = []
-        for wanted in filter(None, map(clean, answer.splitlines() or [answer])):
-            found = [choice.value for choice in field.choices if fits(clean(choice.label), wanted)]
+        for text in filter(clean, answer.splitlines() or [answer]):
+            wanted = clean(text)
+            found = _named(field, text) if own else [c for c in field.choices if fits(clean(c.label), wanted)]
+            found = [choice.value for choice in found]
             if len(found) != 1:
                 return ()
             chosen.append(found[0])
@@ -533,13 +544,23 @@ def _plain(topic: str, field: Field) -> bool:
     )
 
 
+def _named(field: Field, text: str) -> list[Choice]:
+    """The choices your pick names: the same label, else the same words, else the yes or no rule."""
+    wanted, labels = clean(text), [(choice, clean(choice.label)) for choice in field.choices]
+    exact = [choice for choice in field.choices if choice.label == text.strip()]
+    return exact or [c for c, label in labels if label == wanted] or [c for c, label in labels if fits(label, wanted)]
+
+
 def fits(label: str, wanted: str) -> bool:
     """A choice (cleaned) names the answer: the same words, or for yes or no, a choice starting with it."""
     return label == wanted or (wanted in ("yes", "no") and label.startswith(f"{wanted} "))
 
 
 def _eeo_fits(topic: str, label: str, answer: str) -> bool:
-    """Whether a choice (cleaned) says the same as your EEO answer, however the form words it."""
+    """Whether a choice (cleaned) says the same as your EEO answer, however the form words it. No answer fits nothing:
+    never an invented No."""
+    if not answer:
+        return False
     declines = DECLINE.search(label) is not None
     if declines or answer == NO_ANSWER:
         return declines and answer == NO_ANSWER

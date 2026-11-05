@@ -145,6 +145,11 @@ def test_no_name_in_the_questionnaire_means_no_filter():
         ("Profile at forums.fast.ai/u/sam_sample", "a web address"),  # a tech name inside a longer address
         ("See socket.io/sam-sample", "a web address"),
         ("Host sam.socket.io", "a web address"),
+        ("Profile at fast.ai:443/u/sam", "a web address"),
+        ("See fast.ai#sam", "a web address"),
+        ("See fast.ai?ref=sam", "a web address"),
+        ("Stack: asp.net/c#", "a web address"),
+        ("Docs at socket.io/redis", "a web address"),
         ("Founded EXAMPLE.COM", "a web address"),  # an ending in capitals
         ("Site SAMPLE.DEV", "a web address"),
         ("See ALEX-SAMPLE.ORG", "a web address"),
@@ -169,6 +174,8 @@ def test_the_last_check_stops_contact_like_items_and_names_only_the_kind(text, k
         "Real-time chat with Socket.IO and socket.io; took the fast.ai course.",
         "Wrote run.sh, main.rs and lib.cc scripts from 2020–2024.",
         "Socket.IO, socket.io, and fast.ai.",  # a tech name alone, before a comma or at a sentence's end
+        "Used socket.io-client in a fast.ai-style course on asp.net-based sites.",  # a hyphen and a word: still alone
+        "Have you tried fast.ai? I liked it: fast.ai: great.",  # sentence marks, with a space after them
         "Used Json.NET, Akka.NET and System.IO with Character.AI.",
         "Holds a B.COM, B.Com, B.TECH and M.TECH; uses Google.Cloud.",  # degrees, not addresses
     ],

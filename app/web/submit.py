@@ -251,10 +251,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         except ValueError:
             return _part(request, job, failed=tracker.BAD_DATE)
         try:
-            record.submit(conn, data_dir, job, on, found.lines if found else None)
+            note = record.submit(conn, data_dir, job, on, found.lines if found else None)
         except record.Refused as refused:
             return _part(request, job, failed=str(refused))
-        return _part(request, job)
+        return _part(request, job, note=note)
 
     @app.get("/jobs/{job_id:int}/form/writing")
     async def writing(request: Request, job_id: int) -> Response:
@@ -284,11 +284,13 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         found = preview(conn, data_dir, job_id)
         lines = found.lines if found else ()
         latest, done = runs.latest(conn, job_id, runs.ANSWERS), runs.last_done(conn, job_id, runs.ANSWERS)
+        recorded = record.recorded(conn, job_id)
+        back = recorded and record.moved_back(conn, job_id, recorded)
         flags = (
             {flag["field"]: ", ".join(flag["numbers"]) for flag in json.loads(done["flags"] or "[]")} if done else {}
         )
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
-            (line, _limit(answers.limit(line.field)), flags.get(line.field.key))
+            (line, _limit(answers.limit(line.field)), flags.get(line.field.key), _over_limit(line))
             for line in lines
             if line.field.kind == "long_text"
             and (line.status == "write" or (line.status == "fill" and line.source in (WRITER, MINE)))
@@ -309,7 +311,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             longs=longs, own_words=found is not None and match.NO_AI_WARNING in found.warnings,
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE,
-            job=job, record=record.recorded(conn, job_id), today=date.today().isoformat(),
+            job=job, record=recorded, moved_back=back and _day(back), today=date.today().isoformat(),
             panel=record.standard(questionnaire.load(conn)[0]),
             papers=[(found_file[0], f"/documents/{job_id}/{found_file[1].name}")
                     for found_file in match.documents(conn, data_dir, job_id).values() if found_file],
@@ -351,11 +353,17 @@ def _typed(field: Field, form: dict[str, str]) -> str:
     most = MAX_LONG if field.kind == "long_text" else MAX_LINE
     if len(text) > most:
         raise _Refused(f"An answer here is at most {most:,} characters")
-    if field.kind == "long_text" and answers.STATED.search(f"{field.label} {field.help}"):
-        words, characters = answers.limit(field)
-        if (words and len(text.split()) > words) or (characters and len(text) > characters):
-            raise _Refused(f"This question allows at most {_limit((words, characters))}")
     return text
+
+
+def _over_limit(line: match.Line) -> str:
+    """The note on your own long answer over a limit the form states: it is yours to shorten, or to keep."""
+    most = answers.stated(line.field)
+    if not most or line.source != MINE or line.status != "fill":
+        return ""
+    words, characters = most
+    over = (words and len(line.value.split()) > words) or (characters and len(line.value) > characters)
+    return f"over the form's stated limit of {_limit(most)}" if over else ""
 
 
 def _keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) -> None:

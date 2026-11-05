@@ -26,6 +26,7 @@
 {% if saved %}<p class="result" role="status">Saved.</p>{% endif %}
 <form method="post" action="/questionnaire" class="stacked" data-unsaved>
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="saved_on" value="{{ saved_on or '' }}">
 
   <h2>Contact</h2>
   <p class="hint">Never sent to any AI. The resume PDF's header is filled in from here.</p>
@@ -115,8 +116,6 @@
       {% endif %}
       <input name="more.question.{{ loop.index0 }}" maxlength="1000" value="{{ pair.get('question') or '' }}"></label>
     <label>Answer <textarea name="more.answer.{{ loop.index0 }}" rows="2" maxlength="2000">{{ pair.get("answer") or "" }}</textarea></label>
-    <input type="hidden" name="more.asked_by.{{ loop.index0 }}" value="{{ pair.get('asked_by') or '' }}">
-    <input type="hidden" name="more.asked_on.{{ loop.index0 }}" value="{{ pair.get('asked_on') or '' }}">
   </div>
   {% endfor %}
 

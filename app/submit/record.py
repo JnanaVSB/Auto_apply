@@ -72,19 +72,20 @@ def recorded(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
 
 def submit(
     conn: sqlcipher3.Connection, data_dir: Path, job: dict, on: date, lines: tuple[match.Line, ...] | None
-) -> None:
+) -> str | None:
     """Record that you applied on `on`, and move the card from Ready to Applied, all or nothing; `lines` is the read
     form's preview (None: no form was read, so your standard answers are kept). Open decisions never stop it: they are
-    kept as answered by you on the site. Raises Refused with nothing saved."""
+    kept as answered by you on the site. A card already past Ready (Gmail saw the confirmation first) stays where it
+    is, never moved backwards, and that is said in the answer. Raises Refused with nothing saved."""
     job_id = job["id"]
     if found := recorded(conn, job_id):
         raise Refused(f"Already recorded on {found['submitted_on']}")
     if not tracker.date_allowed(on, date.today()):
         raise Refused(tracker.BAD_DATE)
-    if not tracker.on_board(conn, job_id) or runs.last_done(conn, job_id) is None:
+    stage = tracker.stage(conn, job_id)
+    past_ready = stage not in (None, "ready")  # Gmail first, or Add an application: maybe with no resume version at all
+    if not past_ready and (not tracker.on_board(conn, job_id) or runs.last_done(conn, job_id) is None):
         raise Refused(NO_CARD)
-    if (stage := tracker.stage(conn, job_id)) not in (None, "ready"):
-        raise Refused(f"This job is already in {STAGES[stage]}: nothing changed")
     fields = _fields(lines) if lines is not None else [
         {"question": label, "value": text, "from": "Questionnaire"}
         for label, text in standard(questionnaire.load(conn)[0])
@@ -94,7 +95,7 @@ def submit(
     try:
         with conn:
             conn.execute(SAVE, saved)
-            if not tracker.moved(conn, job_id, "ready", "applied", on):
+            if not past_ready and not tracker.moved(conn, job_id, "ready", "applied", on):
                 raise _Moved
     except sqlcipher3.IntegrityError:  # a second dashboard saved its record after the check above
         if (found := recorded(conn, job_id)) is None:
@@ -102,7 +103,15 @@ def submit(
         raise Refused(f"Already recorded on {found['submitted_on']}") from None
     except _Moved:
         stage = STAGES[tracker.stage(conn, job_id) or "ready"]
-        raise Refused(f"The card moved meanwhile: it is in {stage} now. Nothing was recorded") from None
+        raise Refused(f"The card moved meanwhile: it is in {stage} now. Nothing was recorded: press I submitted it "
+                      "again") from None  # fmt: skip
+    return f"Recorded; the card stays in {STAGES[stage]}" if past_ready else None
+
+
+def moved_back(conn: sqlcipher3.Connection, job_id: int, found: dict) -> str | None:
+    """When the card last went back to Ready after the record was saved, else None. The record itself never changes."""
+    later = (move for move in tracker.history(conn, job_id) if move["to_stage"] == "ready")
+    return next((move["moved_on"] for move in later if move["moved_on"] >= found["saved_on"]), None)
 
 
 def _fields(lines: tuple[match.Line, ...]) -> list[dict]:

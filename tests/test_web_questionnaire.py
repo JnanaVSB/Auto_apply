@@ -1,11 +1,13 @@
 """The Questionnaire page: login, the anti-forgery check, saving, a refused save and the download."""
 
+import re
 from contextlib import closing
 
 import pytest
 from helpers import csrf, log_in
 
-from app import db
+from app import db, questionnaire
+from app.submit import match
 
 
 @pytest.fixture
@@ -14,8 +16,14 @@ def client(client):
     return client
 
 
+def opened(client):
+    """The page's mark of when it was opened, as a browser would send it back."""
+    return re.search(r'name="saved_on" value="([^"]*)"', client.get("/questionnaire").text)[1]
+
+
 def save(client, **fields):
-    return client.post("/questionnaire", data=fields | {"csrf_token": csrf(client)}, follow_redirects=False)
+    fields = {"saved_on": opened(client), "csrf_token": csrf(client)} | fields
+    return client.post("/questionnaire", data=fields, follow_redirects=False)
 
 
 def test_the_page_needs_a_login(client):
@@ -58,22 +66,76 @@ def test_the_download_is_a_private_file(client):
     assert "email: alex@example.com" in answer.text
 
 
-def test_questions_a_form_asked_come_first_with_who_asked_and_the_consents_are_there(client):
-    save(client, **{
-        "more.question.0": "Why this company?", "more.answer.0": "Made-up answer.",
-        "more.question.1": "Have you worked at [company] before?", "more.asked_by.1": "<b>Acme</b>",
-        "more.asked_on.1": "2026-11-04", "more.question.2": "Do you speak Esperanto?", "more.asked_by.2": "Globex",
-        "consents.texting": "decline",
-    })  # fmt: skip
+def test_questions_a_form_asked_come_first_with_who_asked_and_the_consents_are_there(client, data_dir):
+    with closing(db.connect(data_dir)) as conn:
+        questionnaire.save(conn, questionnaire.check({"more": [
+            {"question": "Why this company?", "answer": "Made-up answer."},
+            {"question": "What is your shoe size?", "asked_by": "<b>Acme</b>", "asked_on": "2026-11-04"},
+            {"question": "Do you speak Esperanto?", "asked_by": "Globex"},
+        ]}))  # fmt: skip
     text = client.get("/questionnaire").text
     first, second, answered = (text.index(question) for question in (
-        "Have you worked at [company] before?", "Do you speak Esperanto?", "Why this company?"
+        "What is your shoe size?", "Do you speak Esperanto?", "Why this company?"
     ))  # fmt: skip
     assert first < second < answered
     assert '<span class="mark warn">needs answer</span>' in text
     assert "asked by &lt;b&gt;Acme&lt;/b&gt;, 4 Nov</span>" in text and "asked by Globex</span>" in text
-    assert '<input type="hidden" name="more.asked_on.0" value="2026-11-04">' in text  # kept for the next save
-    assert '<option value="decline" selected>Decline</option>' in text
+    assert "asked_by" not in text  # kept on the server: the page sends questions and answers only
     assert '<option value="ask" selected>Ask me each time</option>' in text
     assert "AI-use promises and arbitration agreements are always asked" in text
     assert "(up to 300)" in text
+
+
+def rows(count, length=1000):
+    """`count` full More answers rows, as the page sends them."""
+    return {
+        name: value
+        for number in range(count)
+        for name, value in (
+            (f"more.question.{number}", f"{number} " + "q" * length),
+            (f"more.answer.{number}", "a" * 2000),
+        )
+    }
+
+
+def test_300_full_rows_save_through_the_page_and_rows_can_be_deleted_again(client, data_dir):
+    assert save(client, **rows(300, 996)).status_code == 303
+    with closing(db.connect(data_dir)) as conn:
+        assert len(questionnaire.load(conn)[0]["more"]) == 300
+    assert save(client, **rows(5, 996)).status_code == 303
+    with closing(db.connect(data_dir)) as conn:
+        assert len(questionnaire.load(conn)[0]["more"]) == 5
+
+
+def test_a_301st_row_is_refused_naming_the_section(client, data_dir):
+    answer = save(client, **rows(301, 20))
+    assert answer.status_code == 200 and "Not saved: More answers: List should have at most 300 items" in answer.text
+    with closing(db.connect(data_dir)) as conn:
+        assert conn.execute("SELECT count(*) FROM questionnaire").fetchone()[0] == 0
+
+
+def test_who_asked_stays_after_a_save_through_the_page(client, data_dir):
+    with closing(db.connect(data_dir)) as conn:
+        match.remember(conn, "What is your shoe size?", "Acme")
+    assert save(client, **{"more.question.0": "What is your shoe size?", "more.answer.0": "9"}).status_code == 303
+    with closing(db.connect(data_dir)) as conn:
+        assert [(row["answer"], row["asked_by"]) for row in questionnaire.load(conn)[0]["more"]] == [("9", "Acme")]
+
+
+def test_a_page_opened_before_the_job_box_added_a_row_drops_nothing(client, data_dir):
+    stale = opened(client)
+    with closing(db.connect(data_dir)) as conn:
+        match.remember(conn, "What is your shoe size?", "Acme")
+    answer = save(client, saved_on=stale, **{"contact.full_name": "Alex Example"})
+    assert answer.status_code == 200 and "This page is out of date: reload it" in answer.text
+    assert 'value="Alex Example"' in answer.text  # what you typed stays on the page
+    with closing(db.connect(data_dir)) as conn:
+        values = questionnaire.load(conn)[0]
+    assert [row["question"] for row in values["more"]] == ["What is your shoe size?"]
+    assert values["contact"]["full_name"] == ""
+
+
+def test_a_refused_save_can_be_corrected_and_saved_from_the_same_page(client):
+    stale = opened(client)
+    assert "Not saved: Contact, phone" in save(client, saved_on=stale, **{"contact.phone": "12"}).text
+    assert save(client, saved_on=stale, **{"contact.phone": "5551234567"}).status_code == 303

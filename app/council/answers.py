@@ -44,7 +44,11 @@ SHAPE = {
 }
 DEFAULT_LIMIT = 1_200  # characters, unless the question states its own limit (owner)
 MAX_TEXT, MAX_NOTES = 20_000, 2000  # only against a broken answer
-STATED = re.compile(r"\b(\d[\d,]*)\s*-?\s*(words?|characters?|chars?)\b", re.IGNORECASE)  # "100 words", "500-character"
+STATED = re.compile(  # "100 words", "500-character"; group 1, a lower limit, doesn't count; 7 digits at most
+    r"(?:\b(at least|minimum(?: of)?|min|no fewer than|(?<!no )(?<!not )more than|(?<!not )over)\s+)?"
+    r"(?<![\w,])(\d(?:,?\d){0,6})(?![\d,])\s*-?\s*(words?|characters?|chars?)\b",
+    re.IGNORECASE,
+)
 KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
 SAVE = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
     VALUES (?, ?, ?, 'writer', ?, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
@@ -81,15 +85,19 @@ def questions(conn: sqlcipher3.Connection, job_id: int) -> tuple[list[Field], st
 
 
 def limit(field: Field) -> tuple[int | None, int | None]:
-    """The most words and characters an answer may have: the smallest the question states in its wording or help
-    ("in 100 words or less", "maximum 500 characters"), else DEFAULT_LIMIT characters."""
-    stated: dict[str, list[int]] = {"w": [], "c": []}
-    for number, unit in STATED.findall(f"{field.label} {field.help}"):
-        if count := int(number.replace(",", "")):
-            stated[unit[0].lower()].append(count)
-    if not stated["w"] and not stated["c"]:
-        return None, DEFAULT_LIMIT
-    return min(stated["w"], default=None), min(stated["c"], default=None)
+    """The most words and characters the Writer's answer may have: what the question states, else DEFAULT_LIMIT
+    characters."""
+    return stated(field) or (None, DEFAULT_LIMIT)
+
+
+def stated(field: Field) -> tuple[int | None, int | None] | None:
+    """The smallest maximums the question states in its wording or help ("in 100 words or less", "maximum 500
+    characters"), never a minimum ("at least 5 words"); None when it states none."""
+    found: dict[str, list[int]] = {"w": [], "c": []}
+    for lower, number, unit in STATED.findall(f"{field.label} {field.help}"):
+        if not lower and (count := int(number.replace(",", ""))):
+            found[unit[0].lower()].append(count)
+    return (min(found["w"], default=None), min(found["c"], default=None)) if found["w"] or found["c"] else None
 
 
 def request(

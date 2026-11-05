@@ -103,7 +103,10 @@ def test_a_card_moved_by_another_tab_leaves_no_record(conn, data_dir, monkeypatc
     job, stages = made_up(conn, data_dir), iter([None, "interview"])  # in Ready at the check, gone at the move
     monkeypatch.setattr(record.tracker, "stage", lambda *_: next(stages))
     monkeypatch.setattr(record.tracker, "moved", lambda *_: False)
-    with pytest.raises(Refused, match="The card moved meanwhile: it is in Interview now. Nothing was recorded"):
+    with pytest.raises(
+        Refused,
+        match="The card moved meanwhile: it is in Interview now. Nothing was recorded: press I submitted it again",
+    ):
         record.submit(conn, data_dir, job, DAY, LINES)
     assert one(conn, "SELECT count(*) FROM submissions")[0] == 0
 
@@ -135,17 +138,42 @@ def test_no_card_or_no_finished_resume_says_what_to_do(conn, data_dir):
         job = add_job(conn, "ML Intern")
     with pytest.raises(Refused, match="use Add an application on the Tracker page, or press Prepare first"):
         record.submit(conn, data_dir, {"id": job, "apply_url": "x"}, DAY, LINES)
-    tracker.move(conn, job, "ready", "applied", DAY)  # a card, but no finished resume
-    with pytest.raises(Refused, match="press Prepare first"):
+    with conn:
+        conn.execute("INSERT INTO tracker (job_id, stage, changed_on) VALUES (?, 'ready', 'now')", (job,))
+    with pytest.raises(Refused, match="press Prepare first"):  # a card in Ready, but no finished resume
         record.submit(conn, data_dir, {"id": job, "apply_url": "x"}, DAY, LINES)
 
 
-def test_a_card_past_ready_is_left_where_it_is(conn, data_dir):
+def test_a_card_added_as_an_application_is_recorded_with_your_standard_answers_and_no_files(conn, data_dir):
+    questionnaire.save(conn, questionnaire.check(ANSWERS))
+    with conn:
+        job = add_job(conn, "ML Intern")
+    tracker.move(conn, job, "ready", "applied", DAY)  # Add an application: no finished resume version
+    assert record.submit(conn, data_dir, {"id": job, "apply_url": "x"}, DAY, None) == (
+        "Recorded; the card stays in Applied"
+    )
+    found = record.recorded(conn, job)
+    assert found["fields"][0] == {"question": "Name", "value": "Sam Lee Park", "from": "Questionnaire"}
+    assert found["files"] == [] and tracker.stage(conn, job) == "applied"
+
+
+def test_a_card_past_ready_gets_its_record_and_stays_where_it_is(conn, data_dir):
     job = made_up(conn, data_dir)
     tracker.move(conn, job["id"], "ready", "applied", DAY)
-    with pytest.raises(Refused, match="This job is already in Applied: nothing changed"):
-        record.submit(conn, data_dir, job, DAY, LINES)
-    assert record.recorded(conn, job["id"]) is None
+    tracker.move(conn, job["id"], "applied", "interview", DAY)
+    assert record.submit(conn, data_dir, job, DAY, LINES) == "Recorded; the card stays in Interview"
+    assert record.recorded(conn, job["id"])["submitted_on"] == "2026-11-04"
+    assert tracker.stage(conn, job["id"]) == "interview" and len(tracker.history(conn, job["id"])) == 2
+
+
+def test_a_card_moved_back_after_the_record_is_noticed_and_the_record_stays(conn, data_dir):
+    job = made_up(conn, data_dir)
+    record.submit(conn, data_dir, job, DAY, LINES)
+    found = record.recorded(conn, job["id"])
+    assert record.moved_back(conn, job["id"], found) is None
+    tracker.move(conn, job["id"], "applied", "ready", DAY)
+    assert record.moved_back(conn, job["id"], found) == tracker.history(conn, job["id"])[0]["moved_on"]
+    assert record.recorded(conn, job["id"]) == found
 
 
 @pytest.mark.parametrize("day", [date(1999, 12, 31), date(2999, 1, 1)])

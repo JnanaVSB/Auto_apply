@@ -21,7 +21,8 @@ VETERAN = ("I am a protected veteran", "I am not a protected veteran", NO_ANSWER
 DISABILITY = ("Yes, I have a disability (or had one in the past)", "No, I do not have a disability", NO_ANSWER)
 STATUSES = ("citizen", "permanent resident", "F-1 OPT", "STEM OPT", "H-1B", "other")
 MAX_PAIRS = 300
-PAIR_ROW = re.compile(r"more\.(question|answer|asked_by|asked_on)\.([0-9]{1,3})")  # one "More answers" row
+PAIR_ROW = re.compile(r"more\.(question|answer)\.([0-9]{1,3})")  # one "More answers" row on the form
+WORDS = re.compile(r"[^\W_]+")  # a run of letters or digits
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 PHONE = re.compile(r"[0-9 +().-]+")
 MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
@@ -36,6 +37,11 @@ FILE_HEADER = "# Your auto_apply questionnaire answers. Keep this file somewhere
 
 class QuestionnaireError(Exception):
     """Answers that break the rules. Messages name the field, never the value."""
+
+
+def clean(text: str) -> str:
+    """Wording to compare: lower case, every run of other characters one space."""
+    return " ".join(WORDS.findall(text.lower()))
 
 
 def _visible(text: str) -> str:
@@ -197,6 +203,16 @@ def typed(form: dict[str, str]) -> dict:
     values["more"] = [  # a row counts when its question or answer has text
         row for _, row in sorted(rows.items()) if row.get("question", "").strip() or row.get("answer", "").strip()
     ]
+    return values
+
+
+def with_askers(values: dict, saved: list[dict]) -> dict:
+    """The rows as typed, each with the company and day that first asked it, from the saved row with its wording: the
+    page sends only questions and answers."""
+    asked = {clean(str(row.get("question", ""))): row for row in reversed(saved)}
+    for row in values["more"]:
+        if found := asked.get(clean(row.get("question", ""))):
+            row |= {"asked_by": found.get("asked_by") or "", "asked_on": found.get("asked_on") or ""}
     return values
 
 

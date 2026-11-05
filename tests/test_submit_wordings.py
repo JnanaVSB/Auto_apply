@@ -71,7 +71,7 @@ def long(label, **more):
     return q(label, "long_text", **more)
 
 
-N6, S8, N9 = "Phase 10 note", "review item S8, a later batch", "review item N9, a later batch"
+N6 = "Phase 10 note"
 
 
 def gap(reason, *row):
@@ -233,10 +233,10 @@ ROWS = [
     (text("What is your favourite colour at work?", company="Beta", answers=SAVED), *ASKED),
     (q("Have you interviewed here before?", company="Beta", answers=SAVED), *OURS),
     # m3.py: your own pick must close the question
-    gap(S8, q("Your favourite?", choices=("Yes", "Yes, with conditions", "No"), kept={"question_1": ("Yes", "you")}),
-        ORDINARY, "fill", "Yes", ""),
-    gap(S8, q("Your favourite?", choices=("Remote", "remote"), kept={"question_1": ("Remote", "you")}),
-        ORDINARY, "fill", "Remote", ""),
+    (q("Your favourite?", choices=("Yes", "Yes, with conditions", "No"), kept={"question_1": ("Yes", "you")}),
+     ORDINARY, "fill", "Yes", ""),
+    (q("Your favourite?", choices=("Remote", "remote"), kept={"question_1": ("remote", "you")}),
+     ORDINARY, "fill", "remote", ""),
     # m3.py and m4.py: an empty Questionnaire, and saved answers with no EEO values
     (q("Are you legally authorized to work in the United States?", answers=EMPTY), *EYE),
     (q("Will you require sponsorship?", answers=EMPTY), *EYE),
@@ -246,10 +246,10 @@ ROWS = [
     (q("Disability status", part="eeo", key="disability_status", answers=EMPTY, required=False,
        choices=("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")),
      LEGAL, "fill", "I don't wish to answer", ""),
-    gap(N9, q("Disability status", part="eeo", key="disability_status", answers={"contact": {}}, required=False,
-                choices=("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")), *EYE),
-    gap(N9, q("Are you Hispanic/Latino?", part="eeo", key="hispanic_ethnicity", answers={"eeo": {"race": ""}},
-                required=False, choices=("Yes", "No", "Decline to self-identify")), *EYE),
+    (q("Disability status", part="eeo", key="disability_status", answers={"contact": {}}, required=False,
+       choices=("Yes, I have a disability", "No, I don't have a disability", "I don't wish to answer")), *EYE),
+    (q("Are you Hispanic/Latino?", part="eeo", key="hispanic_ethnicity", answers={"eeo": {"race": ""}},
+       required=False, choices=("Yes", "No", "Decline to self-identify")), *EYE),
     # The research's other real questions
     (q("Have you interviewed here before?"), *OURS),
     (long("Why Acme?"), THIS_COMPANY, "write", "", ""),

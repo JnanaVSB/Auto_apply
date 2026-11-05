@@ -52,6 +52,9 @@ MAX_FORM_BYTES = 64 * 1024
 # make up to three times longer. Only this one address accepts that much.
 UPLOAD = "/resume-profile/upload"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
+MAX_FIELDS = 500
+# The Questionnaire sends up to 300 More answers, two fields each, with up to 3,000 characters a row
+FORM_LIMITS = {UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS), "/questionnaire": (8 * 1024 * 1024, 1000)}
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
@@ -485,7 +488,7 @@ async def _form(request: Request) -> dict[str, str]:
     size = request.headers.get("content-length", "0")
     if not DIGITS.fullmatch(size):
         raise HTTPException(400, "The form could not be read.")
-    limit = MAX_UPLOAD_BYTES if request.url.path == UPLOAD else MAX_FORM_BYTES
+    limit, most = FORM_LIMITS.get(request.url.path, (MAX_FORM_BYTES, MAX_FIELDS))
     if int(size) > limit:
         raise HTTPException(413, "Too much data.")
     body = bytearray()
@@ -494,7 +497,7 @@ async def _form(request: Request) -> dict[str, str]:
         if len(body) > limit:
             raise HTTPException(413, "Too much data.")
     try:
-        fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=500)
+        fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=most)
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "The form could not be read.") from None
     return {name: values[-1] for name, values in fields.items()}

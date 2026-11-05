@@ -58,7 +58,6 @@ def test_every_field_is_optional_and_eeo_defaults_to_no_answer():
         ("more.question.1", "", None),  # an empty row is simply left out
         ("more.answer.1", "An answer with no question", "More answers, row 2, question: String should have at least"),
         ("more.question.0", "Q" * 1001, "More answers, row 1, question: String should have at most 1000 characters"),
-        ("more.asked_on.0", "yesterday", "More answers, row 1, asked on: Input should be a valid date"),
         ("consents.texting", "always", "Consents, texting: Input should be 'ask', 'accept' or 'decline'"),
     ],
 )
@@ -88,13 +87,18 @@ def test_consents_are_asked_each_time_until_you_choose():
     assert answers(**{"consents.marketing": "decline"}).consents.marketing == "decline"
 
 
-def test_who_first_asked_a_question_survives_a_save_and_a_row_needs_a_question_or_answer():
-    saved = answers(**{"more.asked_by.0": "Acme", "more.asked_on.0": "2026-11-04", "more.asked_by.1": "Globex"})
+def test_who_first_asked_a_question_comes_back_from_the_saved_rows_by_its_wording():
+    typed = questionnaire.typed(FORM | {"more.question.0": "WHY this company", "more.question.1": "Your shoe size?"})
+    stored = [{"question": "Why this company?", "answer": "", "asked_by": "Acme", "asked_on": "2026-11-04"}]
+    saved = questionnaire.check(questionnaire.with_askers(typed, stored))
     assert [(pair.question, pair.asked_by, pair.asked_on) for pair in saved.more] == [
-        ("Why this company?", "Acme", date(2026, 11, 4)),  # the row with only asked_by is left out
-    ]
-    needs = answers(**{"more.question.1": "Have you worked at [company] before?", "more.asked_on.1": ""})
-    assert (needs.more[1].answer, needs.more[1].asked_by, needs.more[1].asked_on) == ("", "", None)
+        ("WHY this company", "Acme", date(2026, 11, 4)), ("Your shoe size?", "", None),
+    ]  # fmt: skip
+
+
+def test_the_page_sends_no_more_than_questions_and_answers():
+    typed = questionnaire.typed(FORM | {"more.asked_by.0": "Globex", "more.asked_by.1": "Globex"})
+    assert typed["more"] == [{"question": "Why this company?", "answer": "Made-up answer."}]
 
 
 def test_saving_twice_keeps_one_row_with_the_newest_answers(conn):

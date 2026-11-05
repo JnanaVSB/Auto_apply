@@ -1,13 +1,15 @@
 """The job box's Application form part: reading a form from its site (a fake web, never the network), the preview and
 what is left for you, with a made-up person, job and forms."""
 
+from datetime import date
+
 import httpx
 import pytest
 from helpers import add_job, csrf, log_in, one
 from test_submit_greenhouse import REPLY, question
 from test_submit_lever import PAGE
 
-from app import config, questionnaire, submit
+from app import config, questionnaire, submit, tracker
 from app.council import answers
 from app.documents import pdf
 from app.submit import greenhouse, match, record
@@ -277,7 +279,6 @@ def test_choices_are_kept_as_their_labels_and_filled_by_the_rules(client, conn, 
         ({"field": TEAM.key, "answer": "9"}, "Choose from the form&#39;s own choices"),
         ({"field": TOOLS.key}, "Choose from the form&#39;s own choices"),
         ({"field": PAPER.key, "answer": "x" * 2001}, "An answer here is at most 2,000 characters"),
-        ({"field": WHY.key, "answer": "word " * 101}, "This question allows at most 100 words"),
         ({"field": PAPER.key, "answer": "Hi\x07there"}, "The answer holds an invisible character"),
         ({"field": PAPER.key, "answer": match.IN_WINDOW}, "That text is one the app keeps for itself"),
         ({"field": PAPER.key, "answer": "   "}, "Type an answer, or press Leave it empty"),
@@ -473,6 +474,32 @@ def test_an_optional_legal_question_has_a_folded_box_without_the_save_tick(clien
     assert "<summary>Answer it</summary>" in text and "Save to my Questionnaire" not in text
     press(client, job, "answer", field=visa.key, answer="1", save="1")
     assert one(conn, KEPT_ROW, job, visa.key) == ("Yes", "you") and questionnaire.load(conn)[0]["more"] == []
+
+
+def test_your_own_answer_over_a_stated_limit_is_saved_with_a_note(client, conn, job):
+    text = press(client, job, "answer", field=WHY.key, answer="word " * 101).text
+    assert one(conn, KEPT_ROW, job, WHY.key)[1] == "you" and "over the form&#39;s stated limit of 100 words" in text
+
+
+def test_a_huge_number_in_a_help_text_breaks_nothing(client, conn, data_dir):
+    job = made_up_job(conn, data_dir)
+    huge = submit.Field("question_1", "Why Acme?", "long_text", True, "company", help="9" * 4400 + " words")
+    submit.save(conn, job, submit.Form((huge,)), "api")
+    answer = client.get(f"/jobs/{job}/form")
+    assert answer.status_code == 200 and "(up to 1,200 characters)" in answer.text
+
+
+def test_a_card_gmail_moved_first_gets_its_record_and_the_part_says_so(client, conn, data_dir, job):
+    tracker.move(conn, job, "ready", "applied", date(2026, 11, 3))
+    tracker.move(conn, job, "applied", "interview", date(2026, 11, 4))
+    text = press(client, job, "submitted", on="2026-11-04").text
+    assert "Recorded; the card stays in Interview" in text and tracker.stage(conn, job) == "interview"
+
+
+def test_a_card_moved_back_after_the_record_is_said_above_it(client, conn, job):
+    press(client, job, "submitted", on="2026-11-04")
+    tracker.move(conn, job, "applied", "ready", date(2026, 11, 5))
+    assert "Your card was moved back on " in client.get(f"/jobs/{job}/form").text
 
 
 def test_a_records_upload_shows_its_version_once(client, conn, data_dir):

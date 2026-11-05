@@ -141,5 +141,5 @@ def test_a_refused_upload_says_why_and_only_the_upload_address_takes_a_big_form(
     assert "uploaded" in client.post("/resume-profile/upload", data=big, follow_redirects=False).headers["location"]
     empty = {"file.0.name": "empty.tex", "file.0.latex": "hi", "csrf_token": csrf(client)}
     assert "Not uploaded: empty: looks empty" in client.post("/resume-profile/upload", data=empty).text
-    assert client.post("/questionnaire", data=big).status_code == 413  # every other page keeps the small limit
+    assert client.post("/settings", data=big).status_code == 413  # the other pages keep the small limit
     assert client.get("/resume-profile?file=abc").status_code == 404
