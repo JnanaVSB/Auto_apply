@@ -14,6 +14,10 @@
       company's own link.</p>
     <label>Company <input name="company" maxlength="200" value="{{ form.company or '' }}"></label>
     <label>Job title <input name="title" maxlength="300" value="{{ form.title or '' }}"></label>
+    <label>Job text (optional)
+      <textarea name="job_text" rows="8">{{ form.job_text or '' }}</textarea></label>
+    <p class="hint">Copy the ad's text from your browser (up to {{ "{:,}".format(MAX_PASTED) }} characters). Needed for
+      scoring and preparing a job from a site the app can't read.</p>
     <button type="submit">Add job</button>
   </form>
   {% if job_message %}

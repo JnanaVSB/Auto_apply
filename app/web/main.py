@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import db
+from app.collect import MAX_PASTED
 from app.config import ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
@@ -76,6 +77,7 @@ templates.env.globals |= {
     "LOW_SCORE": LOW_SCORE,
     "SCORE_THESE": SCORE_THESE,
     "SOURCE_LABELS": queries.SOURCE_LABELS,  # the filter form's words, shared with its "Filters" summary
+    "MAX_PASTED": MAX_PASTED,
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
     "SCHEMES": look.SCHEMES,  # the Look form on Settings

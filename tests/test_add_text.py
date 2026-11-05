@@ -13,6 +13,7 @@ from app.council import letter, reviewers, writer
 from app.documents.privacy import Shield
 from app.scoring import stage_b
 from app.sources import Job
+from app.web import main
 
 pytestmark = pytest.mark.usefixtures("no_waiting")  # downloads never really wait
 
@@ -288,3 +289,30 @@ def test_a_closed_sites_link_stays_yours_to_open(page, client, conn):
     assert manual == 0
     assert f'href="{closed}"' in client.get(f"/jobs/{job_id}").text
     assert f'href="/jobs/{job_id}' in client.get("/").text  # the list leads to that page, as for any job
+
+
+def test_the_box_cuts_nothing_and_its_hint_gives_the_apps_limit(client, monkeypatch):
+    log_in(client)
+    monkeypatch.setitem(main.templates.env.globals, "MAX_PASTED", 1234)
+    text = " ".join(client.get("/add").text.split())
+    assert '<textarea name="job_text" rows="8"></textarea>' in text  # a browser would cut a long paste without a word
+    assert "Job text (optional)" in text
+    assert "(up to 1,234 characters)" in text
+    assert "Needed for scoring and preparing a job from a site the app can't read." in text
+
+
+def test_a_long_paste_is_refused_with_every_word_kept(page, conn):
+    typed = "word " * 5_000 + "x" * 1
+    assert len(typed) > collect.MAX_PASTED
+    text = page(**form(job_text=typed)).text
+    assert "at most 20,000 characters" in text
+    assert f">{typed}</textarea>" in text
+    assert one(conn, "SELECT count(*) FROM jobs") == (0,)
+
+
+def test_a_refused_save_keeps_the_text_and_it_cannot_break_out_of_the_box(page):
+    typed = "</textarea><script>alert(1)</script>" + "x" * 20_001
+    text = page(**form(job_text=typed)).text
+    assert "at most 20,000 characters" in text
+    assert "&lt;/textarea&gt;&lt;script&gt;alert(1)&lt;/script&gt;" in text
+    assert "<script>alert(1)" not in text

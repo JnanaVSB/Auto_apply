@@ -279,6 +279,14 @@ The first start after updating upgrades the database once. A copy of the old one
 - **Another kind of job board** (for example Workable): one small translator file in `app/sources/` plus its tests.
   See [docs/adding-a-board-type.md](docs/adding-a-board-type.md) for the template and the test checklist.
 
+## Jobs on LinkedIn, Indeed or Handshake
+The app never opens these sites: you browse them yourself, as usual, and their links stay yours to open.
+- If a posting links to the company's own Greenhouse, Lever or Ashby page, add that link on **Add**. The app reads the
+  rest from the board.
+- Otherwise add the posting's link with the company and job title, and paste the ad's text into **Job text**, so the
+  job can be scored and prepared. You can paste it later too: add the same link again with the text.
+- Apply on the site yourself.
+
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.
 - Gmail is optional and read-only: it never sends or changes mail, and an e-mail's text stays on this computer.
