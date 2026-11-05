@@ -148,8 +148,8 @@ def create_app(
                 )
         response.headers.update(security.SAFETY_HEADERS)
         # public program files: kept, but checked with the dashboard each time; fonts: kept a day, not re-sent per page
-        if request.url.path.startswith("/static/") and response.status_code in (200, 304):
-            font = request.url.path.endswith(".woff2")
+        if request.scope["path"].startswith("/static/") and response.status_code in (200, 304):
+            font = request.scope["path"].endswith(".woff2")
             response.headers["Cache-Control"] = "private, max-age=86400" if font else "no-cache"
         return response
 
@@ -496,7 +496,7 @@ async def _checked(request: Request, call_next) -> Response:
     if post and request.headers.get("origin", origin) != origin:  # sent from another website
         raise HTTPException(403, EXPIRED)
     request.state.session = None
-    path = request.url.path
+    path = request.scope["path"]  # as the server received it: request.url is built partly from the Host header
     # Everything else needs a login. Google sends you back to the Gmail callback without the login cookie (it is
     # SameSite=Strict); the one-time state is the check there.
     if path not in ("/login", gmail_settings.CALLBACK) and not path.startswith("/static/"):
@@ -516,7 +516,7 @@ async def _form(request: Request) -> dict[str, str]:
     size = request.headers.get("content-length", "0")
     if not DIGITS.fullmatch(size):
         raise HTTPException(400, "The form could not be read.")
-    limit, most = FORM_LIMITS.get(request.url.path, (MAX_FORM_BYTES, MAX_FIELDS))
+    limit, most = FORM_LIMITS.get(request.scope["path"], (MAX_FORM_BYTES, MAX_FIELDS))
     if int(size) > limit:
         raise HTTPException(413, "Too much data.")
     body = bytearray()

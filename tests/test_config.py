@@ -122,6 +122,11 @@ def test_phone_address_is_off_unless_set(tmp_path):
     assert load_config(write(tmp_path, "data_dir: data\n")).phone_address == ""
 
 
+@pytest.mark.parametrize("blank", ["phone_address:\n", "phone_address: ~\n"])
+def test_a_blank_phone_address_counts_as_off(tmp_path, blank):
+    assert load_config(write(tmp_path, f"data_dir: data\n{blank}")).phone_address == ""
+
+
 @pytest.mark.parametrize(
     "typed",
     [
@@ -149,7 +154,6 @@ def test_phone_address_is_off_unless_set(tmp_path):
         "https://laptop.tail0000.evilts.net",
         "/",
         123,
-        None,
         [PHONE],
     ],
 )

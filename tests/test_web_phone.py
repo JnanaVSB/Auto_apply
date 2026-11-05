@@ -204,6 +204,15 @@ def test_the_scheme_is_never_read(phone):
     assert "url.scheme" not in (main.HERE / "main.py").read_text()
 
 
+def test_the_login_check_reads_the_path_the_server_received(laptop, phone):
+    for client in (laptop, phone):
+        for path in ("/login%0a", "/static%0a/app.css"):
+            response = client.get(path, follow_redirects=False)
+            assert (response.status_code, response.headers.get("location")) == (303, "/login")
+    made_up = {"Host": "127.0.0.1/login?"}  # a Host must not be able to change the path that is checked
+    assert laptop.get("/", headers=made_up, follow_redirects=False).headers["location"] == "/login"
+
+
 def test_every_refusal_is_a_plain_page_with_nothing_private(laptop, phone):
     for response, status, sentence in (
         (laptop.get("/login", headers={"Host": "attacker.example"}), 400, NOT_ALLOWED),
