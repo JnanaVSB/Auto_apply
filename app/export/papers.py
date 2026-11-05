@@ -33,7 +33,7 @@ def history(conn: sqlcipher3.Connection, job_id: int, found: dict | None) -> str
     applied = found["submitted_on"] if found else _card_date(conn, job_id) if first else None
     lines = [] if found else [NO_RECORD]
     lines += [f"{applied}  {STAGES['applied']}"] if applied else []
-    lines += [f"{_day(move['moved_on'])}  {_move(move)}" for move in moves if move is not first or not applied]
+    lines += [f"{day(move['moved_on'])}  {_move(move)}" for move in moves if move is not first or not applied]
     return "".join(f"{line}\n" for line in lines)
 
 
@@ -71,7 +71,7 @@ def _card_date(conn: sqlcipher3.Connection, job_id: int) -> str | None:
     return row and row[0]
 
 
-def _day(moment: str) -> str:
+def day(moment: str) -> str:
     return datetime.fromisoformat(moment).astimezone().date().isoformat()
 
 
@@ -104,9 +104,9 @@ def _files(rows: list[dict], states: dict[str, str]) -> str:
 def _scores(conn: sqlcipher3.Connection, job_id: int) -> list[tuple[str, str]]:
     lines = []
     for model, score, reasons, failed, scored_on in conn.execute(SCORES, (job_id,)).fetchall():
-        day = _day(scored_on)
+        when = day(scored_on)
         lines.append(
-            f"{model}: no score ({failed}), tried on {day}" if score is None else f"{model}: {score}, scored on {day}"
+            f"{model}: no score ({failed}), tried on {when}" if score is None else f"{model}: {score}, scored on {when}"
         )
         lines += json.loads(reasons)
     return [("AI scores", "\n".join(lines))] if lines else []
