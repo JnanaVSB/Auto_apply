@@ -56,6 +56,17 @@ MAX_FIELDS = 500
 # The Questionnaire sends up to 300 More answers, two fields each, with up to 3,000 characters a row
 FORM_LIMITS = {UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS), "/questionnaire": (8 * 1024 * 1024, 1000)}
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
+SERVE_MARKS = ("tailscale-user-login", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")  # Serve adds these
+FUNNEL = "tailscale-funnel-request"
+NOT_ALLOWED = "This address is not allowed. Open the dashboard at the address shown in the terminal."
+UNKNOWN_PHONE = (
+    "This is a Tailscale address the dashboard doesn't know. On the laptop, add it in Settings → Phone, then "
+    "restart the dashboard."
+)
+PUBLIC = "The dashboard can't be opened from the public internet. On the laptop, run: tailscale funnel reset"
+NOT_TAILNET = (
+    "Open this from a phone signed in to your Tailscale. On the laptop itself, use the address shown in the terminal."
+)
 EXPIRED = "This page has expired; reload it and try again."
 BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
@@ -83,7 +94,10 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def create_app(
-    data_dir: Path, logins: security.Logins | None = None, new_fetcher: Callable[[], Fetcher] = Fetcher
+    data_dir: Path,
+    logins: security.Logins | None = None,
+    new_fetcher: Callable[[], Fetcher] = Fetcher,
+    phone_address: str = "",
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -102,6 +116,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
+    app.state.phone_host = urlsplit(phone_address).netloc  # read once: a new address applies at the next start
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
     app.state.preparer = Preparer(data_dir)  # the council's runner
@@ -458,13 +473,22 @@ async def _settings_page(
 
 
 async def _checked(request: Request, call_next) -> Response:
-    host = request.headers.get("host", "")
-    if urlsplit(f"//{host}").hostname not in LOCAL_HOSTS:  # stops "DNS rebinding" by other websites
-        raise HTTPException(
-            400, "This address is not allowed. Open the dashboard at the address shown in the terminal."
-        )
+    host, phone_host = request.headers.get("host", ""), request.app.state.phone_host
+    request.state.remote = remote = bool(phone_host) and host == phone_host
+    if FUNNEL in request.headers:  # the public internet, and the Host can say anything: Serve passes it on as sent
+        raise HTTPException(403, PUBLIC)
+    if remote:
+        if not request.headers.get("tailscale-user-login"):
+            raise HTTPException(403, NOT_TAILNET)
+    else:
+        name = urlsplit(f"//{host}").hostname
+        if name not in LOCAL_HOSTS:  # stops "DNS rebinding" by other websites
+            raise HTTPException(400, UNKNOWN_PHONE if (name or "").endswith(".ts.net") else NOT_ALLOWED)
+        if any(mark in request.headers for mark in SERVE_MARKS):  # through Serve with a made-up Host
+            raise HTTPException(403, NOT_TAILNET)
     post = request.method == "POST"
-    if post and request.headers.get("origin", f"http://{host}") != f"http://{host}":  # sent from another website
+    origin = f"{'https' if remote else 'http'}://{host}"
+    if post and request.headers.get("origin", origin) != origin:  # sent from another website
         raise HTTPException(403, EXPIRED)
     request.state.session = None
     path = request.url.path
@@ -521,6 +545,7 @@ def _to_login(request: Request) -> Response:
 def _page(request: Request, name: str, status: int = 200, **values) -> HTMLResponse:
     session = getattr(request.state, "session", None)
     values["csrf"] = session.csrf if session else None
+    values["remote"] = getattr(request.state, "remote", False)
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
     values["list_view"], values["look"] = look.of(request)

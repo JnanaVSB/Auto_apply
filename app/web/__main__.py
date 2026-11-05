@@ -48,7 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"address number (default {DEFAULT_PORT})")
     args = parser.parse_args(argv)
     try:
-        data_dir = load_config().data_dir
+        config = load_config()
+        data_dir = config.data_dir
         busy = "The dashboard is already running in another window. Use that one, or close it first."
         with closing(lock(data_dir, DASHBOARD_LOCK, busy)):
             with (  # the collection lock only while opening, so an upgrade never runs during a collection
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Dashboard: {url}  (press Ctrl+C here to stop it)")
             threading.Timer(1.0, webbrowser.open, [url]).start()  # once the server is listening
             uvicorn.run(
-                create_app(data_dir),
+                create_app(data_dir, phone_address=config.phone_address),
                 host=HOST,
                 port=args.port,
                 access_log=False,  # addresses can hold search words; nothing about your jobs goes to the terminal
