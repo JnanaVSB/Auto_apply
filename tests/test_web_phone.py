@@ -18,7 +18,7 @@ from test_web_emails import email
 from test_web_tracker import APPLIED_CARD
 
 from app import collect, config, tracker
-from app.config import Config, load_config
+from app.config import PROJECT_DIR, Config, load_config
 from app.fetch import Fetcher
 from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
 from app.keychain import get_secret, set_secret
@@ -954,3 +954,16 @@ def test_only_a_plain_visit_to_add_with_a_query_is_kept(phone):
     assert sent.headers["location"] == "/login"
     assert phone.get("/addx?link=x", follow_redirects=False).headers["location"] == "/login"
     assert phone.post("/add?link=x", headers=ORIGIN, follow_redirects=False).headers["location"] == "/login"
+
+
+def test_the_phone_guide_exists_warns_first_and_gives_no_way_to_turn_funnel_on():
+    page = (main.HERE / "templates" / "phone_settings.html").read_text(encoding="utf-8")
+    guide = (PROJECT_DIR / re.search(r"<code>(docs/[\w.-]+)</code>", page)[1]).read_text(encoding="utf-8")
+    assert "tailscale funnel --bg" not in guide
+    assert guide.index("nobody can erase") < guide.index("tailscale serve")
+
+
+def test_the_guides_name_only_the_made_up_address():
+    for name in ("phone-setup.md", "cloud-checklist.md"):
+        text = (PROJECT_DIR / "docs" / name).read_text(encoding="utf-8")
+        assert set(re.findall(r"[\w.-]+\.ts\.net", text)) <= {HOST}
