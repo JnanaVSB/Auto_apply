@@ -93,7 +93,7 @@ def add_job(
             message = collect.add(conn, fetcher, link, details=(company, title), text=text)
             job_id = queries.job_id_by_link(conn, link)
             if closed_site(link) and not conn.execute(HAS_TEXT, (job_id,)).fetchone():
-                message += f" {NEEDS_TEXT}"
+                message = f"{message}. {NEEDS_TEXT}"
             return message, job_id
     except CANT_SAVE as error:
         return str(error), None

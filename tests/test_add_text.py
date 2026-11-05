@@ -269,6 +269,16 @@ def test_a_closed_site_with_no_text_asks_for_it(page, link):
     assert HINT in page(**form(link=link)).text
 
 
+def test_the_hint_is_a_sentence_of_its_own(page):
+    text = page(**form(link="https://www.linkedin.com/jobs/view/1")).text
+    assert f"Added: Initech, ML Engineer. {HINT}" in text
+
+
+def test_the_result_comes_before_the_form_so_a_refusal_shows_at_once(page):
+    text = page(**form(job_text="x" * 20_001)).text
+    assert text.index("at most 20,000 characters") < text.index('<form method="post" action="/add/job"')
+
+
 def test_no_hint_when_text_is_given_or_saved_or_on_another_site(page):
     closed = "https://www.linkedin.com/jobs/view/1"
     assert HINT not in page(**form(link=closed, job_text="Text.")).text
