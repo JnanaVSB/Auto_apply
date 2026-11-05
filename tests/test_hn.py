@@ -97,6 +97,11 @@ def test_a_shortened_link_is_read_from_its_escaped_href_not_its_visible_text():
     assert hn.boards_in(comment(text)) == {"ashby:acme-robotics"}
 
 
+def test_a_link_with_no_rel_is_read_too():
+    text = '<a href="https:&#x2F;&#x2F;jobs.lever.co&#x2F;acme">Apply</a>'  # some real links come this way
+    assert hn.boards_in(comment(text)) == {"lever:acme"}
+
+
 @pytest.mark.parametrize(
     "text",
     [
