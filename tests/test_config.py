@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 from app.config import PROJECT_DIR, AIRole, AISettings, ConfigError, CustomMember, load_config
 
 FAKE_VALUE = "fake-private-value-123"
+PHONE = "https://laptop.tail0000.ts.net"
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -97,6 +100,78 @@ def test_the_example_settings_are_valid():
     config = load_config(PROJECT_DIR / "config.example.yaml")
     assert config.roles.keywords
     assert [listing.level for listing in config.sources.simplify_lists] == ["intern", "new grad"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "saved"),
+    [
+        ("", ""),
+        (PHONE, PHONE),
+        (f"{PHONE}:8443", f"{PHONE}:8443"),
+        (PHONE.upper(), PHONE),
+        (f"{PHONE}/", PHONE),
+        ("HTTPS://Laptop.Tail0000.ts.net:8443/", f"{PHONE}:8443"),
+    ],
+)
+def test_phone_address_is_cleaned_as_pasted_from_a_browser(tmp_path, typed, saved):
+    config = load_config(write(tmp_path, f"data_dir: data\nphone_address: {json.dumps(typed)}\n"))
+    assert config.phone_address == saved
+
+
+def test_phone_address_is_off_unless_set(tmp_path):
+    assert load_config(write(tmp_path, "data_dir: data\n")).phone_address == ""
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "http://laptop.tail0000.ts.net",
+        f"{PHONE}/jobs",
+        f"{PHONE}?x=1",
+        f"{PHONE}#x",
+        "https://a@laptop.tail0000.ts.net",
+        "https://a:b@laptop.tail0000.ts.net",
+        "https://laptop tail0000.ts.net",
+        f" {PHONE}",
+        f"{PHONE} ",
+        f"{PHONE}\n",
+        f"{PHONE}//",
+        f"{PHONE}:443",
+        f"{PHONE}:443/",
+        f"{PHONE}:0",
+        f"{PHONE}:",
+        f"{PHONE}:port",
+        "laptop.tail0000.ts.net",
+        "https://ts.net",
+        "https://tail0000.ts.net",
+        "https://laptop.tail0000.ts.net.example.com",
+        "https://evilts.net",
+        "https://laptop.tail0000.evilts.net",
+        "/",
+        123,
+        None,
+        [PHONE],
+    ],
+)
+def test_anything_but_a_tailscale_address_is_refused_as_a_phone_address(tmp_path, typed):
+    with pytest.raises(ConfigError, match="phone_address: (Value error|Input should)"):
+        load_config(write(tmp_path, f"data_dir: data\nphone_address: {json.dumps(typed)}\n"))
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [f"http://{FAKE_VALUE}.tail0000.ts.net", f"{PHONE}/{FAKE_VALUE}", f"https://{FAKE_VALUE}@laptop.tail0000.ts.net"],
+)
+def test_a_refused_phone_address_is_never_repeated(tmp_path, typed):
+    with pytest.raises(ConfigError, match="must look like") as error:
+        load_config(write(tmp_path, f"data_dir: data\nphone_address: {typed}\n"))
+    assert FAKE_VALUE not in str(error.value)
+
+
+def test_the_example_settings_show_only_the_made_up_phone_address_in_a_comment():
+    text = (PROJECT_DIR / "config.example.yaml").read_text(encoding="utf-8")
+    assert load_config(PROJECT_DIR / "config.example.yaml").phone_address == ""
+    assert re.findall(r"^.*ts\.net.*$", text, re.M) == [f"# phone_address: {PHONE}"]
 
 
 @pytest.mark.parametrize(("value", "ok"), [("0", True), ("168", True), ("-1", False), ("169", False),
