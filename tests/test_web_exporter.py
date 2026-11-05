@@ -331,20 +331,19 @@ def test_the_thread_uses_a_connection_of_its_own_and_closes_it(conn, settings, e
 
 def test_progress_is_there_for_the_page_while_it_runs(data_dir, settings, exporter, monkeypatch, tmp_path):
     settings(str(tmp_path))
-    seen, gate = [], threading.Event()
+    seen, reached, gate = [], threading.Event(), threading.Event()
 
     def run(conn, data_dir, text, start, end, unexported=False, step=None):
         step(0, 40)
         step(12, 40)
         seen.append((exporter.done, exporter.total))
+        reached.set()
         gate.wait(10)
         return export.Result(selected=40)
 
     monkeypatch.setattr(exporter_module.export, "run", run)
     exporter.start(None, None)
-    while not seen:
-        time.sleep(0.01)
-    assert seen == [(12, 40)] and exporter.running
+    assert reached.wait(10) and seen == [(12, 40)] and exporter.running
     gate.set()
     finish(exporter)
 

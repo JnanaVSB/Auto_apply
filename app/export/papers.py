@@ -19,33 +19,33 @@ NO_RECORD = (
 NO_FILES = "No files were recorded"
 POSTING = "The posting's text as the app last read it"
 COUNCIL_TITLE = "Scores and council notes"
-APPLIED_ON = "SELECT applied_on FROM tracker WHERE job_id = ?"
 SCORES = "SELECT model, score, reasons, failed, scored_on FROM ai_scores WHERE job_id = ? ORDER BY scored_on, model"
 QUICK = "SELECT passed, title_only, keywords, job_skills, shared_skills, meaning, trick FROM stage_a WHERE job_id = ?"
 
 
-def history(conn: sqlcipher3.Connection, job_id: int, found: dict | None) -> str:
+def history(conn: sqlcipher3.Connection, job_id: int, recorded: dict | None) -> str:
     """One line a move, oldest first, so a later move only adds lines at the end. The opening Applied line stands for
     the oldest Ready → Applied move, dated when you applied, which then isn't listed again. With no record it needs
     that move, and the card's date: nobody said you applied to a card dragged from Ready to Rejected."""
     moves = tracker.history(conn, job_id)[::-1]
     first = next((move for move in moves if (move["from_stage"], move["to_stage"]) == ("ready", "applied")), None)
-    applied = found["submitted_on"] if found else _card_date(conn, job_id) if first else None
-    lines = [] if found else [NO_RECORD]
+    card = conn.execute("SELECT applied_on FROM tracker WHERE job_id = ?", (job_id,)).fetchone()
+    applied = recorded["submitted_on"] if recorded else card and first and card[0]
+    lines = [] if recorded else [NO_RECORD]
     lines += [f"{applied}  {STAGES['applied']}"] if applied else []
     lines += [f"{day(move['moved_on'])}  {_move(move)}" for move in moves if move is not first or not applied]
     return "".join(f"{line}\n" for line in lines)
 
 
-def filled_answers(job: dict, found: dict, moved_back: str | None, files: dict[str, str]) -> tuple[str, list]:
+def filled_answers(job: dict, recorded: dict, moved_back: str | None, files: dict[str, str]) -> tuple[str, list]:
     """The frozen record as a paper. `moved_back` is a local date; `files` says of each slot's copy in the export
     folder whether it is the "same" as recorded, "different" or "gone"."""
-    title = record.HEADING[found["how"]]
-    opening = [job["company"], job["title"], f"Applied {found['submitted_on']}", found["address"]]
-    opening += [] if found["how"] == "browser" else [record.MAY_DIFFER]
+    title = record.HEADING[recorded["how"]]
+    opening = [job["company"], job["title"], f"Applied {recorded['submitted_on']}", recorded["address"]]
+    opening += [] if recorded["how"] == "browser" else [record.MAY_DIFFER]
     opening += [record.MOVED_BACK.format(moved_back)] if moved_back else []
-    answers = [(row["question"], _answer(row)) for row in found["fields"]]
-    return title, [("", "\n".join(opening)), *answers, ("Files", _files(found["files"], files))]
+    answers = [(row["question"], _answer(row)) for row in recorded["fields"]]
+    return title, [("", "\n".join(opening)), *answers, ("Files", _files(recorded["files"], files))]
 
 
 def job_description(job: dict) -> tuple[str, list] | None:
@@ -64,11 +64,6 @@ def council_notes(conn: sqlcipher3.Connection, job_id: int, versions: list[tuple
         if version is not None:
             sections.append(_council(conn, label, version))
     return (COUNCIL_TITLE, sections) if sections else None
-
-
-def _card_date(conn: sqlcipher3.Connection, job_id: int) -> str | None:
-    row = conn.execute(APPLIED_ON, (job_id,)).fetchone()
-    return row and row[0]
 
 
 def day(moment: str) -> str:

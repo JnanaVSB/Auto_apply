@@ -5,13 +5,11 @@ and nothing you made or changed in the folder is replaced."""
 import hashlib
 import os
 import re
-import shutil
 import unicodedata
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from contextlib import suppress
 from itertools import count
 from pathlib import Path
-from typing import BinaryIO
 
 from app.config import PROJECT_DIR
 
@@ -122,12 +120,18 @@ def missing(path: Path) -> bool:
 
 
 def write(target: Path, data: bytes) -> None:
-    _swapped_in(target, lambda file: file.write(data))
-
-
-def copy(source: Path, target: Path) -> None:
-    with source.open("rb") as found:
-        _swapped_in(target, lambda file: shutil.copyfileobj(found, file))
+    """All or nothing: written beside its place, on the disk, then swapped in. Not pdf._write: data/documents is the
+    app's own, but this folder is yours and may hold anything, so a .partial already there is never opened."""
+    partial = target.with_name(f"{target.name}.partial")
+    descriptor = os.open(partial, NEW_FILE, 0o600)
+    try:
+        with open(descriptor, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def digest(path: Path) -> str | None:
@@ -218,18 +222,3 @@ def _cut(text: str, limit: int) -> str:
 
 def _regular(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
-
-
-def _swapped_in(target: Path, fill: Callable[[BinaryIO], object]) -> None:
-    """All or nothing: written beside its place, on the disk, then swapped in. Not pdf._write: data/documents is the
-    app's own, but this folder is yours and may hold anything, so a .partial already there is never opened."""
-    partial = target.with_name(f"{target.name}.partial")
-    descriptor = os.open(partial, NEW_FILE, 0o600)
-    try:
-        with open(descriptor, "wb") as file:
-            fill(file)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(partial, target)
-    finally:
-        partial.unlink(missing_ok=True)

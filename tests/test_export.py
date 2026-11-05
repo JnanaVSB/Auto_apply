@@ -87,8 +87,8 @@ def no_record(conn, title="ML Engineer", to="applied", on=ON, company="Acme"):
     return job
 
 
-def run(conn, data_dir, root, start=None, end=None, **options):
-    return export.run(conn, data_dir, str(root), start, end, **options)
+def run(conn, data_dir, root, start=None, end=None, step=lambda done, total: None, **options):
+    return export.run(conn, data_dir, str(root), start, end, step, **options)
 
 
 def where(conn, root, job):
@@ -117,7 +117,7 @@ def test_a_record_is_listed_once_on_the_date_you_chose_not_the_cards(conn, data_
     job = by_hand(conn, data_dir, on=date(2026, 10, 17))
     with conn:
         conn.execute("UPDATE tracker SET applied_on = '2026-10-20' WHERE job_id = ?", (job,))
-    assert export.which(conn, None, None) == [(job, "2026-10-17")]
+    assert export.applications(conn, None, None) == [(job, "2026-10-17")]
 
 
 def test_a_record_stays_listed_with_its_card_moved_back_or_gone(conn, data_dir):
@@ -125,41 +125,41 @@ def test_a_record_stays_listed_with_its_card_moved_back_or_gone(conn, data_dir):
     tracker.move(conn, back, "applied", "ready", ON)
     with conn:
         conn.execute("DELETE FROM tracker WHERE job_id = ?", (gone,))
-    assert {found for found, _ in export.which(conn, None, None)} == {back, gone}
+    assert {found for found, _ in export.applications(conn, None, None)} == {back, gone}
 
 
 def test_a_ready_card_with_no_record_isnt_listed_and_one_moved_back_neither(conn, data_dir):
     finished(conn, data_dir, job_row(conn, "Only ready"))
     back = no_record(conn, "Moved back")
     tracker.move(conn, back, "applied", "ready", ON)
-    assert export.which(conn, None, None) == []
+    assert export.applications(conn, None, None) == []
 
 
 def test_a_card_rejected_straight_from_ready_is_listed_on_its_date(conn):
     job = no_record(conn, to="rejected", on=date(2026, 10, 20))
-    assert export.which(conn, None, None) == [(job, "2026-10-20")]
+    assert export.applications(conn, None, None) == [(job, "2026-10-20")]
 
 
 def test_both_ends_of_the_dates_are_included(conn, data_dir):
     days = [date(2026, 10, day) for day in (16, 17, 18, 19, 20)]
     jobs = [by_hand(conn, data_dir, f"Job {day}", on=day) for day in days]
-    assert [found for found, _ in export.which(conn, days[1], days[3])] == jobs[1:4]
-    assert [found for found, _ in export.which(conn, days[3], None)] == jobs[3:]
-    assert [found for found, _ in export.which(conn, None, days[1])] == jobs[:2]
-    assert export.which(conn, days[3], days[1]) == []  # To before From: the page refuses it, nothing here
+    assert [found for found, _ in export.applications(conn, days[1], days[3])] == jobs[1:4]
+    assert [found for found, _ in export.applications(conn, days[3], None)] == jobs[3:]
+    assert [found for found, _ in export.applications(conn, None, days[1])] == jobs[:2]
+    assert export.applications(conn, days[3], days[1]) == []  # To before From: the page refuses it, nothing here
 
 
 def test_the_order_is_the_date_then_the_job(conn, data_dir):
     later = by_hand(conn, data_dir, "Later", on=date(2026, 10, 20))
     first, second = by_hand(conn, data_dir, "One"), by_hand(conn, data_dir, "Two")
-    assert [found for found, _ in export.which(conn, None, None)] == [first, second, later]
+    assert [found for found, _ in export.applications(conn, None, None)] == [first, second, later]
 
 
 def test_a_date_of_tomorrow_is_listed_with_no_end_date(conn, data_dir):
     with conn:
         job = by_hand(conn, data_dir)
         conn.execute("UPDATE submissions SET submitted_on = '2099-01-01' WHERE job_id = ?", (job,))
-    assert export.which(conn, date(2098, 1, 1), None) == [(job, "2099-01-01")]
+    assert export.applications(conn, date(2098, 1, 1), None) == [(job, "2099-01-01")]
 
 
 def test_unexported_also_takes_what_isnt_exported_whatever_its_date(conn, data_dir, root, built):
@@ -168,9 +168,9 @@ def test_unexported_also_takes_what_isnt_exported_whatever_its_date(conn, data_d
     recent = by_hand(conn, data_dir, "Recent", on=date(2026, 10, 20))
     run(conn, data_dir, root, date(2026, 1, 6), date(2026, 1, 6))
     window = date(2026, 10, 1), None
-    assert export.which(conn, *window) == [(recent, "2026-10-20")]
-    assert export.which(conn, *window, unexported=True) == [(old, "2026-01-05"), (recent, "2026-10-20")]
-    assert done not in dict(export.which(conn, *window, unexported=True))
+    assert export.applications(conn, *window) == [(recent, "2026-10-20")]
+    assert export.applications(conn, *window, unexported=True) == [(old, "2026-01-05"), (recent, "2026-10-20")]
+    assert done not in dict(export.applications(conn, *window, unexported=True))
 
 
 def test_a_first_export_makes_every_file_for_a_record(conn, data_dir, root, built):
@@ -413,12 +413,12 @@ def test_a_stored_folder_leading_out_is_refused_with_a_line_and_nothing_written(
 
 def test_a_crash_after_the_row_heals_with_one_folder_and_one_row(conn, data_dir, root, built, monkeypatch):
     job = by_hand(conn, data_dir)
-    copy = folder.copy
+    write = folder.write
     with monkeypatch.context() as crash:
-        crash.setattr(folder, "copy", lambda *_: (_ for _ in ()).throw(RuntimeError("the power went")))
+        crash.setattr(folder, "write", lambda *_: (_ for _ in ()).throw(RuntimeError("the power went")))
         with pytest.raises(RuntimeError):
             run(conn, data_dir, root)
-    assert folder.copy is copy and len(rows(conn, "exported")) == 1  # the row came first
+    assert folder.write is write and len(rows(conn, "exported")) == 1  # the row came first
     result = run(conn, data_dir, root)
     assert (result.folders, result.again) == (0, 0) and len(rows(conn, "exported")) == 1
     assert sorted(path.name for path in where(conn, root, job).iterdir()) == ALL_FILES
@@ -427,15 +427,15 @@ def test_a_crash_after_the_row_heals_with_one_folder_and_one_row(conn, data_dir,
 
 def test_a_crash_between_two_papers_leaves_only_the_missing_ones_to_make(conn, data_dir, root, built, monkeypatch):
     job = by_hand(conn, data_dir)
-    copy = folder.copy
+    write = folder.write
 
-    def crash_on_council(source, target):
+    def crash_on_council(target, data):
         if target.name == "council_notes.pdf":
             raise RuntimeError("the power went")
-        copy(source, target)
+        write(target, data)
 
     with monkeypatch.context() as crash:
-        crash.setattr(folder, "copy", crash_on_council)
+        crash.setattr(folder, "write", crash_on_council)
         with pytest.raises(RuntimeError):
             run(conn, data_dir, root)
     kept = (where(conn, root, job) / "job_description.pdf").stat().st_mtime_ns
@@ -593,15 +593,15 @@ def test_a_full_disk_stops_the_run_with_the_short_reason_and_keeps_what_is_done(
     run(conn, data_dir, root, ON, ON)
     tracker.move(conn, first, "applied", "offer", ON)
     (where(conn, root, second) / "resume.pdf").unlink()
-    copy = folder.copy
+    write = folder.write
 
-    def full(source, target):
+    def full(target, data):
         raise OSError(28, "No space left on device", str(target))
 
     with monkeypatch.context() as disk:
-        disk.setattr(folder, "copy", full)
+        disk.setattr(folder, "write", full)
         result = run(conn, data_dir, root, ON, ON)
-    assert copy is folder.copy and "No space left on device" in result.stopped and str(root) not in result.stopped
+    assert write is folder.write and "No space left on device" in result.stopped and str(root) not in result.stopped
     assert "2" in result.stopped  # how far it got
 
 
@@ -611,7 +611,7 @@ def test_a_stopped_run_skips_the_refresh(conn, data_dir, root, built, monkeypatc
     tracker.move(conn, old, "applied", "offer", ON)
     before = (where(conn, root, old) / "status_history.txt").read_bytes()
     with monkeypatch.context() as disk:
-        disk.setattr(folder, "copy", lambda *_: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+        disk.setattr(folder, "write", lambda *_: (_ for _ in ()).throw(OSError(28, "No space left on device")))
         result = run(conn, data_dir, root, date(2026, 10, 20), None)
     assert result.stopped and (where(conn, root, old) / "status_history.txt").read_bytes() == before
     assert new
@@ -626,7 +626,7 @@ def test_tectonic_missing_stops_before_anything_is_made(conn, data_dir, root, bu
 
 def test_no_folder_chosen_says_so(conn, data_dir, built):
     by_hand(conn, data_dir)
-    assert export.run(conn, data_dir, "", None, None).stopped == folder.CHOOSE
+    assert run(conn, data_dir, "").stopped == folder.CHOOSE
     assert rows(conn, "exported") == []
 
 
@@ -798,13 +798,13 @@ def test_the_summary_holds_no_names(conn, data_dir, root, built):
 def test_a_second_connection_sees_the_row_before_any_file_is_written(conn, data_dir, root, built, monkeypatch):
     """The row is committed, not only written: a crash can't lose it."""
     by_hand(conn, data_dir)
-    copy, seen = folder.copy, []
+    write, seen = folder.write, []
 
-    def look(source, target):
+    def look(target, data):
         with closing(db.connect(data_dir)) as other:
             seen.append(len(rows(other, "exported")))
-        copy(source, target)
+        write(target, data)
 
-    monkeypatch.setattr(folder, "copy", look)
+    monkeypatch.setattr(folder, "write", look)
     run(conn, data_dir, root)
     assert seen and seen[0] == 1

@@ -6,7 +6,7 @@ Logs hold counts and kinds only: the problem lines naming an application are for
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import sqlcipher3
@@ -21,8 +21,8 @@ APPLIED = """SELECT job_id, submitted_on FROM submissions UNION ALL SELECT job_i
     WHERE stage != 'ready' AND job_id NOT IN (SELECT job_id FROM submissions)"""
 JOB = "SELECT company, title, locations, apply_url, description FROM jobs WHERE id = ?"
 SAVE = "INSERT INTO exported (job_id, folder, exported_on) VALUES (?, ?, ?)"
-DOCUMENTS = {runs.KIND: "resume.pdf", runs.LETTER: "cover_letter.pdf"}
-ANSWERS, POSTING, NOTES = "filled_answers.pdf", "job_description.pdf", "council_notes.pdf"
+DOCUMENT_FILES = {runs.KIND: "resume.pdf", runs.LETTER: "cover_letter.pdf"}
+ANSWERS_PDF, POSTING_PDF, NOTES_PDF = "filled_answers.pdf", "job_description.pdf", "council_notes.pdf"
 STOP_AFTER = 5  # failed builds in a row: a broken Tectonic gives one message, not hundreds
 DAMAGED = (ValueError, KeyError, TypeError, AttributeError)  # a record or a paper that can't be read as it should
 log = logging.getLogger("app.export")
@@ -54,12 +54,21 @@ class Result:
             return "; ".join(filter(None, ("No applications between those dates", words)))
         return words or "Nothing new"
 
+    def words(self) -> str:
+        """The run's last words, for the page and the database: the summary and why it stopped, or only why, when it
+        stopped before choosing any."""
+        if self.stopped and self.selected is None:
+            return self.stopped
+        return ". ".join(filter(None, (self.summary(), self.stopped)))
+
 
 class _Stopped(Exception):  # noqa: N818 (the run ends here, with its reason)
     pass
 
 
-def which(conn: sqlcipher3.Connection, start: date | None, end: date | None, unexported: bool = False) -> list:
+def applications(
+    conn: sqlcipher3.Connection, start: date | None, end: date | None, unexported: bool = False
+) -> list[tuple[int, str]]:
     """The applications to export, as (job, day), oldest first: every record on the date you chose, wherever its card
     is now, and cards past Ready with no record on the card's date. `unexported`: also all not exported yet, whatever
     their date."""
@@ -73,20 +82,28 @@ def which(conn: sqlcipher3.Connection, start: date | None, end: date | None, une
     ]
 
 
+def since(conn: sqlcipher3.Connection, every_days: int) -> date:
+    """A schedule's first date: the set days back, or the last good run if that is earlier, so a dashboard closed for
+    three weeks loses nothing."""
+    back = date.today() - timedelta(days=every_days)
+    row = conn.execute("SELECT good_on FROM export_runs WHERE id = 1").fetchone()
+    return min(back, date.fromisoformat(papers.day(row[0]))) if row and row[0] else back
+
+
 def run(
-    conn: sqlcipher3.Connection, data_dir: Path, text: str, start: date | None, end: date | None,
-    unexported: bool = False, step: Callable[[int, int], None] | None = None,
+    conn: sqlcipher3.Connection, data_dir: Path, folder_text: str, start: date | None, end: date | None,
+    step: Callable[[int, int], None], unexported: bool = False,
 ) -> Result:  # fmt: skip
-    """One export to the folder `text`, then the status history of every other application exported before. `step`
-    hears (done, total). Disk full or no rights stop it with the system's reason; what's done stays."""
+    """One export to the folder `folder_text`, then the status history of every other application exported before.
+    `step` hears (done, total). Disk full or no rights stop it with the system's reason; what's done stays."""
     result = Result()
     try:
-        root = folder.ready(text, data_dir)
+        root = folder.ready(folder_text, data_dir)
         if pdf.tectonic() is None:
             raise _Stopped(f"Tectonic isn't installed: install it with: {pdf.INSTALL}")
-        chosen = which(conn, start, end, unexported)
+        chosen = applications(conn, start, end, unexported)
         result.selected = len(chosen)
-        _Run(conn, data_dir, root, result).all_of(chosen, step or (lambda done, total: None))
+        _Run(conn, data_dir, root, result).export_all(chosen, step)
     except (folder.Refused, _Stopped) as reason:
         result.stopped = str(reason)
     log.info("Export: %d applications, %d new folders, %d files added, %d problems, stopped: %s", result.selected or 0,
@@ -102,44 +119,45 @@ class _Run:
     result: Result
     today: str = field(default_factory=lambda: date.today().isoformat())
     failed: int = 0  # builds in a row
-    seen: set[int] = field(default_factory=set)
 
-    def all_of(self, chosen: list, step: Callable[[int, int], None]) -> None:
+    def export_all(self, chosen: list[tuple[int, str]], step: Callable[[int, int], None]) -> None:
         done = 0
         step(done, len(chosen))
         try:
             for job_id, day in chosen:
-                self.seen.add(job_id)
                 self._safely(self._application, job_id, day, name=f"Application {job_id}", file="its details")
                 done += 1
                 step(done, len(chosen))
-            self._refresh()
+            self._refresh({job_id for job_id, _ in chosen})
         except OSError as error:
             raise _Stopped(f"{error.strerror or type(error).__name__}: stopped after {done} of {len(chosen)} "
                            "applications; what's done stays") from None  # fmt: skip
 
     def _application(self, job_id: int, day: str) -> None:
         job = self._job(job_id)
-        found, damaged = self._record(job_id)
+        recorded, damaged = self._read_record(job_id)
         where, new = self._place(job_id, day, job)
         if where is None:
             return
         name = _name(job)
         if damaged:
             self._problem(name, "its record can't be read, so its answers and files are left out")
-        elif found:
-            self._safely(self._recorded_copies, where, job_id, found, name, name=name, file="its files")
+        elif recorded:
+            self._safely(self._recorded_copies, where, job_id, recorded, name, name=name, file="its files")
         else:
             self._newest(where, job_id, name)
-        self._safely(self._history, where, job_id, found, name=name, file=folder.HISTORY)
+        self._safely(self._history, where, job_id, recorded, name, name=name, file=folder.HISTORY)
         absent = "the app holds no text for this job" if new else None  # said once: a schedule would repeat it for ever
-        self._paper(where, POSTING, name, lambda: papers.job_description(job), absent)
+        self._paper(where, POSTING_PDF, name, lambda: papers.job_description(job), absent)
         if not damaged:
             self._paper(
-                where, NOTES, name, lambda: papers.council_notes(self.conn, job_id, self._versions(job_id, found))
+                where,
+                NOTES_PDF,
+                name,
+                lambda: papers.council_notes(self.conn, job_id, self._versions(job_id, recorded)),
             )
-        if found and not damaged:
-            self._paper(where, ANSWERS, name, lambda: self._answers(where, job_id, job, found, name))
+        if recorded and not damaged:
+            self._paper(where, ANSWERS_PDF, name, lambda: self._answers(where, job_id, job, recorded, name))
 
     def _job(self, job_id: int) -> dict:
         row = self.conn.execute(JOB, (job_id,)).fetchone()
@@ -147,7 +165,7 @@ class _Run:
             raise KeyError("no job")
         return dict(zip(("company", "title", "locations", "apply_url", "description"), row, strict=True))
 
-    def _record(self, job_id: int) -> tuple[dict | None, bool]:
+    def _read_record(self, job_id: int) -> tuple[dict | None, bool]:
         """The record, and whether it is damaged: then it holds only the date you chose, for the status history."""
         try:
             return record.recorded(self.conn, job_id), False
@@ -160,8 +178,8 @@ class _Run:
         so a crash can't make a second one, and whatever happens to the job's title a later run finds it."""
         row = self.conn.execute("SELECT folder FROM exported WHERE job_id = ?", (job_id,)).fetchone()
         if row is None:
-            day = date.fromisoformat(day).isoformat()
-            taken = [found[0] for found in self.conn.execute("SELECT folder FROM exported")]
+            day = date.fromisoformat(day).isoformat()  # a date that isn't real stops here, before it names a folder
+            taken = [saved for (saved,) in self.conn.execute("SELECT folder FROM exported")]
             relative = folder.free(self.root, day, folder.name(job["company"], job["title"]), taken)
             with self.conn:
                 self.conn.execute(SAVE, (job_id, relative, collect.now()))
@@ -173,63 +191,68 @@ class _Run:
         except folder.Refused as refusal:
             self._problem(_name(job), str(refusal))
             return None, False
-        self.result.folders += row is None
-        self.result.again += gone and row is not None
+        if row is None:
+            self.result.folders += 1
+        elif gone:
+            self.result.again += 1
         return where, row is None
 
-    def _recorded_copies(self, where: Path, job_id: int, found: dict, name: str) -> None:
-        for row in found["files"]:
+    def _recorded_copies(self, where: Path, job_id: int, recorded: dict, name: str) -> None:
+        for row in recorded["files"]:
             self._safely(self._recorded_copy, where, job_id, row, name=name, file="a recorded file")
 
     def _recorded_copy(self, where: Path, job_id: int, row: dict) -> None:
         """The very version the record names, or nothing: never the newest instead, never built again."""
-        target = where / DOCUMENTS[row["slot"]]
+        target = where / DOCUMENT_FILES[row["slot"]]
         source = pdf.tailored(self.data_dir, job_id, row["version"], row["slot"])
         if folder.missing(target) and source.is_file():
-            folder.copy(source, target)
+            folder.write(target, source.read_bytes())
             self.result.files += 1
 
     def _newest(self, where: Path, job_id: int, name: str) -> None:
         for kind, document in record.documents(self.conn, self.data_dir, job_id).items():
-            target = where / DOCUMENTS[kind]
+            target = where / DOCUMENT_FILES[kind]
             if document is None or not folder.missing(target):
                 continue
             if document[1].stat().st_size == 0:
                 self._problem(name, f"{target.name}: the app's copy is empty, so it was left out")
                 continue
-            folder.copy(document[1], target)
+            folder.write(target, document[1].read_bytes())
             self.result.files += 1
 
-    def _history(self, where: Path, job_id: int, found: dict | None) -> None:
-        happened = folder.history(where, papers.history(self.conn, job_id, found), self.today)
-        self.result.files += happened == "made"
-        self.result.refreshed += happened == "refreshed"
-        self.result.beside += happened == "beside"
-        if happened == "beside":
-            job = self._job(job_id)
-            self._problem(_name(job), "its status history no longer matches: the new one is beside it")
+    def _history(self, where: Path, job_id: int, recorded: dict | None, name: str) -> None:
+        happened = folder.history(where, papers.history(self.conn, job_id, recorded), self.today)
+        if happened == "made":
+            self.result.files += 1
+        elif happened == "refreshed":
+            self.result.refreshed += 1
+        elif happened == "beside":
+            self.result.beside += 1
+            self._problem(name, "its status history no longer matches: the new one is beside it")
 
-    def _versions(self, job_id: int, found: dict | None) -> list:
+    def _versions(self, job_id: int, recorded: dict | None) -> list[tuple[str, dict | None]]:
         """What the record names, else the newest finished ones."""
-        if found:
+        if recorded:
             return [(row["label"], runs.latest(self.conn, job_id, row["slot"], runs.NUMBERED, row["version"]))
-                    for row in found["files"]]  # fmt: skip
+                    for row in recorded["files"]]  # fmt: skip
         versions = [(name, runs.last_done(self.conn, job_id, kind)) for kind, name in record.DOCUMENTS]
-        return [(f"{name} v{version['version']}" if version else name, version) for name, version in versions]
+        return [(f"{name} v{version['version']}", version) for name, version in versions if version]
 
-    def _answers(self, where: Path, job_id: int, job: dict, found: dict, name: str) -> tuple:
+    def _answers(self, where: Path, job_id: int, job: dict, recorded: dict, name: str) -> tuple:
         """The record's paper, saying what is true of the copies in the folder now, not of the app's own files."""
-        states = {row["slot"]: _state(where / DOCUMENTS[row["slot"]], row["sha256"])
-                  for row in found["files"] if row["slot"] in DOCUMENTS}  # fmt: skip
-        back = record.moved_back(self.conn, job_id, found)
-        paper = papers.filled_answers(job, found, back and papers.day(back), states)
+        states = {row["slot"]: _state(where / DOCUMENT_FILES[row["slot"]], row["sha256"])
+                  for row in recorded["files"] if row["slot"] in DOCUMENT_FILES}  # fmt: skip
+        back = record.moved_back(self.conn, job_id, recorded)
+        paper = papers.filled_answers(job, recorded, back and papers.day(back), states)
         words = {"gone": record.MISSING, "different": papers.NOT_RECORDED}
         for slot, state in states.items():
             if state in words:
-                self._problem(name, f"{DOCUMENTS[slot]}: {words[state]}")
+                self._problem(name, f"{DOCUMENT_FILES[slot]}: {words[state]}")
         return paper
 
-    def _paper(self, where: Path, file: str, name: str, make: Callable, absent: str | None = None) -> None:
+    def _paper(
+        self, where: Path, file: str, name: str, make: Callable[[], tuple | None], absent: str | None = None
+    ) -> None:
         """A paper that isn't there yet: built in the data folder, so that only a finished PDF reaches yours."""
         target = where / file
         if not folder.missing(target):
@@ -252,7 +275,7 @@ class _Run:
                 if built:
                     self._problem(name, f"{file}: some characters could not be shown and were left out")
             if built:
-                folder.copy(work, target)
+                folder.write(target, work.read_bytes())
                 self.result.files += 1
         finally:
             work.unlink(missing_ok=True)
@@ -270,22 +293,23 @@ class _Run:
         self.failed = 0
         return built
 
-    def _refresh(self) -> None:
+    def _refresh(self, seen: set[int]) -> None:
         """Every other application's status history, whatever its date: only that text file, and never a folder or a
         file you deleted."""
         for job_id, relative in self.conn.execute("SELECT job_id, folder FROM exported").fetchall():
-            if job_id not in self.seen and not folder.missing(self.root / relative / folder.HISTORY):
-                self._safely(self._refreshed, job_id, relative, name=f"Application {job_id}", file=folder.HISTORY)
+            if job_id not in seen and not folder.missing(self.root / relative / folder.HISTORY):
+                self._safely(self._refresh_one, job_id, relative, name=f"Application {job_id}", file=folder.HISTORY)
 
-    def _refreshed(self, job_id: int, relative: str) -> None:
+    def _refresh_one(self, job_id: int, relative: str) -> None:
+        name = _name(self._job(job_id))
         try:
             where = folder.enter(self.root, relative)
         except folder.Refused as refusal:
-            self._problem(_name(self._job(job_id)), str(refusal))
+            self._problem(name, str(refusal))
             return
-        self._history(where, job_id, self._record(job_id)[0])
+        self._history(where, job_id, self._read_record(job_id)[0], name)
 
-    def _safely(self, work: Callable, *values: object, name: str, file: str) -> None:
+    def _safely(self, work: Callable[..., None], *values: object, name: str, file: str) -> None:
         """One file or application that can't be read as it should is a line, and the rest carries on."""
         try:
             work(*values)
@@ -304,10 +328,10 @@ def _name(job: dict) -> str:
     return f"{job['company']}, {job['title']}"
 
 
-def _state(target: Path, recorded: str) -> str:
+def _state(target: Path, sha256: str) -> str:
     if folder.missing(target):
         return "gone"
-    return "same" if folder.digest(target) == recorded else "different"
+    return "same" if folder.digest(target) == sha256 else "different"
 
 
 def _count(number: int, one: str, many: str) -> str:

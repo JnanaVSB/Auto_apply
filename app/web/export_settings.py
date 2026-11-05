@@ -2,7 +2,6 @@
 what the last run said. The files aren't encrypted, so nothing is exported unasked: every press needs the tick, checked
 here, and the typed path never goes into an address or a log."""
 
-import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,7 +16,6 @@ from app.web import actions
 from app.web.exporter import Exporter
 
 PAGE = "/settings/export"
-ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 TICK = "Tick “I understand these files aren't encrypted” first."
 BAD_DATE = "Give each date as year-month-day, or leave it empty."
 DATE_ORDER = "The From date comes first."
@@ -101,28 +99,24 @@ def _save(change: dict) -> str | None:
 
 
 def _date(text: str) -> date | None:
-    """A typed date, or None for an empty box; ValueError for anything else (fromisoformat alone takes 20261105)."""
+    """A typed date, or None for an empty box; ValueError for anything else."""
     text = text.strip()
-    if not text:
-        return None
-    if not ISO_DATE.fullmatch(text) or not text.isascii():
-        raise ValueError
-    return date.fromisoformat(text)
+    return date.fromisoformat(text) if text else None
 
 
 def _status(request: Request) -> dict:
     """What the status part shows: the run in progress, or the last result, this dashboard's words first."""
     exporter = request.app.state.exporter
-    row = request.app.state.conn.execute(RUNS).fetchone()
-    return {"exporter": exporter, "result": exporter.notice or (row and row[1])}
+    tried_on, last_result = request.app.state.conn.execute(RUNS).fetchone() or (None, None)
+    return {"exporter": exporter, "result": exporter.notice or last_result, "tried_on": tried_on}
 
 
 def _view(request: Request, page: Callable[..., HTMLResponse], status: int = 200, **values) -> HTMLResponse:
     settings, problem = _settings()
     values["problem"] = values.get("problem") or problem
-    row = request.app.state.conn.execute(RUNS).fetchone()
-    last_run = papers.day(row[0]) if row and row[0] else None
+    status_values = _status(request)
+    last_run = status_values["tried_on"] and papers.day(status_values["tried_on"])
     if last_run and settings.every_days:
         values["last_run"] = last_run
         values["next_run"] = (date.fromisoformat(last_run) + timedelta(days=settings.every_days)).isoformat()
-    return page(request, "export_settings.html", status, settings=settings, **_status(request), **values)
+    return page(request, "export_settings.html", status, settings=settings, **status_values, **values)

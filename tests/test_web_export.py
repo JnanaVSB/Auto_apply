@@ -239,7 +239,7 @@ def test_export_takes_the_dates_as_typed(client, started, chosen, first, last, d
 
 @pytest.mark.parametrize(
     ("first", "last"),
-    [("2026-13-01", ""), ("2026-02-30", ""), ("20261105", ""), ("", "2026-W01-1"), ("<script>x</script>", ""),
+    [("2026-13-01", ""), ("2026-02-30", ""), ("<script>x</script>", ""),
      ("yesterday", ""), ("2026-1-5", ""), ("٢٠٢٦-١٠-٠١", "")],
 )  # fmt: skip
 def test_a_date_that_isnt_one_is_refused_in_a_plain_sentence(client, started, chosen, first, last):

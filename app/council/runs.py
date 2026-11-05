@@ -124,10 +124,10 @@ def notes(conn: sqlcipher3.Connection, version: dict | None) -> dict | None:
     for found in members:
         for vote in (found["answer"] or {}).get("votes", []):
             votes.setdefault(vote["objection"], []).append((found["name"], vote["agree"], vote["why"]))
-    writer = next((json.loads(row[4]) for row in rows if row[0] == last and row[1] == "writer" and row[3] == "done"
-                   and row[4]),
-                  {})  # fmt: skip
-    draft = writer.get("draft", {})
+    written = next((json.loads(row[4]) for row in rows if row[0] == last and row[1] == "writer" and row[3] == "done"
+                    and row[4]),
+                   {})  # fmt: skip
+    draft = written.get("draft", {})
     renumbered = [(found["name"], found["answer"]["renumbered"]) for found in members
                   if (found["answer"] or {}).get("renumbered")]  # fmt: skip
     return {"round": last, "members": members, "votes": votes, "replies": draft.get("responses", []),

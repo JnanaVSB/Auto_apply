@@ -13,7 +13,6 @@ import sqlcipher3
 
 from app import collect, db, export
 from app.config import Config, ConfigError, load_config
-from app.export import papers
 
 LOCK = "export-lock.db"
 BUSY = "An export is running"
@@ -21,6 +20,7 @@ UNEXPECTED = "The export stopped on an unexpected error; the next export carries
 TRIED = """INSERT INTO export_runs (id, tried_on) VALUES (1, ?)
     ON CONFLICT (id) DO UPDATE SET tried_on = excluded.tried_on"""
 ENDED = "UPDATE export_runs SET last_result = ?, good_on = coalesce(?, good_on) WHERE id = 1"
+Press = tuple[date | None, date | None] | None  # the dates of an Export press; None: the schedule
 log = logging.getLogger("app.web")
 
 
@@ -57,7 +57,7 @@ class Exporter:
         if last is None or datetime.now(UTC) - last >= timedelta(days=settings.every_days):
             self._begin(None)
 
-    def _begin(self, press: tuple[date | None, date | None] | None) -> str | None:
+    def _begin(self, press: Press) -> str | None:
         with self._lock:
             if self._thread is not None:
                 return BUSY
@@ -66,14 +66,14 @@ class Exporter:
             self._thread.start()
         return None
 
-    def _run(self, press: tuple[date | None, date | None] | None) -> None:
+    def _run(self, press: Press) -> None:
         try:
             self.notice = self._words(press)
         finally:
             with self._lock:
                 self._thread = None
 
-    def _words(self, press: tuple[date | None, date | None] | None) -> str:
+    def _words(self, press: Press) -> str:
         self.tried = datetime.now(UTC)
         try:
             with closing(collect.lock(self.data_dir, LOCK, BUSY)), closing(db.connect(self.data_dir)) as conn:
@@ -91,26 +91,15 @@ class Exporter:
             log.error("Unexpected error in the export: %s", type(error).__name__)
             return UNEXPECTED
 
-    def _export(
-        self, conn: sqlcipher3.Connection, config: Config, press: tuple[date | None, date | None] | None
-    ) -> str:
-        start, end = press or (_since(conn, config.export.every_days), None)
-        result = export.run(conn, self.data_dir, config.export.folder, start, end, press is None, self._step)
-        self.problems = result.problems
-        words = (
-            result.stopped if result.selected is None else ". ".join(filter(None, (result.summary(), result.stopped)))
+    def _export(self, conn: sqlcipher3.Connection, config: Config, press: Press) -> str:
+        start, end = press or (export.since(conn, config.export.every_days), None)
+        result = export.run(
+            conn, self.data_dir, config.export.folder, start, end, step=self._step, unexported=press is None
         )
+        self.problems = result.problems
         with conn:
-            conn.execute(ENDED, (words, None if result.stopped else collect.now()))
-        return words
+            conn.execute(ENDED, (result.words(), None if result.stopped else collect.now()))
+        return result.words()
 
     def _step(self, done: int, total: int) -> None:
         self.done, self.total = done, total
-
-
-def _since(conn: sqlcipher3.Connection, every_days: int) -> date:
-    """A schedule's first date: the set days back, or the last good run if that is earlier, so a dashboard closed for
-    three weeks loses nothing."""
-    back = date.today() - timedelta(days=every_days)
-    row = conn.execute("SELECT good_on FROM export_runs WHERE id = 1").fetchone()
-    return min(back, date.fromisoformat(papers.day(row[0]))) if row and row[0] else back

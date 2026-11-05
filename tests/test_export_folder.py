@@ -3,7 +3,6 @@ and data folder in a temporary folder, never the real ones."""
 
 import hashlib
 import os
-import shutil
 import stat
 import unicodedata
 
@@ -493,7 +492,7 @@ def test_a_file_is_written_for_you_only_from_the_first_moment(root, loose_umask,
 
     monkeypatch.setattr(folder.os, "replace", replace)
     folder.write(root / "a.txt", b"text")
-    folder.copy(root / "a.txt", root / "b.txt")
+    folder.write(root / "b.txt", b"text")
     assert seen == [0o600, 0o600] and rights(root / "a.txt") == 0o600 and rights(root / "b.txt") == 0o600
     assert (root / "b.txt").read_bytes() == b"text"
     assert sorted(path.name for path in root.iterdir()) == ["a.txt", "b.txt"]
@@ -505,21 +504,12 @@ def test_rights_never_come_from_a_chmod_afterwards(root, monkeypatch):
     folder.write(root / "a.txt", b"text")
 
 
-def test_a_copy_keeps_no_rights_of_its_source(root, loose_umask):
-    (root / "open.pdf").write_bytes(b"%PDF")
-    (root / "open.pdf").chmod(0o666)
-    folder.copy(root / "open.pdf", root / "copy.pdf")
-    assert rights(root / "copy.pdf") == 0o600
-
-
-@pytest.mark.parametrize("use", [lambda path: folder.write(path, b"new"), None])
-def test_a_planted_partial_link_is_never_written_through(root, tmp_path, use):
+def test_a_planted_partial_link_is_never_written_through(root, tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("yours", encoding="utf-8")
-    (root / "source.pdf").write_bytes(b"new")
     (root / "a.txt.partial").symlink_to(outside)
     with pytest.raises(OSError):
-        (use or (lambda path: folder.copy(root / "source.pdf", path)))(root / "a.txt")
+        folder.write(root / "a.txt", b"new")
     assert outside.read_text(encoding="utf-8") == "yours" and folder.missing(root / "a.txt")
 
 
@@ -560,14 +550,6 @@ def test_a_full_disk_leaves_the_old_file_and_no_partial(old_file, monkeypatch):
     assert unchanged(old_file)
 
 
-def test_a_full_disk_in_a_copy_makes_no_real_name(root, monkeypatch):
-    (root / "source.pdf").write_bytes(b"%PDF")
-    monkeypatch.setattr(shutil, "copyfileobj", lambda *_: (_ for _ in ()).throw(OSError(28, "No space left")))
-    with pytest.raises(OSError, match="No space"):
-        folder.copy(root / "source.pdf", root / "copy.pdf")
-    assert sorted(path.name for path in root.iterdir()) == ["source.pdf"]
-
-
 def test_an_unexpected_failure_leaves_no_partial_either(old_file, monkeypatch):
     monkeypatch.setattr(folder.os, "fsync", lambda _: (_ for _ in ()).throw(ValueError("odd")))
     with pytest.raises(ValueError, match="odd"):
@@ -582,25 +564,6 @@ def test_the_data_reaches_the_disk_before_the_swap(root, monkeypatch):
     monkeypatch.setattr(folder.os, "replace", lambda *names: (order.append("swapped"), swap(*names))[1])
     folder.write(root / "a.txt", b"text")
     assert order == ["synced", "swapped"]
-
-
-def test_a_copy_of_an_empty_file_is_an_empty_file(root):
-    (root / "empty.pdf").write_bytes(b"")
-    folder.copy(root / "empty.pdf", root / "copy.pdf")
-    assert (root / "copy.pdf").read_bytes() == b""
-
-
-def test_a_source_that_went_away_makes_nothing(root):
-    with pytest.raises(FileNotFoundError):
-        folder.copy(root / "gone.pdf", root / "copy.pdf")
-    assert list(root.iterdir()) == []
-
-
-def test_a_large_copy_is_whole(root):
-    data = os.urandom(3_000_000)
-    (root / "big.pdf").write_bytes(data)
-    folder.copy(root / "big.pdf", root / "copy.pdf")
-    assert (root / "copy.pdf").read_bytes() == data
 
 
 def test_a_digest_is_the_file_s_sha_256(root):
