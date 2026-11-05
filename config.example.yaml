@@ -26,6 +26,9 @@ sources:
     - https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/.github/scripts/listings.json
     - https://raw.githubusercontent.com/vanshb03/New-Grad-2027/dev/.github/scripts/listings.json
     - https://raw.githubusercontent.com/poteto/hiring-without-whiteboards/main/README.md
+  # The phone book also reads the company boards linked from Hacker News' monthly "Who is hiring?" threads.
+  # Only board names are kept, never what people wrote. false = off.
+  hacker_news: true
 
 # While the dashboard (python -m app.web) is open, collect every this many hours (1 to 168). 0 = off.
 collect_every_hours: 0
@@ -41,6 +44,8 @@ gmail_every_minutes: 30
 gmail_read_all: false
 # New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
 requests_per_second: 1
+# The phone's way in, from Tailscale: Settings → Phone sets it, and docs/phone-setup.md shows how. Empty: off.
+# phone_address: https://laptop.tail0000.ts.net
 
 # Job scoring. The quick check passes a job with one of your keywords in its title, or with both its meaning match
 # and its skill overlap at or above these thresholds (0 to 1); your answer key helps choose them.

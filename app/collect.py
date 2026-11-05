@@ -22,7 +22,7 @@ from app import db, jobs
 from app.config import Config, ConfigError, RoleSettings, SimplifyList, load_config
 from app.fetch import BLOCKED_HINT, COLLECT_HOSTS, Fetcher, FetchError, NotFound, Unreachable
 from app.keychain import KeychainError
-from app.sources import Job, SourceError, is_simplify_site, posting_of, simplify
+from app.sources import Job, SourceError, host_of, is_simplify_site, plain_text, posting_of, simplify
 from app.sources.boards import BOARDS
 
 LOCK_FILE = "collect-lock.db"  # held by a collection, or by a refresh except while it is paused
@@ -49,6 +49,10 @@ SAVE_SOURCE = """INSERT INTO sources (name, etag, last_ok, found_by) VALUES (?, 
 LINK_BOARD = """INSERT INTO sources (name, found_by) VALUES (?, 'simplify') ON CONFLICT (name)
     DO UPDATE SET misses = 0, retired_on = NULL WHERE retired_on IS NOT NULL AND ? > retired_on"""
 LISTED_BY = "SELECT count(*) FROM job_sources WHERE source = ? AND listed = 1"
+SAVED_BY_LINK = "SELECT id, company, title, description FROM jobs WHERE apply_url = ?"
+# Simplify's lists never give a job's text, so only a board or a feed can have written it
+HAS_SOURCE_TEXT = "SELECT 1 FROM job_sources WHERE job_id = ? AND source != 'manual' AND source NOT LIKE 'simplify:%'"
+MAX_PASTED = 20_000  # characters of a job's text
 COUNT_MISS = """INSERT INTO sources (name, misses, found_by) VALUES (?, 1, 'you') ON CONFLICT (name)
     DO UPDATE SET misses = misses + 1 RETURNING misses"""  # only one of your extra_boards is new here
 # A "discovered" board: found by the phone book, with no job saved from it yet (0 or 1, never NULL).
@@ -437,14 +441,15 @@ def add(
     link: str,
     ask: Callable[[str], str] = input,
     details: tuple[str, str] | None = None,
+    text: str = "",
 ) -> str:
     """Save one job the user found; their role and US filters do not apply. Returns what happened.
 
     For a link that is not on a job board, `details` gives the company and job title; without them, `ask` asks.
+    `text` is the job's text pasted by the user, for such a link; a board's own text is better.
     """
     link = link.strip()
-    parts = urlsplit(link)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    if not host_of(link) or not link.lower().startswith(("https://", "http://")):
         raise CollectError("That is not a web link; it must start with https://")
     if is_simplify_site(link):
         raise CollectError(
@@ -458,14 +463,17 @@ def add(
         job = next((job for job in read_board(fetcher, kind, board)[0] if job.source_job_id == job_id), None)
         if job is None:
             raise CollectError(f"That job is no longer on the {kind.title()} board '{board}'; it may be closed.")
-    else:  # another site: stored with its link only; the description is read in a later phase
+    else:  # another site: stored with its link, and the job's text if you pasted it
+        pasted = plain_text(text)
+        if len(pasted) > MAX_PASTED:
+            raise CollectError(f"The job's text is too long: at most {MAX_PASTED:,} characters.")
         source = "manual"
         job = Job(source=source, source_job_id=link, company="", title="", url=link, locations=[])
-        row = conn.execute("SELECT company, title FROM jobs WHERE apply_url = ?", (jobs.clean_link(job),)).fetchone()
+        row = conn.execute(SAVED_BY_LINK, (jobs.clean_link(job),)).fetchone()
         if row:
-            return f"Already saved: {row[0]}, {row[1]}"
+            return _add_text(conn, row, pasted)
         company, title = details or (ask("Company: "), ask("Job title: "))
-        job.company, job.title = company.strip(), title.strip()
+        job.company, job.title, job.description = company.strip(), title.strip(), pasted or None
         if not job.company or not job.title:
             raise CollectError("Both the company and the job title are needed.")
     counts = jobs.save(
@@ -477,6 +485,18 @@ def add(
         with conn:  # remembered (and no longer retired), so later collections keep this job up to date
             conn.execute(SAVE_SOURCE, (source, None, now()))
     return f"{'Added' if counts.new else 'Already saved'}: {job.company}, {job.title}"
+
+
+def _add_text(conn: sqlcipher3.Connection, row: tuple, pasted: str) -> str:
+    """Pasted text for a saved job: it fills an empty job or replaces what you pasted, never a board's or a feed's."""
+    job_id, company, title, description = row
+    if not pasted or pasted == description:
+        return f"Already saved: {company}, {title}"
+    if description and conn.execute(HAS_SOURCE_TEXT, (job_id,)).fetchone():
+        return f"Already saved: {company}, {title}. Its text comes from its board or feed, so the text was not changed."
+    with conn:  # the job goes back through scoring, by the job_text_changed trigger
+        conn.execute("UPDATE jobs SET description = ? WHERE id = ?", (pasted, job_id))
+    return f"Text saved: {company}, {title}"
 
 
 def show(conn: sqlcipher3.Connection, link: str) -> str:

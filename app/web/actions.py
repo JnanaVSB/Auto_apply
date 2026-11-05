@@ -18,10 +18,10 @@ import yaml
 
 from app import collect, db, jobs
 from app import config as settings_file
-from app.config import AISettings, Config, ConfigError, ScoringSettings, load_config
+from app.config import AISettings, Config, ConfigError, ScoringSettings, SourceSettings, load_config
 from app.fetch import Fetcher, FetchError, NotFound
 from app.keychain import KeychainError
-from app.sources import BOARD_NAME, SourceError, greenhouse
+from app.sources import BOARD_NAME, SourceError, closed_site, greenhouse
 from app.sources.boards import BOARDS
 from app.web import queries
 
@@ -29,6 +29,9 @@ LEGAL_ENDINGS = {"inc", "llc", "ltd", "corp", "corporation", "co", "company"}
 MAX_NAME = 100
 CANT_SAVE = (ConfigError, KeychainError, db.DatabaseError, collect.CollectError)  # said as they are
 CANT_READ = (FetchError, SourceError)  # "The job's board could not be read (…)."
+HAS_TEXT = "SELECT 1 FROM jobs WHERE id = ? AND description IS NOT NULL"
+NEEDS_TEXT = "The app never reads this site: paste the job's text here so it can be scored."
+BUSY = "The database is busy (a collection is saving). Try again in a moment."
 ADDING = threading.Lock()  # the two "add" actions run one at a time, so a double click finds "Already saved"
 LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the settings form; there is no limit
 # Whole numbers on the settings form
@@ -82,16 +85,25 @@ def set_answer(conn: sqlcipher3.Connection, job_id: int, label: str) -> bool:
     return True
 
 
-def add_job(data_dir: Path, fetcher: Fetcher, link: str, company: str, title: str) -> tuple[str, int | None]:
+def add_job(
+    data_dir: Path, fetcher: Fetcher, link: str, company: str, title: str, text: str = ""
+) -> tuple[str, int | None]:
     """`collect add` with its own rules; the message, and the job's number when it is saved."""
     try:
         with ADDING, closing(db.connect(data_dir)) as conn:
-            message = collect.add(conn, fetcher, link, details=(company, title))
-            return message, queries.job_id_by_link(conn, link)
+            message = collect.add(conn, fetcher, link, details=(company, title), text=text)
+            job_id = queries.job_id_by_link(conn, link)
+            if job_id and closed_site(link) and not conn.execute(HAS_TEXT, (job_id,)).fetchone():
+                message = f"{message}. {NEEDS_TEXT}"
+            return message, job_id
     except CANT_SAVE as error:
         return str(error), None
     except CANT_READ as error:
         return f"The job's board could not be read ({error}).", None
+    except sqlcipher3.OperationalError as error:
+        if "locked" not in str(error):
+            raise
+        return BUSY, None  # said on the form, so what was typed stays
 
 
 def board_names(company: str) -> list[str]:
@@ -281,6 +293,9 @@ def settings_form() -> dict[str, str]:
         "phonebook_lists": "\n".join(sources.get("phonebook_lists") or []),
     } | {name: str(raw.get(name, Config.model_fields[name].default)) for name in NUMBERS}  # defaults from Config
     form["gmail_read_all"] = "on" if raw.get("gmail_read_all", False) else "off"
+    form["hacker_news"] = (
+        "on" if sources.get("hacker_news", SourceSettings.model_fields["hacker_news"].default) else "off"
+    )
     for number, listing in enumerate(sources.get("simplify_lists") or []):
         form[f"list_url_{number}"], form[f"list_level_{number}"] = listing["url"], listing["level"]
     scoring, defaults = raw.get("scoring") or {}, ScoringSettings()
@@ -341,6 +356,7 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
             ],
             "extra_boards": _lines(form.get("extra_boards", "")),
             "phonebook_lists": _lines(form.get("phonebook_lists", "")),
+            "hacker_news": form.get("hacker_news") == "on",
         },
         **{name: whole(form.get(name, "")) for name in NUMBERS},
         "gmail_read_all": form.get("gmail_read_all") == "on",
@@ -355,4 +371,6 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
     ai |= {"evaluator": evaluator} if evaluator else {}
     # on other pages
     kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending", "council", "export")}
+    if "phone_address" in old:  # on its own page
+        settings["phone_address"] = old["phone_address"]
     return settings | {name: section for name, section in {"scoring": scoring, "ai": ai, **kept}.items() if section}

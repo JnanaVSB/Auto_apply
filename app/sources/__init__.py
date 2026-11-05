@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
+
+from app.resume import CONTROL
 
 # Job-board websites whose jobs can be read through a public API. European-hosted boards have no such API.
 BOARD_HOSTS = {
@@ -17,6 +19,10 @@ BOARD_HOSTS = {
 }
 BOARD_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,99}")  # also keeps the name safe to put into an API address
 JOB_ID = re.compile(r"[A-Za-z0-9-]+")
+# LinkedIn, Handshake, and Indeed with its country sites (indeed.co.uk, indeed.com.au, ...), with any subdomain
+CLOSED_SITE = re.compile(
+    r"(.+\.)?(linkedin\.(com|cn)|lnkd\.in|joinhandshake\.(com|co\.uk)|indeed\.(com|[a-z]{2}|co\.[a-z]{2}|com\.[a-z]{2}))"
+)
 WORKPLACES = {"remote": "remote", "hybrid": "hybrid", "onsite": "on-site"}
 
 
@@ -80,10 +86,27 @@ def workplace(value: Any) -> str | None:
     return WORKPLACES.get(re.sub(r"[^a-z]", "", value.lower())) if isinstance(value, str) else None
 
 
+def host_of(url: str) -> str | None:
+    """The site an address reaches, read as a browser reads it ("" when it names none, None when it can't be read):
+    a backslash is a slash, and percent signs, full-width letters and other full stops still spell the same name."""
+    try:
+        host = urlsplit(url.strip().replace("\\", "/")).hostname or ""
+        return unquote(host).encode("idna").decode().rstrip(".")  # "simplify.jobs." reaches the same site
+    except (ValueError, UnicodeError):
+        return None
+
+
 def is_simplify_site(url: str) -> bool:
-    """True for any address on simplify.jobs, which the app must never open itself (its terms forbid it)."""
-    host = (urlsplit(url.strip()).hostname or "").rstrip(".")  # "simplify.jobs." reaches the same site
-    return host == "simplify.jobs" or host.endswith(".simplify.jobs")
+    """True for any address on simplify.jobs, which the app must never open itself (its terms forbid it), and for one
+    that can't be read."""
+    host = host_of(url)
+    return host is None or host == "simplify.jobs" or host.endswith(".simplify.jobs")
+
+
+def closed_site(url: str) -> bool:
+    """True for a site the app never reads: you open it yourself. An address that can't be read counts as one."""
+    host = host_of(url)
+    return not host or CLOSED_SITE.fullmatch(host) is not None
 
 
 def posting_of(url: str) -> tuple[str, str, str] | None:
@@ -178,7 +201,16 @@ def _visible(html: str) -> str:
     return text
 
 
+def _tidy(text: str) -> str:
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def html_to_text(html: str) -> str:
     """The visible text of an HTML fragment; scripts, styles and tags are dropped, so nothing can run later."""
-    lines = (" ".join(line.split()) for line in _visible(html.replace("\0", "")).splitlines())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return _tidy(_visible(html.replace("\0", "")))
+
+
+def plain_text(text: str) -> str:
+    """Text you pasted, as typed: nothing is read as HTML ("under <5 years" stays), and the pages show it escaped."""
+    return _tidy(CONTROL.sub("", text))

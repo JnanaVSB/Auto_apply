@@ -1,6 +1,18 @@
+from contextlib import closing
+
+import httpx
 import pytest
 
-from app.sources import board_of, day_from_timestamp, html_to_text, is_simplify_site, posting_of
+from app.fetch import ALLOWED_HOSTS, Fetcher, FetchError
+from app.sources import (
+    board_of,
+    closed_site,
+    day_from_timestamp,
+    html_to_text,
+    is_simplify_site,
+    plain_text,
+    posting_of,
+)
 
 
 @pytest.mark.parametrize(
@@ -78,3 +90,155 @@ def test_html_becomes_plain_text_and_scripts_are_dropped():
         "<style>p {color: red}</style><ul><li>Python</li><li>RL</li></ul><p>Café 日本\0</p>"
     )
     assert html_to_text(html) == "About Acme\n\nWe build things.\n\n- Python\n\n- RL\n\nCafé 日本"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.linkedin.com/jobs/view/1",
+        "https://uk.linkedin.com/jobs/view/1",
+        "https://LINKEDIN.COM/jobs",
+        "https://linkedin.com./jobs",
+        "https://linkedin.com:443/jobs",
+        "http://linkedin.com/jobs",
+        "https://user@linkedin.com/jobs",
+        "https://uk.indeed.com/viewjob",
+        "https://indeed.co.uk/viewjob",
+        "https://indeed.com.au/viewjob",
+        "https://de.indeed.com/viewjob",
+        "https://indeed.de/viewjob",
+        "https://www.indeed.com/viewjob",
+        "https://app.joinhandshake.com/jobs/1",
+        "https://asu.joinhandshake.com/jobs/1",
+        "https://[x",  # an address that can't be read counts as closed
+        "not an address",
+    ],
+)
+def test_closed_sites(url):
+    assert closed_site(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://notlinkedin.com/jobs",
+        "https://linkedin.com.evil.com/jobs",
+        "https://evil.com/linkedin.com",
+        "https://evil.com?u=linkedin.com",
+        "https://indeed.evil.com/jobs",
+        "https://indeedjobs.com/jobs",
+        "https://notjoinhandshake.com/jobs",
+        "https://handshake.com/jobs",
+        "https://jobs.lever.co/acme/1",
+    ],
+)
+def test_look_alikes_are_not_closed_sites(url):
+    assert not closed_site(url)
+
+
+def test_html_and_plain_text_tidy_spaces_the_same_way_and_only_html_reads_tags():
+    typed = "  under <5 years  \n\n\n\n and  more "
+    assert plain_text(typed) == "under <5 years\n\nand more"
+    assert html_to_text("<p>one   two</p>\n\n\n\n<p>three</p>") == "one two\n\nthree"
+
+
+SOFT_HYPHEN, ZERO_WIDTH = "\u00ad", "\u200b"
+# Spelled the way a browser still reads as the site: {} is the site's name with a dot in it, e.g. linkedin.com
+BROWSER_FORMS = [
+    "https://www.{}\\jobs\\view\\1",  # a backslash is a slash
+    "https://www.{}\\@evil.example/",
+    "HTTPS://WWW.{}/",
+    "https://{}./jobs",
+    "https://{}:443/jobs",
+    "https://user:word@{}/jobs",
+    "  https://{}/jobs  ",
+]
+SITES = ["linkedin.com", "uk.indeed.com", "indeed.co.uk", "app.joinhandshake.com", "lnkd.in", "linkedin.cn",
+         "joinhandshake.co.uk"]  # fmt: skip
+SPELLED = [
+    "https://linked%69n.com/jobs",
+    "https://www.indeed%2Ecom/jobs",
+    "https://join%68andshake.com/jobs",
+    "https://ｌｉｎｋｅｄｉｎ.com/jobs",  # full-width letters
+    "https://ｉｎｄｅｅｄ.com/jobs",
+    "https://linkedin。com/jobs",  # other full stops
+    "https://linkedin．com/jobs",
+    "https://linkedin｡com/jobs",
+    "https://indeed。co。uk/jobs",
+    "https://joinhandſhake.com/jobs",  # long s
+    f"https://link{SOFT_HYPHEN}edin.com/jobs",
+    f"https://linked{ZERO_WIDTH}in.com/jobs",
+    f"https://in{SOFT_HYPHEN}deed.com/jobs",
+    f"https://join{ZERO_WIDTH}handshake.com/jobs",
+    "https://LinkedIn.CN/x",
+    "https://uk.lnkd.in/abc",
+    "https://app.joinhandshake.co.uk/jobs",
+]
+OPEN_SITES = [
+    "https://evil.example\\@linkedin.com/",  # the backslash ends the site's name: a browser goes to evil.example
+    "https://notlinkedin.com/jobs",
+    "https://müller.example/jobs",
+    "https://jobs.lever.co/acme/1",
+    "https://lnkd.in.evil.com/x",
+    "https://notlnkd.in/x",
+    "https://linkedin.cn.evil.com/x",
+    "https://notlinkedin.cn/x",
+    "https://joinhandshake.co.uk.evil.com/x",
+    "https://notjoinhandshake.co.uk/x",
+    "https://lіnkedin.com/jobs",  # a Cyrillic letter: another site, however alike it looks
+]
+
+
+@pytest.mark.parametrize("url", [form.format(site) for form in BROWSER_FORMS for site in SITES] + SPELLED)
+def test_closed_sites_as_a_browser_reads_them(url):
+    assert closed_site(url)
+
+
+@pytest.mark.parametrize("url", OPEN_SITES)
+def test_addresses_a_browser_opens_elsewhere_are_not_closed_sites(url):
+    assert not closed_site(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://simplify.jobs\\p\\1",
+        "https://simplify.jobs\\@evil.example/",
+        "https://simpl%69fy.jobs/p/1",
+        "https://simplify%2Ejobs/p/1",
+        "https://ｓｉｍｐｌｉｆｙ.jobs/p/1",
+        "https://simplify。jobs/p/1",
+        "https://ſimplify.jobs/p/1",
+        f"https://simp{SOFT_HYPHEN}lify.jobs/p/1",
+        f"https://simplify{ZERO_WIDTH}.jobs/p/1",
+        "https://www.simplify.jobs./p/1",
+        "https://a..b/x",  # can't be read: counts as simplify.jobs, so the app never opens it
+    ],
+)
+def test_simplify_as_a_browser_reads_it(url):
+    assert is_simplify_site(url)
+
+
+@pytest.mark.parametrize(
+    "url", ["https://notsimplify.jobs/1", "https://evil.example\\@simplify.jobs/", "not an address"]
+)
+def test_addresses_that_are_not_simplify(url):
+    assert not is_simplify_site(url)
+
+
+@pytest.mark.parametrize("url", ["https://a..b/x", "https://[x", "https://" + "a" * 64 + ".com/"])
+def test_an_address_that_cannot_be_read_counts_as_closed(url):
+    assert closed_site(url)
+
+
+def test_no_address_the_app_may_download_from_is_a_closed_site():
+    assert not [host for host in ALLOWED_HOSTS if closed_site(f"https://{host}/")]
+
+
+@pytest.mark.parametrize(
+    "url", ["https://www.linkedin.com/jobs", "https://www.indeed.com/jobs", "https://app.joinhandshake.com/"]
+)
+def test_the_app_itself_refuses_the_closed_sites(url):
+    with closing(Fetcher(httpx.MockTransport(lambda request: httpx.Response(200)))) as fetcher:
+        with pytest.raises(FetchError, match="address not allowed"):
+            fetcher.get_text(url)

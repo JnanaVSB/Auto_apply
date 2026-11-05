@@ -9,6 +9,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
+
 SCRYPT = {"n": 2**15, "r": 8, "p": 1}  # about 32 MB and 0.1 s per check, so guessing is slow
 SCRYPT_MAXMEM = 64 * 2**20
 IDLE_SECONDS = 30 * 60
@@ -16,10 +19,12 @@ MAX_SESSION_SECONDS = 12 * 60 * 60
 MAX_WRONG = 5  # wrong passwords in a row before login is locked
 LOCKOUT_SECONDS = 15 * 60
 COOKIE = "auto_apply_session"  # not the common "session": cookies are shared by every web program on 127.0.0.1
+PHONE_COOKIE = "__Host-auto_apply_session"  # the browser itself keeps this name to https and this exact address
 SAFETY_HEADERS = {
     # only the dashboard's own files; no inline scripts, nothing from the internet, never inside another site's page
     "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; "
-    "font-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "font-src 'self'; connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; "
+    "base-uri 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     # job sites are not told where you came from; "no-referrer" would also hide where a form came from, which the
@@ -97,6 +102,16 @@ class Logins:
 
     def log_out(self, token: str | None) -> None:
         self.sessions.pop(token or "", None)
+
+
+def cookie_name(remote: bool) -> str:
+    return PHONE_COOKIE if remote else COOKIE
+
+
+def laptop_only(request: Request, refusal: str) -> None:
+    """Refused on the phone address: for what must be done on the laptop itself."""
+    if request.state.remote:
+        raise HTTPException(403, refusal)
 
 
 def token_matches(sent: str | None, session: Session) -> bool:

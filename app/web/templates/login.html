@@ -8,5 +8,5 @@
   <button type="submit">Log in</button>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 </form>
-<p class="hint">Forgot it? Stop the dashboard and run <code>python -m app.web reset-password</code>.</p>
+<p class="hint">Forgot it? {% if remote %}Reset it on the laptop: stop{% else %}Stop{% endif %} the dashboard and run <code>python -m app.web reset-password</code>.</p>
 {% endblock %}

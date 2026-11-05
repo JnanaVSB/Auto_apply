@@ -273,8 +273,47 @@ def test_the_stored_fonts_are_the_recorded_releases():
     assert {name: hashlib.sha256((fonts / name).read_bytes()).hexdigest() for name in recorded} == recorded
 
 
-def test_only_the_font_files_may_be_kept_by_the_browser(client):
+def test_only_public_files_may_be_kept_by_the_browser(client):
     font = client.get("/static/fonts/SourceSerif4-Regular.ttf.woff2")
     assert font.headers["Cache-Control"] == "private, max-age=86400"
-    for path in ("/static/app.css", "/login", "/static/fonts/missing.woff2"):
+    again = client.get(font.url, headers={"If-None-Match": font.headers["ETag"]})
+    assert (again.status_code, again.headers["Cache-Control"]) == (304, "private, max-age=86400")
+    for path in ("/login", "/static/nothing.css", "/static/fonts/missing.woff2", "/static/"):
         assert client.get(path).headers["Cache-Control"] == "no-store"
+
+
+def test_program_files_are_kept_but_checked_with_the_dashboard_each_time(client):
+    first = client.get("/static/app.css")
+    assert (first.status_code, first.headers["Cache-Control"]) == (200, "no-cache")
+    again = client.get("/static/app.css", headers={"If-None-Match": first.headers["ETag"]})
+    assert (again.status_code, again.headers["Cache-Control"], again.content) == (304, "no-cache", b"")
+
+
+def test_a_page_is_never_kept_even_if_its_address_looks_like_a_file(client):
+    before_login = [client.get(path, follow_redirects=False) for path in ("/nothing.woff2", "/nothing.css")]
+    assert [response.status_code for response in before_login] == [303, 303]
+    log_in(client)
+    missing = ("/nowhere", "/nothing.woff2", "/nothing.css", "/nothing/static/app.css")
+    pages = [client.get("/")] + [client.get(path) for path in missing]
+    assert [response.status_code for response in pages] == [200, 404, 404, 404, 404]
+    for response in before_login + pages:
+        assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_a_refused_request_for_a_public_file_is_never_kept(client):
+    font = "/static/fonts/SourceSerif4-Regular.ttf.woff2"
+    for path in ("/static/app.css", font):
+        refused = client.get(path, headers={"Host": "attacker.example:8765"})
+        assert (refused.status_code, refused.headers["Cache-Control"]) == (400, "no-store")
+        posted = client.post(path)
+        assert (posted.status_code, posted.headers["Cache-Control"]) == (405, "no-store")
+
+
+def test_the_manifest_is_allowed_and_everything_else_stays_shut(client):
+    refused = client.get("/login", headers={"Host": "attacker.example:8765"})
+    log_in(client)
+    for response in (client.get("/"), client.get("/static/app.css"), client.get("/nowhere"), refused):
+        assert response.headers["Content-Security-Policy"] == (  # written out: any other change to it must fail here
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
+            "connect-src 'self'; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        )

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Phone{% endblock %}
+{% block content %}
+<h1>Phone</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if restart %}<p class="result" role="status">Saved. Restart the dashboard to use it.</p>{% endif %}
+<p>Open the dashboard on your phone, through your own Tailscale network. Nothing outside it can reach the dashboard, and
+  it stays off until you save an address here (the guide: <code>docs/phone-setup.md</code>).</p>
+{% if remote %}
+<p>Phone address: <strong>{{ saved or "none saved" }}</strong></p>
+<p class="hint">Change it on the laptop.</p>
+{% else %}
+<form method="post" action="/settings/phone" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Phone address
+    <input name="phone_address" maxlength="200" autocomplete="off" spellcheck="false" inputmode="url" value="{{ box }}"></label>
+  <p class="hint">As Tailscale shows it, for example https://laptop.tail0000.ts.net. Empty turns it off.</p>
+  <p><button type="submit">Save</button></p>
+</form>
+<p class="hint">Applies the next time you start the dashboard.</p>
+{% endif %}
+{% endblock %}

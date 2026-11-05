@@ -457,7 +457,13 @@ class BoardView:
 
 def found_by_label(found_by: str | None) -> str:
     """Who found a board, in the page's words."""
-    labels = {None: "before the phone book", "simplify": "Simplify", "you": "you", "commoncrawl": "Common Crawl"}
+    labels = {
+        None: "before the phone book",
+        "simplify": "Simplify",
+        "you": "you",
+        "commoncrawl": "Common Crawl",
+        "hackernews": "Hacker News",
+    }
     return labels.get(found_by) or (f"list {found_by[5:]}" if found_by.startswith("list:") else found_by)
 
 

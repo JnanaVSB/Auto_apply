@@ -56,7 +56,7 @@ def one_crawl(monkeypatch):
     monkeypatch.setattr(phonebook, "CRAWLS_TO_READ", 1)
 
 
-NO_LISTS = SourceSettings()
+NO_LISTS = SourceSettings(hacker_news=False)
 
 
 def refresh(conn, data_dir, pages, sources=NO_LISTS, **web_options):
@@ -188,7 +188,9 @@ def test_a_collection_never_contacts_common_crawl(conn, data_dir):
 
 
 OTHER_LIST = "https://raw.githubusercontent.com/someone/jobs/main/README.md"
-LISTS = SourceSettings(simplify_lists=[SimplifyList(url=LIST, level="intern")], phonebook_lists=[OTHER_LIST])
+LISTS = SourceSettings(
+    simplify_lists=[SimplifyList(url=LIST, level="intern")], phonebook_lists=[OTHER_LIST], hacker_news=False
+)
 
 
 def test_lists_give_names_including_simplifys_closed_jobs(conn, data_dir):
@@ -366,7 +368,7 @@ def test_a_real_sighting_asks_again_a_name_only_the_cross_check_found_missing(co
     links = httpx.Response(200, text="[Apply](https://jobs.ashbyhq.com/acme/1) [Old](https://jobs.lever.co/gone/2)")
     ashby = {"jobs": [ashby_job(jobUrl="https://jobs.ashbyhq.com/acme/9f8e-7d6c")]}
     pages = crawl_pages(LEVER_URLS) | {OTHER_LIST: links, ASHBY_ACME: ashby}
-    refresh(conn, data_dir, pages, SourceSettings(phonebook_lists=[OTHER_LIST]))
+    refresh(conn, data_dir, pages, SourceSettings(phonebook_lists=[OTHER_LIST], hacker_news=False))
     assert one(conn, "SELECT found_by, result FROM phonebook WHERE board = 'ashby:acme'") == (
         "list:someone/jobs", "added")  # fmt: skip
     assert one(conn, "SELECT checked_on FROM phonebook WHERE board = 'lever:gone'") == gone_checked  # stays decided

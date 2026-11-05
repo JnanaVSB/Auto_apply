@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import db
+from app.collect import MAX_PASTED
 from app.config import ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
@@ -33,6 +34,7 @@ from app.web import (
     export_settings,
     gmail_settings,
     look,
+    phone_settings,
     pilot,
     prepare,
     queries,
@@ -55,10 +57,25 @@ UPLOAD = "/resume-profile/upload"
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_FIELDS = 500
 # The Questionnaire sends up to 300 More answers, two fields each, with up to 3,000 characters a row
-FORM_LIMITS = {UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS), "/questionnaire": (8 * 1024 * 1024, 1000)}
+# /add/job: a job's pasted text, at most 12 bytes a character once a form has encoded it
+FORM_LIMITS = {
+    UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS),
+    "/questionnaire": (8 * 1024 * 1024, 1000),
+    "/add/job": (256 * 1024, MAX_FIELDS),
+}
 DIGITS = re.compile(r"[0-9]+")  # plain digits only: Python's isdigit() also accepts "²"
+SERVE_MARKS = ("tailscale-user-login", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")  # Serve adds these
+FUNNEL = "tailscale-funnel-request"
+NOT_ALLOWED = "This address is not allowed. Open the dashboard at the address shown in the terminal."
+UNKNOWN_PHONE = (
+    "This is a Tailscale address the dashboard doesn't know. On the laptop, add it in Settings → Phone, then "
+    "restart the dashboard."
+)
+PUBLIC = "The dashboard can't be opened from the public internet. On the laptop, run: tailscale funnel reset"
+NOT_TAILNET = (
+    "Open this from a phone signed in to your Tailscale. On the laptop itself, use the address shown in the terminal."
+)
 EXPIRED = "This page has expired; reload it and try again."
-BUSY = "The database is busy (a collection is saving). Try again in a moment."
 BUSY_WAIT_MS = 1000  # a dashboard change waits at most this long for a collection's save, then says "busy"
 log = logging.getLogger("app.web")
 SCHEDULE_CHECK_SECONDS = 60
@@ -72,17 +89,23 @@ templates.env.globals |= {
     "LOW_SCORE": LOW_SCORE,
     "SCORE_THESE": SCORE_THESE,
     "SOURCE_LABELS": queries.SOURCE_LABELS,  # the filter form's words, shared with its "Filters" summary
+    "MAX_PASTED": MAX_PASTED,
     "SORT_LABELS": queries.SORT_LABELS,
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
     "SCHEMES": look.SCHEMES,  # the Look form on Settings
     "MODES": look.MODES,
 }
-# Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text)
+# Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text);
+# the computer's list could also change the manifest's type, which Python does know
 mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def create_app(
-    data_dir: Path, logins: security.Logins | None = None, new_fetcher: Callable[[], Fetcher] = Fetcher
+    data_dir: Path,
+    logins: security.Logins | None = None,
+    new_fetcher: Callable[[], Fetcher] = Fetcher,
+    phone_address: str = "",
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -101,6 +124,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
+    app.state.phone_host = urlsplit(phone_address).netloc  # read once: a new address applies at the next start
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
     app.state.preparer = Preparer(data_dir)  # the council's runner
@@ -120,7 +144,7 @@ def create_app(
             response = _error(request, refusal.status_code, refusal.detail)
         except Exception as error:  # never a crash report in the browser, nor job data in the terminal
             if isinstance(error, sqlcipher3.OperationalError) and "locked" in str(error):
-                response = _error(request, 503, BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
+                response = _error(request, 503, actions.BUSY)  # a collection is saving; waited BUSY_WAIT_MS already
             else:
                 log.error("Unexpected error: %s", type(error).__name__)
                 response = _error(
@@ -130,13 +154,10 @@ def create_app(
                     "Try again; if it keeps happening, restart the dashboard.",
                 )
         response.headers.update(security.SAFETY_HEADERS)
-        # public font files: kept a day, not re-sent per page
-        if (
-            request.url.path.startswith("/static/")
-            and request.url.path.endswith(".woff2")
-            and response.status_code in (200, 304)
-        ):
-            response.headers["Cache-Control"] = "private, max-age=86400"
+        # public program files: kept, but checked with the dashboard each time; fonts: kept a day, not re-sent per page
+        if request.scope["path"].startswith("/static/") and response.status_code in (200, 304):
+            font = request.scope["path"].endswith(".woff2")
+            response.headers["Cache-Control"] = "private, max-age=86400" if font else "no-cache"
         return response
 
     @app.get("/login")
@@ -153,8 +174,9 @@ def create_app(
             # the slow password check runs beside the server's own thread, so other pages keep answering
             token = await run_in_threadpool(logins.log_in, request.state.form.get("password", ""), row[0])
             if token:
-                response = RedirectResponse("/", 303)
-                response.set_cookie(security.COOKIE, token, httponly=True, samesite="strict", path="/")
+                response, remote = RedirectResponse("/", 303), request.state.remote
+                name = security.cookie_name(remote)
+                response.set_cookie(name, token, httponly=True, samesite="strict", path="/", secure=remote)
                 return response
         minutes = logins.locked_minutes()
         error = f"Too many wrong passwords. Try again in {minutes} minute(s)." if minutes else "Wrong password."
@@ -162,9 +184,11 @@ def create_app(
 
     @app.post("/logout")
     async def log_out(request: Request) -> Response:
-        request.app.state.logins.log_out(request.cookies.get(security.COOKIE))
+        remote = request.state.remote
+        name = security.cookie_name(remote)
+        request.app.state.logins.log_out(request.cookies.get(name))
         response = RedirectResponse("/login", 303)
-        response.delete_cookie(security.COOKIE, path="/")
+        response.delete_cookie(name, path="/", secure=remote)
         return response
 
     @app.get("/")
@@ -281,7 +305,7 @@ def create_app(
         form = request.state.form
         message, job_id = await run_in_threadpool(  # beside the dashboard: sites can take a while to answer
             actions.add_job, data_dir, request.app.state.collector.fetcher, form.get("link", ""),
-            form.get("company", ""), form.get("title", ""),
+            form.get("company", ""), form.get("title", ""), form.get("job_text", ""),
         )  # fmt: skip
         return _page(request, "add.html", form=form, job_message=message, job_id=job_id)
 
@@ -363,6 +387,7 @@ def create_app(
     council_settings.add_routes(app, _page)
     gmail_settings.add_routes(app, _page)
     export_settings.add_routes(app, _page, data_dir)
+    phone_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
@@ -461,20 +486,29 @@ async def _settings_page(
 
 
 async def _checked(request: Request, call_next) -> Response:
-    host = request.headers.get("host", "")
-    if urlsplit(f"//{host}").hostname not in LOCAL_HOSTS:  # stops "DNS rebinding" by other websites
-        raise HTTPException(
-            400, "This address is not allowed. Open the dashboard at the address shown in the terminal."
-        )
+    host, phone_host = request.headers.get("host", ""), request.app.state.phone_host
+    request.state.remote = remote = bool(phone_host) and host == phone_host
+    if FUNNEL in request.headers:  # the public internet, and the Host can say anything: Serve passes it on as sent
+        raise HTTPException(403, PUBLIC)
+    if remote:
+        if not request.headers.get("tailscale-user-login"):
+            raise HTTPException(403, NOT_TAILNET)
+    else:
+        name = urlsplit(f"//{host}").hostname
+        if name not in LOCAL_HOSTS:  # stops "DNS rebinding" by other websites
+            raise HTTPException(400, UNKNOWN_PHONE if (name or "").endswith(".ts.net") else NOT_ALLOWED)
+        if any(mark in request.headers for mark in SERVE_MARKS):  # through Serve with a made-up Host
+            raise HTTPException(403, NOT_TAILNET)
     post = request.method == "POST"
-    if post and request.headers.get("origin", f"http://{host}") != f"http://{host}":  # sent from another website
+    origin = f"{'https' if remote else 'http'}://{host}"
+    if post and request.headers.get("origin", origin) != origin:  # sent from another website
         raise HTTPException(403, EXPIRED)
     request.state.session = None
-    path = request.url.path
+    path = request.scope["path"]  # as the server received it: request.url is built partly from the Host header
     # Everything else needs a login. Google sends you back to the Gmail callback without the login cookie (it is
     # SameSite=Strict); the one-time state is the check there.
     if path not in ("/login", gmail_settings.CALLBACK) and not path.startswith("/static/"):
-        request.state.session = request.app.state.logins.session(request.cookies.get(security.COOKIE))
+        request.state.session = request.app.state.logins.session(request.cookies.get(security.cookie_name(remote)))
         if request.state.session is None:
             return _to_login(request)
     if post:
@@ -490,7 +524,7 @@ async def _form(request: Request) -> dict[str, str]:
     size = request.headers.get("content-length", "0")
     if not DIGITS.fullmatch(size):
         raise HTTPException(400, "The form could not be read.")
-    limit, most = FORM_LIMITS.get(request.url.path, (MAX_FORM_BYTES, MAX_FIELDS))
+    limit, most = FORM_LIMITS.get(request.scope["path"], (MAX_FORM_BYTES, MAX_FIELDS))
     if int(size) > limit:
         raise HTTPException(413, "Too much data.")
     body = bytearray()
@@ -524,6 +558,7 @@ def _to_login(request: Request) -> Response:
 def _page(request: Request, name: str, status: int = 200, **values) -> HTMLResponse:
     session = getattr(request.state, "session", None)
     values["csrf"] = session.csrf if session else None
+    values["remote"] = getattr(request.state, "remote", False)
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
     values["list_view"], values["look"] = look.of(request)
