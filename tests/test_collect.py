@@ -290,6 +290,14 @@ def test_a_retired_boards_jobs_are_decided_by_simplify(conn, data_dir):
     ]
 
 
+def test_rows_that_are_not_boards_are_never_read_and_stop_nothing(conn, data_dir):
+    with conn:
+        conn.executemany("INSERT INTO sources (name) VALUES (?)", [("feed:x",), ("nonsense:y",), ("nocolon",)])
+    lines, _ = run(conn, data_dir, PAGES)
+    assert "Reading 1 company board, all sites at the same time (about 1 minute)..." in lines  # greenhouse:acme
+    assert lines[-1] == "No sources failed."
+
+
 def test_a_board_you_stopped_is_never_read_and_no_longer_decides(conn, data_dir):
     run(conn, data_dir, PAGES)  # the board lists the job
     with conn:

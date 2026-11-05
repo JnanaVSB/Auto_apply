@@ -43,15 +43,17 @@ UPDATE_JOB = """UPDATE jobs SET last_seen = :now, company = :company, title = :t
     sponsorship = :sponsorship, terms = :terms, description = :description, salary = :salary,
     date_posted = :date_posted, added_by_you = :added, check_location = :check WHERE id = :id"""
 # Who owns a job's details: the first Simplify entry / company-board entry that found it (see SIMPLIFY_OWNS),
-# or, when the job has none of that kind, the first entry of any kind. Entries are job_sources rows.
+# or, when the job has none of that kind, the first entry of any kind. Entries are job_sources rows. A feed is no board.
 OWNERS = """SELECT
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id AND source LIKE 'simplify:%'),
-    (SELECT min(rowid) FROM job_sources WHERE job_id = :id AND source NOT LIKE 'simplify:%'),
+    (SELECT min(rowid) FROM job_sources WHERE job_id = :id AND source NOT LIKE 'simplify:%'
+        AND source NOT LIKE 'feed:%'),
     (SELECT min(rowid) FROM job_sources WHERE job_id = :id),
     (SELECT rowid FROM job_sources WHERE source = :source AND source_job_id = :source_job_id)"""
 # Why a source stopped listing a job; a job that is not open shows the reason of its deciding source.
 REMOVED_FROM_BOARD, REMOVED_FROM_SIMPLIFY = "removed from its board", "removed from Simplify"
 INACTIVE = "inactive on Simplify"  # only Simplify marks jobs inactive
+NOT_IN_FEED, FEED_OFF = "no longer in the feed", "feed turned off"
 BOARD_SHUT_DOWN, STOPPED_HIRING = "board shut down", "company stopped hiring"
 NOT_RECORDED = "reason not recorded (before 2026-10-21)"  # filled in on the source's next successful read
 SAVE_ENTRY = """INSERT INTO job_sources (source, source_job_id, job_id, listed, unlisted_on, unlisted_reason)
@@ -63,7 +65,8 @@ UNLIST = """UPDATE job_sources SET listed = 0, unlisted_reason = ?,
     unlisted_on = CASE WHEN listed THEN ? ELSE unlisted_on END WHERE source = ? AND source_job_id = ?"""
 # Every source entry of the jobs `source` has. 'closed' is never set or changed here; it is left for a later phase.
 ENTRIES = """SELECT j.id, j.status, j.status_reason, s.listed, s.unlisted_on, s.unlisted_reason,
-        s.source NOT LIKE 'simplify:%', s.source NOT LIKE 'simplify:%' AND r.retired_on IS NULL,
+        s.source NOT LIKE 'simplify:%' AND s.source NOT LIKE 'feed:%',
+        s.source NOT LIKE 'simplify:%' AND s.source NOT LIKE 'feed:%' AND r.retired_on IS NULL,
         r.stopped_on IS NOT NULL
     FROM jobs j JOIN job_sources s ON s.job_id = j.id LEFT JOIN sources r ON r.name = s.source
     WHERE j.status != 'closed' AND j.id IN (SELECT job_id FROM job_sources WHERE source = ?) ORDER BY j.id"""
@@ -105,7 +108,7 @@ class _Entry(NamedTuple):
     listed: bool
     unlisted_on: str | None
     reason: str | None
-    board: bool  # a company board (or a job you added), not a Simplify list
+    board: bool  # a company board (or a job you added), not a Simplify list or a feed
     live_board: bool  # ... that is still read (not retired)
     stopped: bool  # a board you stopped reading: it no longer decides
 
@@ -191,18 +194,19 @@ def save(
     """Save one source's jobs all-or-nothing. When the list is `complete`, jobs it no longer lists are unlisted.
 
     `chosen` jobs were picked by the user, so the role and US filters do not apply to them. `reason` says why the
-    missing jobs are gone; by default they were removed from that board or Simplify list.
+    missing jobs are gone; by default they were removed from that board, Simplify list or feed.
     """
     counts = Counts()
-    reason = reason or (REMOVED_FROM_SIMPLIFY if source.startswith("simplify:") else REMOVED_FROM_BOARD)
+    gone_from = {"simplify": REMOVED_FROM_SIMPLIFY, "feed": NOT_IN_FEED}
+    reason = reason or gone_from.get(source.partition(":")[0], REMOVED_FROM_BOARD)
     with conn:  # one transaction: saved together at the end, or not at all
         for job in jobs:
             _save_one(conn, job, roles, now, counts, chosen)
         if complete:
             seen = {job.source_job_id for job in jobs}
             rows = conn.execute(
-                "SELECT source_job_id FROM job_sources WHERE source = ? AND (listed = 1 OR unlisted_reason = ?)",
-                (source, NOT_RECORDED),
+                "SELECT source_job_id FROM job_sources WHERE source = ? AND (listed = 1 OR unlisted_reason IN (?, ?))",
+                (source, NOT_RECORDED, FEED_OFF),  # gone while its feed was off: now it is known to be gone
             )
             gone = [(reason, now[:10], source, job_id) for (job_id,) in rows.fetchall() if job_id not in seen]
             conn.executemany(UNLIST, gone)

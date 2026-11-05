@@ -32,6 +32,14 @@ def simplify_job(**changes) -> Job:
     return job(**{"source": SIMPLIFY, "source_job_id": "s-1", "category": "AI/ML/Data", "level": "intern"} | changes)
 
 
+FEED = "feed:remoteok"
+LISTING = "https://remoteok.com/remote-jobs/acme-1"
+
+
+def feed_job(**changes) -> Job:
+    return job(**{"source": FEED, "source_job_id": LISTING, "url": LISTING, "remote": "remote"} | changes)
+
+
 def rows(conn, columns="title, status"):
     return conn.execute(f"SELECT {columns} FROM jobs ORDER BY id").fetchall()  # noqa: S608 (test helper)
 
@@ -372,3 +380,106 @@ def test_a_job_only_on_a_board_you_stopped_keeps_its_status(conn):
         conn.execute("INSERT INTO sources (name, stopped_on) VALUES ('greenhouse:acme', '2026-10-20')")
     jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)  # even if that board is read once more and lists nothing
     assert rows(conn) == [("Machine Learning Engineer", "open")]
+
+
+STATE = "status, status_reason"
+OPEN, GONE_FROM_FEED = ("open", None), ("no longer available", jobs.NOT_IN_FEED)
+GONE_FROM_BOARD = ("no longer available", jobs.REMOVED_FROM_BOARD)
+
+
+def test_a_board_that_stops_listing_a_job_closes_it_though_a_feed_still_lists_it(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [], ROLES, LATER)
+    assert rows(conn, STATE) == [GONE_FROM_BOARD]
+    jobs.save(conn, FEED, [feed_job()], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_BOARD]  # reading the feed again doesn't reopen it
+
+
+def test_a_feed_needs_no_reason_to_be_told(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    jobs.save(conn, FEED, [], ROLES, LATER)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+
+
+def test_a_job_a_feed_dropped_stays_open_while_its_board_lists_it(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [OPEN]
+
+
+def test_a_feed_decides_a_job_only_it_lists_both_ways(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    assert rows(conn, STATE) == [OPEN]
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+    jobs.save(conn, FEED, [feed_job()], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [OPEN]
+
+
+def test_a_feed_and_a_simplify_list_keep_a_job_open_while_either_lists_it(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    jobs.save(conn, SIMPLIFY, [simplify_job()], ROLES, NOW)
+    jobs.save(conn, FEED, [], ROLES, NOW, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [OPEN]
+    jobs.save(conn, SIMPLIFY, [], ROLES, LATER)
+    assert rows(conn, STATE) == [("no longer available", jobs.REMOVED_FROM_SIMPLIFY)]  # the later of the two
+
+
+def test_when_a_list_and_a_feed_dropped_a_job_the_later_one_gives_the_reason(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    jobs.save(conn, SIMPLIFY, [simplify_job()], ROLES, NOW)
+    jobs.save(conn, SIMPLIFY, [], ROLES, NOW)
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+
+
+def test_a_retired_boards_job_is_decided_by_the_feed(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    with conn:
+        conn.execute("INSERT INTO sources (name, retired_on) VALUES ('greenhouse:acme', '2026-10-20')")
+    jobs.save(conn, "greenhouse:acme", [], ROLES, NOW, reason=jobs.BOARD_SHUT_DOWN)
+    assert rows(conn, STATE) == [OPEN]
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+
+
+def test_a_stopped_boards_job_is_decided_by_the_feed(conn):
+    jobs.save(conn, "greenhouse:acme", [job()], ROLES, NOW)
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    with conn:
+        conn.execute("INSERT INTO sources (name, stopped_on) VALUES ('greenhouse:acme', '2026-10-20')")
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+
+
+DETAILS = "description, salary"
+
+
+def test_a_boards_details_replace_a_feeds_and_a_feed_only_fills_gaps(conn):
+    jobs.save(conn, FEED, [feed_job(description="From the feed.", salary="USD 1")], ROLES, NOW)
+    jobs.save(conn, "greenhouse:acme", [job(description="From the board.")], ROLES, NOW)
+    assert rows(conn, DETAILS) == [("From the board.", "USD 1")]  # the board has no pay: the feed's fills the gap
+    jobs.save(conn, FEED, [feed_job(description="Changed on the feed.", salary="USD 2")], ROLES, LATER)
+    assert rows(conn, DETAILS) == [("From the board.", "USD 1")]
+
+
+def test_a_job_only_on_a_feed_takes_the_feeds_new_details(conn):
+    jobs.save(conn, FEED, [feed_job(description="First text.")], ROLES, NOW)
+    jobs.save(conn, FEED, [feed_job(description="Second text.")], ROLES, LATER)
+    assert rows(conn, "description") == [("Second text.",)]
+
+
+def test_a_job_gone_while_its_feed_was_off_ends_up_no_longer_in_the_feed(conn):
+    jobs.save(conn, FEED, [feed_job()], ROLES, NOW)
+    with conn:
+        conn.execute(
+            "UPDATE job_sources SET listed = 0, unlisted_on = '2026-10-20', unlisted_reason = ?", (jobs.FEED_OFF,)
+        )
+        conn.execute("UPDATE jobs SET status = 'no longer available', status_reason = ?", (jobs.FEED_OFF,))
+    jobs.save(conn, FEED, [], ROLES, LATER, reason=jobs.NOT_IN_FEED)
+    assert rows(conn, STATE) == [GONE_FROM_FEED]
+    assert conn.execute("SELECT unlisted_on, unlisted_reason FROM job_sources").fetchall() == [
+        ("2026-10-20", jobs.NOT_IN_FEED)]  # fmt: skip

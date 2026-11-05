@@ -246,6 +246,7 @@ class _Run:
         Downloads run in the background, IN_FLIGHT per site; saving stays here, one board at a time, all-or-nothing.
         """
         rows = self.conn.execute(BOARDS_TO_READ).fetchall()  # boards you stopped are left out
+        rows = [row for row in rows if row[0].partition(":")[0] in BOARDS]  # a row of another kind is no board to read
         later = {name for name, discovered in rows if discovered} - set(extra_boards)  # yours are never "discovered"
         boards = sorted({name for name, _ in rows} | set(extra_boards), key=lambda board: (board in later, board))
         busiest = max(Counter(map(site_of, boards)).values(), default=0)
