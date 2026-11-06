@@ -19,8 +19,9 @@ RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, 
 UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
 BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
 BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
-GONE, NOT_SENT = "gone", "not-sent"
+GONE, NOT_SENT, THANKED = "gone", "not-sent", "thanked"
 SAME_FILE, CHANGED_FILE = "same", "changed"  # all a read keeps of a file box
+SAID_THANKS = "your press of Submit was followed by the site's thank-you page, so it was recorded"
 HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
     ("waiting", None): "no browser has opened it yet",
     ("started", None): "opened in a browser",
@@ -30,6 +31,7 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("sent", SUBMITTED): "your answers went to the browser, then you pressed I submitted it",
     ("sent", GONE): "your answers went to the browser, then the form's tab closed or moved on",
     ("sent", NOT_SENT): "your answers went to the browser, then you said you didn't send it",
+    ("sent", THANKED): SAID_THANKS,
     ("sent", BOT_CHECK): (
         "your answers went to the browser, then the fill stopped: the site wants to check you are a person. Finish it "
         "in the open tab, then check the form."
@@ -52,6 +54,7 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("filled", SUBMITTED): "the plugin filled what it could, then you pressed I submitted it",
     ("filled", GONE): "the plugin filled what it could, then the form's tab closed or moved on",
     ("filled", NOT_SENT): "the plugin filled what it could, then you said you didn't send it",
+    ("filled", THANKED): SAID_THANKS,
     ("stopped", BOT_CHECK): (
         "stopped: the site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: "
         "the plugin stops wherever this check shows."

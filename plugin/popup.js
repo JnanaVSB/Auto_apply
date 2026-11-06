@@ -25,6 +25,7 @@ const WORDS = new Map([
   ["cant-set", "The form wouldn't let the plugin set any box: fill it in yourself."],
   ["looks-sent", "It looks sent: press I submitted it in the dashboard."],
   ["unsaved", "The latest read of this form couldn't be saved: the record keeps the last good one."],
+  ["recorded", "The site showed its thank-you page after your press of Submit, so this was recorded."],
 ]);
 
 const part = (id) => document.getElementById(id);
@@ -44,7 +45,7 @@ function howItWent(said) {
 }
 
 function saidWords(said) {
-  const later = [said.looks && words("looks-sent"), said.unsaved && words("unsaved")];
+  const later = [said.recorded ? words("recorded") : said.looks && words("looks-sent"), said.unsaved && words("unsaved")];
   return [howItWent(said), ...later].filter(Boolean).join(" ");
 }
 

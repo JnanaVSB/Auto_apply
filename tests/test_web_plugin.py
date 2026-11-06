@@ -808,7 +808,7 @@ def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir,
     ticket = next(iter(held(door).values()))
     assert (response.status_code, response.json()) == (
         200,
-        {"ticket": ticket.id, "mode": "fill", "board": "greenhouse"},
+        {"ticket": ticket.id, "mode": "fill", "board": "greenhouse", "thanks": None},
     )
     assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
     assert refused(call(door, START), 404, "no-ticket")  # a reload finds nothing

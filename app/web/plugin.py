@@ -8,6 +8,7 @@ import hmac
 import json
 import re
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -147,7 +148,10 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
         if ticket is None:
             raise HTTPException(404, NO_TICKET)
-        return JSONResponse({"ticket": ticket.id, "mode": "fill", "board": ticket.site})
+        sign = fills.SITES[ticket.site].DRAWN.thanks
+        return JSONResponse(
+            {"ticket": ticket.id, "mode": "fill", "board": ticket.site, "thanks": sign and asdict(sign)}
+        )
 
     @app.post(PREFIX + "known")
     async def known(request: Request) -> Response:
@@ -205,12 +209,19 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         reading = state in ("reread", "clicked") and stop is None and ticket.answered
         leaving = state == "gone" and stop is None
         finished = state == "filled" and stop is None and ticket.answered
-        if not (reading or leaving or finished or (state == "stopped" and stop in PAGE_STOPS)):
+        thanked = state == "thanked" and stop is None and ticket.answered and tickets.can_thank(ticket)
+        if not (reading or leaving or finished or thanked or (state == "stopped" and stop in PAGE_STOPS)):
             raise HTTPException(400, BAD_REQUEST)
-        if reading and tickets.closed_by_record(conn, ticket):
+        if thanked:  # the one report that writes what can't be erased, so it alone needs a login
+            _logged_in(request)
+        if (reading or thanked) and tickets.closed_by_record(conn, ticket):
             raise HTTPException(404, NO_TICKET)
         values = _lines(body.get("values"), "value", _is_value)
         left = _lines(body.get("left"), "why", _is_why)
+        if thanked:
+            return JSONResponse(
+                {"ok": True, "recorded": tickets.thanked(conn, data_dir, ticket, queries.job(conn, ticket.job))}
+            )
         if reading:
             tickets.reread(conn, ticket, values, state == "clicked")
         elif leaving:

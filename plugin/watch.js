@@ -3,10 +3,14 @@
 const REREAD_MS = 5000;
 const SEND_WORDS = /\bsubmit\b|\bsend\b.*\bapplication\b/i;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
+const THANKS_LOOKS = 60;
+const THANKS_MS = 1000;
 
 let watching = false;
 let formRoot;
 let lastKept;
+let thanksSign; // the app's own words for this site, never a page's
+let lookingForThanks = false;
 
 const isControl = (node) =>
   ["BUTTON", "A"].includes(node.tagName) ||
@@ -28,7 +32,39 @@ function heard(event) {
   if (!event.isTrusted) return;
   const control = event.composedPath().find(isControl);
   if (!control || !formRoot?.contains(control) || !SEND_WORDS.test(wordsOf(control))) return;
-  ask({ do: "read", state: "clicked", values: readForm(formRoot) }).catch(() => {});
+  const saved = ask({ do: "read", state: "clicked", values: readForm(formRoot) });
+  const already = shownBeforePress();
+  saved.then((reply) => (already ? undefined : thanksAfter(reply))).catch(() => {});
+}
+
+const thanksShown = () =>
+  [...document.querySelectorAll(thanksSign.selector)].some((element) =>
+    tidy(element.textContent).includes(tidy(thanksSign.words)),
+  );
+
+// A sign on the page before the press says nothing of it. A bad selector counts as shown, so it is never looked for.
+function shownBeforePress() {
+  try {
+    return thanksShown();
+  } catch {
+    return true;
+  }
+}
+
+async function thanksAfter(reply) {
+  if (!reply?.kept || !thanksSign || lookingForThanks) return;
+  lookingForThanks = true;
+  try {
+    for (let looks = 0; looks < THANKS_LOOKS; looks += 1) {
+      if (thanksShown()) {
+        await ask({ do: "thanked" });
+        return;
+      }
+      await wait(THANKS_MS);
+    }
+  } finally {
+    lookingForThanks = false;
+  }
 }
 
 // Only what the app accepted is remembered, so a read it couldn't save goes again next time.
@@ -50,7 +86,10 @@ async function watch() {
   if (watching) return;
   watching = true;
   try {
-    if (location.href !== landedAt() || !(await ask({ do: "watch" }))?.on) return;
+    if (location.href !== landedAt()) return;
+    const told = await ask({ do: "watch" });
+    if (!told?.on) return;
+    thanksSign = told.thanks;
     await anchorShown();
     await quiet();
     formRoot = rootOf(anchored());

@@ -11,7 +11,7 @@ import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import sqlcipher3
@@ -33,6 +33,7 @@ from app.submit.fill_words import (
     REPLACED,
     SAME_FILE,
     SUBMITTED,
+    THANKED,
     TOO_MANY_FIELDS,
     UNEXPECTED_PAGE,
 )
@@ -40,6 +41,7 @@ from app.submit.fill_words import (
 SITES = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
+THANKS_SECONDS = 2 * 60  # how long after your press of Submit a thank-you page counts
 MAX_PDF = 10 * 1024 * 1024  # bytes
 PDF_NAMES = {"resume": "Resume.pdf", "cover_letter": "Cover-letter.pdf"}  # by slot: no version, and no person's name
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
@@ -148,6 +150,7 @@ class Ticket:
     known: frozenset[str] = frozenset()  # the keys a read may keep as they are
     pdfs: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
     read: dict = field(default_factory=dict)  # the read held on the row
+    clicked: float | None = None  # when you last pressed the site's Submit
 
 
 @dataclass
@@ -302,6 +305,25 @@ class Tickets:
                 conn.execute(CLICKED, (moment, ticket.fill))
         if accepted:
             ticket.read = read
+        if clicked:
+            ticket.clicked = self.clock()
+
+    def can_thank(self, ticket: Ticket) -> bool:
+        """Whether a thank-you page counts for this ticket: its site is switched on, and you pressed Submit just now."""
+        pressed = ticket.clicked is not None and self.clock() - ticket.clicked <= THANKS_SECONDS
+        return pressed and SITES[ticket.site].DRAWN.thanks is not None
+
+    def thanked(self, conn: sqlcipher3.Connection, data_dir: Path, ticket: Ticket, job: dict) -> bool:
+        """The site's thank-you page after your press: records it as "I submitted it" would, with today's date, and says
+        if it did. A refused record changes nothing, so the box still says it looks sent."""
+        found = preview.preview(conn, data_dir, ticket.job)
+        try:
+            record.submit(conn, data_dir, job, date.today(), found.lines if found else None)
+        except record.Refused:
+            return False
+        with conn:
+            self._end(conn, [(ticket, THANKED)])
+        return True
 
     def gone(self, conn: sqlcipher3.Connection, ticket: Ticket) -> None:
         """The form's tab closed or moved on: the fill ends, its read stays and nothing is recorded."""

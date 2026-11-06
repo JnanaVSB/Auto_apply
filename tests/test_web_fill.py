@@ -112,6 +112,8 @@ WORDS = {
     ("ended", "gone"): "ended when the form's tab closed or moved on, before your answers went out",
     ("sent", "not-sent"): "your answers went to the browser, then you said you didn't send it",
     ("filled", "not-sent"): "the plugin filled what it could, then you said you didn't send it",
+    ("sent", "thanked"): "your press of Submit was followed by the site's thank-you page, so it was recorded",
+    ("filled", "thanked"): "your press of Submit was followed by the site's thank-you page, so it was recorded",
 }
 ALIKE = "two choices look the same, so pick yours on the form"
 SIGN = '<p>{} in the last 7 days: check {} in <a href="/settings/plugin">Settings → Browser plugin</a></p>'

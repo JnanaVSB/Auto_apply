@@ -103,7 +103,8 @@ async function open(message, sender) {
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
   if (answer.status === 200 && answer.body.mode === "fill" && typeof answer.body.ticket === "string") {
-    await keep(tabId, { ticket: answer.body.ticket, address, slots: [], answered: false, said: {} });
+    const thanks = answer.body.thanks ?? null;
+    await keep(tabId, { ticket: answer.body.ticket, address, slots: [], answered: false, thanks, said: {} });
     return { go: true };
   }
   const problem = answer.body.error ?? "app-error";
@@ -168,7 +169,8 @@ async function watch(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
   const on = Boolean(record?.ticket && record.answered) && (await onForm(tabId, record));
-  return { on };
+  const thanks = on && record.thanks?.selector ? record.thanks : undefined;
+  return { on, thanks };
 }
 
 async function read(message, sender) {
@@ -191,8 +193,31 @@ async function read(message, sender) {
     return {};
   }
   const looks = state === "clicked" ? { looks: true } : {};
-  await keep(tabId, { ...latest, said: { ...latest.said, unsaved: false, ...looks } });
+  const pressed = state === "clicked" ? { clickedAt: Date.now() } : {};
+  await keep(tabId, { ...latest, ...pressed, said: { ...latest.said, unsaved: false, ...looks } });
   return { kept: true };
+}
+
+async function saidThanks(tabId, record) {
+  const body = { ticket: record.ticket, state: "thanked", values: [], left: [] };
+  const answer = await call("report", body, await storedKey());
+  if (answer.body.recorded !== true) return;
+  await flag(tabId, "OK");
+  const latest = await recordOf(tabId);
+  if (latest) await keep(tabId, { ...latest, said: { ...latest.said, recorded: true } });
+}
+
+async function thanked(message, sender) {
+  const tabId = sender.tab.id;
+  const record = await recordOf(tabId);
+  if (!record?.ticket || !record.thanks?.selector || !record.clickedAt || !(await onForm(tabId, record))) return {};
+  await saidThanks(tabId, record);
+  return {};
+}
+
+function atThanksPage(record, tab) {
+  if (!record.thanks?.path || !record.clickedAt) return false;
+  return originOf(tab.url) === originOf(record.address) && new URL(tab.url).pathname.endsWith(record.thanks.path);
 }
 
 async function leftForm(tabId) {
@@ -270,6 +295,7 @@ async function paired() {
 // Maps, not objects: `do` comes from outside, and "constructor" must find nothing.
 const PAGE = new Map([
   ["open", open], ["form", form], ["file", file], ["done", done], ["moved", moved], ["watch", watch], ["read", read],
+  ["thanked", thanked],
 ]);
 const POPUP = new Map([["status", status], ["fill", fill]]);
 const OPTIONS = new Map([["pair", pair], ["paired", paired]]);
@@ -300,6 +326,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   if (!change.url && !change.status) return;
   const record = await recordOf(tabId);
   if (!record?.ticket || tab.url === record.address) return;
+  if (atThanksPage(record, tab)) await saidThanks(tabId, record);
   await leftForm(tabId);
   const latest = await recordOf(tabId); // it may have landed on another form with a new ticket during that call
   if (latest?.ticket === record.ticket) await keep(tabId, { address: latest.address, said: latest.said });

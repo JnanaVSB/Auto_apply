@@ -79,6 +79,16 @@ class Form:
 
 
 @dataclass(frozen=True)
+class Thanks:
+    """How a site shows it took an application, once that is known: `path` is how the address then ends, on the same
+    host; `selector` and `words` are an element holding those words. Only the site's own file sets one, never a page."""
+
+    path: str = ""
+    selector: str = ""
+    words: str = ""
+
+
+@dataclass(frozen=True)
 class Drawn:
     """What a site's form shows once a browser draws it, where that differs from what the app read. A file box's words
     differ on every site, so that isn't here: it is checked by its key and kind alone."""
@@ -87,6 +97,7 @@ class Drawn:
     undrawn_starts: tuple[str, ...] = ()  # the same, by how the key begins
     unlisted: frozenset[str] = frozenset()  # drawn keys the read doesn't list
     hidden_choices: bool = False  # a drop-down's choices are drawn only once it is opened
+    thanks: Thanks | None = None  # None: the site's thank-you page records nothing
 
 
 def fingerprint(form: Form) -> str:

@@ -221,7 +221,7 @@ def test_a_failed_call_keeps_no_error_text():
 def test_each_part_has_its_own_map_of_handlers():
     assert handlers("PAGE") == {
         "open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved", "watch": "watch",
-        "read": "read",
+        "read": "read", "thanked": "thanked",
     }  # fmt: skip
     assert handlers("POPUP") == {"status": "status", "fill": "fill"}
     assert handlers("OPTIONS") == {"pair": "pair", "paired": "paired"}
@@ -378,7 +378,7 @@ def test_the_skip_list_names_password_and_the_other_sorts():
 
 def test_no_message_from_the_page_carries_an_address():
     messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE) + code(WATCH))
-    assert len(messages) == 8  # moved, open, form, file, done, watch, and a read of each sort
+    assert len(messages) == 9  # moved, open, form, file, done, watch, thanked, and a read of each sort
     assert code(PAGE).count("sendMessage(") == 1 and "sendMessage(" not in code(WATCH)
     assert [message for message in messages if re.search(r"address|location|href", message)] == []
 
@@ -492,7 +492,8 @@ def test_one_click_listener_in_the_capture_phase():
 def test_a_press_is_read_at_once_and_a_lost_message_is_quiet():
     heard = page_function("heard", WATCH)
     assert "await" not in heard and "async" not in heard
-    assert 'ask({ do: "read", state: "clicked", values: readForm(formRoot) }).catch(() => {});' in heard
+    assert 'ask({ do: "read", state: "clicked", values: readForm(formRoot) });' in heard
+    assert heard.splitlines()[-2].endswith(".catch(() => {});")
 
 
 def test_a_press_must_be_on_a_control_inside_the_form():
@@ -526,7 +527,7 @@ def test_a_read_goes_through_boxes_and_skips_what_it_must():
     assert set(re.findall(r'"([\w-]+)"', re.search(r"^const SECRET_BOXES = .*$", code(WATCH), re.M)[0])) == {
         "current-password", "new-password", "one-time-code",
     }  # fmt: skip
-    assert "querySelector" not in code(WATCH) and "innerText" not in code(WATCH)
+    assert code(WATCH).count("querySelector") == 1 and "innerText" not in code(WATCH)
 
 
 def test_one_watcher_at_a_time_and_only_on_the_page_it_landed_on():
@@ -534,7 +535,8 @@ def test_one_watcher_at_a_time_and_only_on_the_page_it_landed_on():
     assert watch.index("lastKept = undefined;") < watch.index("if (watching) return;")
     assert watch.index("if (watching) return;") < watch.index("watching = true;") < watch.index("await")
     assert watch.index("location.href !== landedAt()") < watch.index('ask({ do: "watch" })')
-    assert 'ask({ do: "watch" }))?.on' in watch and "finally" in watch and "watching = false;" in watch
+    assert 'const told = await ask({ do: "watch" });' in watch and "if (!told?.on) return;" in watch
+    assert "finally" in watch and "watching = false;" in watch
     assert watch.index("await quiet();") < watch.index("formRoot = rootOf(anchored());")
     assert "while (await look()) await wait(REREAD_MS);" in watch and "const REREAD_MS = 5000;" in code(WATCH)
 
@@ -598,11 +600,89 @@ def test_leaving_never_wipes_a_ticket_the_tab_took_meanwhile():
     assert "keep(tabId, { address: latest.address, said: latest.said })" in updated
 
 
+# The thank-you sign
+
+
+def test_no_board_file_of_the_plugin_holds_a_sign():
+    assert [name for name in files("boards/*.js") if "thanks" in code(name).lower()] == []
+
+
+def test_the_only_sign_is_the_one_the_app_sent():
+    assert "const thanks = answer.body.thanks ?? null;" in function("open")
+    assert code(BACKGROUND).count("answer.body.thanks") == 1
+    assert "thanksSign = told.thanks;" in page_function("watch", WATCH)
+    assert code(WATCH).count("thanksSign =") == 1
+
+
+def test_the_page_says_only_that_it_saw_the_sign():
+    assert 'ask({ do: "thanked" })' in page_function("thanksAfter", WATCH)
+    assert "message." not in function("thanked")
+
+
+def test_the_background_checks_before_it_says_thanked():
+    thanked = function("thanked")
+    first = thanked.index("saidThanks(")
+    for check in ("!record?.ticket", "!record.thanks?.selector", "!record.clickedAt", "await onForm(tabId, record)"):
+        assert thanked.index(check) < first, check
+
+
+def test_a_sign_is_said_with_nothing_read_and_believed_only_if_recorded():
+    said = function("saidThanks")
+    assert '{ ticket: record.ticket, state: "thanked", values: [], left: [] }' in said
+    assert "if (answer.body.recorded !== true) return;" in said
+    assert said.index("answer.body.recorded") < said.index('flag(tabId, "OK")')
+    assert said.index("await recordOf(tabId);") < said.index("recorded: true")
+
+
+def test_a_press_is_timed_only_when_the_app_took_it():
+    read = function("read")
+    assert 'state === "clicked" ? { clickedAt: Date.now() } : {}' in read
+    assert read.index("if (answer.status !== 200)") < read.index("clickedAt")
+
+
+def test_the_page_is_given_only_a_selector_sign():
+    watch = function("watch")
+    assert "const thanks = on && record.thanks?.selector ? record.thanks : undefined;" in watch
+    assert "return { on, thanks };" in watch
+
+
+def test_an_address_sign_needs_a_press_and_the_same_origin_and_comes_before_gone():
+    at = function("atThanksPage")
+    assert "record.thanks?.path" in at and "record.clickedAt" in at
+    assert "originOf(tab.url) === originOf(record.address)" in at
+    assert "new URL(tab.url).pathname.endsWith(record.thanks.path)" in at
+    updated = listener("onUpdated")
+    assert updated.index("atThanksPage(record, tab)") < updated.index("saidThanks(") < updated.index("leftForm(tabId)")
+
+
+def test_one_look_for_a_sign_at_a_time_for_a_minute_and_a_bad_one_is_quiet():
+    after = page_function("thanksAfter", WATCH)
+    assert "if (!reply?.kept || !thanksSign || lookingForThanks) return;" in after
+    assert "const THANKS_LOOKS = 60;" in code(WATCH) and "const THANKS_MS = 1000;" in code(WATCH)
+    assert "finally" in after and "lookingForThanks = false;" in after
+    assert "catch {\n    return true;\n  }" in page_function("shownBeforePress", WATCH)  # a bad selector never looks
+
+
+def test_a_sign_already_showing_at_the_press_is_never_looked_for():
+    heard = page_function("heard", WATCH)
+    trusted, sent = heard.index("event.isTrusted"), heard.index('ask({ do: "read"')
+    before, looks = heard.index("const already = shownBeforePress();"), heard.index("thanksAfter(reply)")
+    assert trusted < sent < before < looks
+    assert "(already ? undefined : thanksAfter(reply))" in heard
+    assert code(WATCH).count("thanksAfter(") == 2  # its own line, and here
+
+
+def test_the_sign_is_read_by_the_page_s_own_tidy():
+    assert "tidy(element.textContent).includes(tidy(thanksSign.words))" in code(WATCH)
+
+
 def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():
     popup = code(POPUP)
     assert "It looks sent: press I submitted it in the dashboard." in popup
     assert "The latest read of this form couldn't be saved: the record keeps the last good one." in popup
     assert "said.looks" in popup and "said.unsaved" in popup
+    assert "The site showed its thank-you page after your press of Submit, so this was recorded." in popup
+    assert 'said.recorded ? words("recorded") : said.looks && words("looks-sent")' in popup
 
 
 def test_the_popup_says_where_a_fill_may_have_gone_and_what_filling_shares():
