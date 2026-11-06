@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Browser plugin{% endblock %}
+{% block content %}
+<h1>Browser plugin</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if key %}
+<p class="result" role="status">Added {{ added }}. Its key: <code id="key" class="address">{{ key }}</code></p>
+<p><strong>Paste this into the plugin: copy it now, it won't be shown again.</strong></p>
+{% endif %}
+<p>Each browser with the plugin gets its own key. The plugin fills job forms in that browser.</p>
+{% if browsers %}
+<table>
+  <thead><tr><th>Browser</th><th>Added</th><th>Last connected</th><th>Plugin version</th><th></th></tr></thead>
+  <tbody>
+    {% for id, browser, added_on, last_used, version, plugin in browsers %}
+    <tr>
+      <td>{{ browser }}</td>
+      <td>{{ added_on[:10] }}</td>
+      {% if last_used %}<td>{{ last_used[:10] }}</td><td>{{ version }}</td>
+      {% else %}<td colspan="2">{{ "A plugin is linked, but didn't finish connecting" if plugin else "No plugin has connected yet" }}</td>{% endif %}
+      <td>
+        <form method="post" action="/settings/plugin/remove" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <input type="hidden" name="id" value="{{ id }}">
+          <button type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% if plugin %}<tr><td colspan="5">Plugin ID<br><code class="address">{{ plugin | replace("chrome-extension://", "") }}</code></td></tr>{% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+<p class="hint">If the plugin says it was refused, remove that browser here and add it again.</p>
+{% if browsers | map(attribute=5) | select | list %}
+<p class="hint">Compare each plugin ID with the ID on your browser's extensions page: if it's different, remove that browser.</p>
+{% endif %}
+{% endif %}
+<h2>Add a browser</h2>
+<form method="post" action="/settings/plugin" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Name <input name="name" maxlength="40" autocomplete="off" required></label>
+  <p class="hint">Any name that tells you which browser it is, for example Laptop Chrome.</p>
+  <p><button type="submit">Add</button></p>
+</form>
+{% endblock %}

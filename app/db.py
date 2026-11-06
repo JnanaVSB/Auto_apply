@@ -731,6 +731,17 @@ UPGRADES = (
         UPDATE ai_failures SET changed = 1 WHERE job_id = new.id;
     END;
     """,
+    """
+    CREATE TABLE paired_browsers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: an old Remove can't reach a newer browser
+        name TEXT NOT NULL UNIQUE,
+        key_hash TEXT NOT NULL UNIQUE,
+        plugin TEXT,  -- chrome-extension://<id>, set on first use
+        version TEXT,
+        added_on TEXT NOT NULL,
+        last_used TEXT
+    );
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

@@ -141,6 +141,7 @@ does on the laptop itself isn't known yet.
 1. In Tailscale's admin page, look for something like **Machines** and remove the phone. Do this first: it cuts the phone
    off.
 2. On the laptop, open **Settings → Phone** and press **Log out all devices**. You'll log in again on the laptop too.
+   It also removes every browser in **Settings → Browser plugin**, so each one needs a new key.
 
 ## 8. What Android may tell Google
 When Chrome installs the app on Android, it may send the app's name and address to Google to build it. This comes from

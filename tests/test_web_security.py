@@ -186,6 +186,52 @@ def test_reset_password_does_not_start_the_dashboard(command):
     assert (code, served) == (0, [])
 
 
+STILL_LINKED = "Browsers still linked: {}. If your password may have leaked, remove them in Settings → Browser plugin."
+NEW_PASSWORD = ["new fake passphrase", "new fake passphrase"]
+
+
+def pair_browsers(data_dir, *names):
+    with closing(db.connect(data_dir)) as conn, conn:
+        for name in names:
+            conn.execute(
+                "INSERT INTO paired_browsers (name, key_hash, added_on) VALUES (?, ?, 'then')",
+                (name, f"hash of {name}"),
+            )
+
+
+def paired(data_dir):
+    with closing(db.connect(data_dir)) as conn:
+        return conn.execute("SELECT * FROM paired_browsers").fetchall()
+
+
+def test_reset_password_says_how_many_browsers_are_still_linked_and_leaves_them(command, data_dir):
+    pair_browsers(data_dir, "Laptop Chrome", "Work Chrome")
+    before = paired(data_dir)
+    code, output, _ = command(["reset-password"], NEW_PASSWORD)
+    assert code == 0 and output.out.splitlines()[-1] == STILL_LINKED.format(2)
+    assert "Laptop Chrome" not in output.out
+    assert paired(data_dir) == before
+
+
+def test_reset_password_says_nothing_more_with_no_browser_linked(command):
+    code, output, _ = command(["reset-password"], NEW_PASSWORD)
+    assert (code, output.out) == (0, "Dashboard password saved.\n")
+
+
+def test_a_first_start_says_nothing_about_linked_browsers(command, data_dir):
+    pair_browsers(data_dir, "Laptop Chrome")
+    with closing(db.connect(data_dir)) as conn, conn:
+        conn.execute("DELETE FROM dashboard_login")
+    code, output, served = command(answers=NEW_PASSWORD)
+    assert (code, len(served), "still linked" in output.out) == (0, 1, False)
+
+
+def test_a_refused_password_says_nothing_about_linked_browsers(command, data_dir):
+    pair_browsers(data_dir, "Laptop Chrome")
+    code, output, _ = command(["reset-password"], ["short"])
+    assert (code, "still linked" in output.out + output.err) == (1, False)
+
+
 def test_a_second_dashboard_is_refused(command, data_dir):
     with closing(collect.lock(data_dir, web_command.DASHBOARD_LOCK)):
         code, output, served = command()

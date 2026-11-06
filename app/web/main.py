@@ -37,6 +37,8 @@ from app.web import (
     look,
     phone_settings,
     pilot,
+    plugin,
+    plugin_settings,
     prepare,
     queries,
     security,
@@ -395,6 +397,8 @@ def create_app(
     export_settings.add_routes(app, _page, data_dir)
     phone_settings.add_routes(app, _page)
     usajobs_settings.add_routes(app, _page)
+    plugin.add_routes(app)
+    plugin_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
@@ -508,6 +512,10 @@ async def _checked(request: Request, call_next) -> Response:
             raise HTTPException(400, UNKNOWN_PHONE if (name or "").endswith(".ts.net") else NOT_ALLOWED)
         if any(mark in request.headers for mark in SERVE_MARKS):  # through Serve with a made-up Host
             raise HTTPException(403, NOT_TAILNET)
+    if request.scope["path"].startswith(plugin.PREFIX):  # its own check: a key, not a login, and no form to read
+        request.state.session = None
+        plugin.admit(request)
+        return await call_next(request)
     post = request.method == "POST"
     origin = f"{'https' if remote else 'http'}://{host}"
     if post and request.headers.get("origin", origin) != origin:  # sent from another website
@@ -592,7 +600,9 @@ def _page(request: Request, name: str, status: int = 200, **values) -> HTMLRespo
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 
-def _error(request: Request, status: int, message: str) -> HTMLResponse:
+def _error(request: Request, status: int, message: str) -> Response:
+    if request.scope["path"].startswith(plugin.PREFIX):
+        return plugin.refusal(status, message)
     if status == 404:
         message = "Page not found."
     return _page(request, "error.html", status, message=message)
