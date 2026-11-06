@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app import collect
-from app.web import plugin
+from app.web import actions, plugin
 
 PAGE = "/settings/plugin"
 MAX_NAME = 40
@@ -40,9 +40,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 
     @app.post(PAGE + "/remove")
     async def remove_browser(request: Request) -> Response:
-        conn = request.app.state.conn
-        with conn:
-            conn.execute("DELETE FROM paired_browsers WHERE id = ?", (request.state.form.get("id", ""),))
+        browser_id = actions.whole(request.state.form.get("id", ""))
+        if isinstance(browser_id, int):  # anything else, from the form, is no browser
+            plugin.unpair(request, browser_id)
         return RedirectResponse(PAGE, 303)
 
 

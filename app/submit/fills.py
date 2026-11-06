@@ -14,6 +14,7 @@ import sqlcipher3
 from app.collect import now
 from app.config import Config
 from app.sources import closed_site, is_simplify_site, posting_of
+from app.sources.boards import BOARDS
 from app.submit import ashby, greenhouse, lever, record
 from app.submit.preview import Preview
 
@@ -22,6 +23,7 @@ UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
+AT_LINK = "SELECT id, open_manually_only FROM jobs WHERE apply_url = ?"
 CONNECTED = "SELECT 1 FROM paired_browsers WHERE plugin IS NOT NULL LIMIT 1"
 # A started_on later than now, from a moved clock, counts as past: never in today's count, and it causes no wait
 UNUSED = """SELECT id FROM fills WHERE job_id = ? AND state = 'waiting' AND started_on BETWEEN ? AND ?
@@ -44,6 +46,22 @@ def form_address(job: dict) -> str | None:
     site, board, job_id = posting
     address = SITES[site].FORM_PAGE.format(board, job_id)
     return None if closed_site(address) or is_simplify_site(address) else address
+
+
+def job_at(conn: sqlcipher3.Connection, address: str) -> int | None:
+    """The job whose form is at exactly this address, as form_address writes it; anything else is no job."""
+    try:
+        posting = posting_of(address)
+    except ValueError:  # an address that can't even be read
+        return None
+    if posting is None:
+        return None
+    site, board, job_id = posting
+    link = BOARDS[site].JOB_LINK.format(board, job_id)
+    row = conn.execute(AT_LINK, (link,)).fetchone()
+    if row is None or form_address({"apply_url": link, "open_manually_only": row[1]}) != address:
+        return None
+    return row[0]
 
 
 def why_not(conn: sqlcipher3.Connection, job: dict, found: Preview | None, limits: Config) -> str | None:
