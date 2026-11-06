@@ -5,7 +5,7 @@
 <p><a href="/settings">Back to Settings</a></p>
 {% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
 {% if key %}
-<p class="result" role="status">Added {{ added }}. Its key: <code id="key">{{ key }}</code></p>
+<p class="result" role="status">Added {{ added }}. Its key: <code id="key" class="address">{{ key }}</code></p>
 <p><strong>Paste this into the plugin: copy it now, it won't be shown again.</strong></p>
 {% endif %}
 <p>Each browser with the plugin gets its own key. The plugin fills job forms in that browser.</p>

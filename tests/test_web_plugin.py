@@ -42,13 +42,15 @@ BAD_ORIGINS = (
     "chrome-extension://" + "q" * 32,
     "chrome-extension://" + "A" * 32,
     "moz-extension://" + "a" * 32,
+    "http://" + "a" * 32,
+    "x" + PLUGIN,
 )
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
 IDENTITY = {"Tailscale-User-Login": "person@example.com"}
 SERVE_MARKS = {"X-Forwarded-For": "100.64.0.1", "X-Forwarded-Host": HOST, "X-Forwarded-Proto": "https"}
 FUNNEL = {"Tailscale-Funnel-Request": "?1"}
-SHOWN_KEY = re.compile(r'<code id="key">([\w-]+)</code>')
+SHOWN_KEY = re.compile(r'<code id="key" class="address">([\w-]+)</code>')
 NAME_TAKEN = (
     "That name is already in the list. Choose another, or remove the old one first. If you didn't copy its key, remove "
     "it and add it again."
