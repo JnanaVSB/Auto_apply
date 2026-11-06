@@ -153,7 +153,7 @@
   <p id="fill-status" role="status"></p>
   {% endif %}
   {% if last_fill %}
-  <p class="muted">Last fill: {{ last_fill.when }}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}{% if last_fill.files %} PDF went to the browser: {{ last_fill.files }}.{% endif %}</p>
+  <p class="muted">Last fill: {{ last_fill.when }}{% if last_fill.taken and last_fill.taken != last_fill.when %}, opened {{ last_fill.taken }}{% endif %}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}{% if last_fill.files %} PDF went to the browser: {{ last_fill.files }}.{% endif %}{% if last_fill.read_at %} Last read of the form: {{ last_fill.read_at }}.{% endif %}</p>
   {% if last_fill.filled %}
   <h3>Filled</h3>
   <ul class="reasons">
@@ -185,9 +185,11 @@
   {% for label, address in papers %}<a href="{{ address }}" target="_blank" rel="noopener">{{ label }}</a>{{ " · " if not loop.last }}{% endfor %}
 
   {% if not record %}
+  {% if last_fill and last_fill.looks_sent %}<p role="status">It looks sent: press I submitted it.</p>{% endif %}
   {% call form_to("submitted") %}
     <label>Date you applied <input type="date" name="on" value="{{ today }}"></label>
     <button type="submit">I submitted it</button>{% endcall %}
+  {% if last_fill and last_fill.out %}{{ post("unsent", "I didn't send it") }}{% endif %}
   <p class="muted">This only records what you did on the site: the app never submits anything.</p>
   {% endif %}
 </section>

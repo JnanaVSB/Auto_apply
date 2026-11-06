@@ -9,16 +9,18 @@ import sqlcipher3
 from app.collect import now
 
 SIGN_DAYS = 7  # how far back the first page counts toolbar fills
-LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled, files FROM fills WHERE job_id = ?
-    ORDER BY id DESC LIMIT 1"""
+LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled, files, taken_on, checked_on,
+    clicked_on FROM fills WHERE job_id = ? ORDER BY id DESC LIMIT 1"""
 TOOLBAR_FILLS = "SELECT count(*) FROM fills WHERE toolbar = 1 AND started_on >= ?"
 ALL_FILLS = "SELECT count(*) FROM fills JOIN jobs ON jobs.id = fills.job_id"
 RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
-    fills.filled, fills.files, jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id
-    ORDER BY fills.id DESC LIMIT ?"""
+    fills.filled, fills.files, fills.taken_on, fills.checked_on, fills.clicked_on, jobs.id, jobs.title, jobs.company
+    FROM fills JOIN jobs ON jobs.id = fills.job_id ORDER BY fills.id DESC LIMIT ?"""
 UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
 BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
 BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
+GONE, NOT_SENT = "gone", "not-sent"
+SAME_FILE, CHANGED_FILE = "same", "changed"  # all a read keeps of a file box
 HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
     ("waiting", None): "no browser has opened it yet",
     ("started", None): "opened in a browser",
@@ -26,6 +28,8 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("sent", BROWSER_REMOVED): "your answers went to the browser, then it was removed",
     ("sent", REPLACED): "your answers went to the browser, then a newer press ended the fill",
     ("sent", SUBMITTED): "your answers went to the browser, then you pressed I submitted it",
+    ("sent", GONE): "your answers went to the browser, then the form's tab closed or moved on",
+    ("sent", NOT_SENT): "your answers went to the browser, then you said you didn't send it",
     ("sent", BOT_CHECK): (
         "your answers went to the browser, then the fill stopped: the site wants to check you are a person. Finish it "
         "in the open tab, then check the form."
@@ -46,6 +50,8 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("filled", BROWSER_REMOVED): "the plugin filled what it could, then its browser was removed",
     ("filled", REPLACED): "the plugin filled what it could, then a newer press ended the fill",
     ("filled", SUBMITTED): "the plugin filled what it could, then you pressed I submitted it",
+    ("filled", GONE): "the plugin filled what it could, then the form's tab closed or moved on",
+    ("filled", NOT_SENT): "the plugin filled what it could, then you said you didn't send it",
     ("stopped", BOT_CHECK): (
         "stopped: the site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: "
         "the plugin stops wherever this check shows."
@@ -70,6 +76,7 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("ended", REPLACED): "ended by a newer press",
     ("ended", SUBMITTED): "ended when you pressed I submitted it",
     ("ended", LOGGED_OUT): "ended when you logged out all devices",
+    ("ended", GONE): "ended when the form's tab closed or moved on, before your answers went out",
 }
 LEFT = {  # why the plugin left a line, as the job's box says it
     "no-box": "the plugin couldn't find this box",
@@ -93,7 +100,8 @@ def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
 def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
     """The newest fills of any job, in plain words, with each job's title and company. They outlive their browser."""
     return [
-        _plain(row[:8]) | {"job": row[8], "title": row[9], "company": row[10]} for row in conn.execute(RECENT, (limit,))
+        _plain(row[:11]) | {"job": row[11], "title": row[12], "company": row[13]}
+        for row in conn.execute(RECENT, (limit,))
     ]
 
 
@@ -109,11 +117,20 @@ def toolbar_fills(conn: sqlcipher3.Connection) -> int:
 
 
 def _plain(row: tuple) -> dict:
-    started_on, toolbar, browser, state, stop_kind, changes, filled, files = row
-    moment = datetime.fromisoformat(started_on).astimezone()  # the laptop's own clock
+    started_on, toolbar, browser, state, stop_kind, changes, filled, files, taken_on, checked_on, clicked_on = row
+    closed = stop_kind == NOT_SENT
     return {
-        "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
+        "when": _moment(started_on), "taken": _moment(taken_on), "read_at": _moment(checked_on),
+        "looks_sent": clicked_on is not None and not closed, "out": state in ("sent", "filled") and not closed,
+        "toolbar": toolbar, "browser": browser,
         "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
         "filled": json.loads(filled or "[]"),
         "files": ", ".join(slot.replace("_", " ") for slot in json.loads(files or "[]")),
     }  # fmt: skip
+
+
+def _moment(stamp: str | None) -> str | None:
+    if stamp is None:
+        return None
+    moment = datetime.fromisoformat(stamp).astimezone()  # the laptop's own clock
+    return f"{moment.day} {moment:%b %H:%M}"

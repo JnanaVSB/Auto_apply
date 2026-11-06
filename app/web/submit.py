@@ -253,6 +253,17 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             request.app.state.tickets.end_job(conn, job_id)
         return _part(request, job, note=note)
 
+    @app.post("/jobs/{job_id:int}/form/unsent")
+    async def unsent(request: Request, job_id: int) -> Response:
+        """I didn't send it: closes the fill and wipes its read. Nothing is recorded and no card moves."""
+        conn, job = request.app.state.conn, _job(request, job_id)
+        if not record.recorded(conn, job_id):
+            try:
+                request.app.state.tickets.not_sent(conn, job_id)
+            except sqlcipher3.OperationalError as error:
+                return _part(request, job, failed=actions.BUSY if "locked" in str(error) else PRESS_FAILED)
+        return _part(request, job)
+
     @app.post("/jobs/{job_id:int}/form/fill")
     async def fill(request: Request, job_id: int) -> Response:
         """Open and fill: the press also opens the form in a new tab, so whatever happens here, it answers with only the

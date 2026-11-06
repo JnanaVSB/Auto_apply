@@ -1173,7 +1173,7 @@ BAD_KEYS = (
 BAD_VALUES = (None, 1, True, 1.5, {"a": 1}, [1], [None], ["ok", 1], [["nested"]], "x" * 20_001, ["ok", "x" * 20_001])
 BAD_LISTS = (None, 1, True, "x", {"key": "first_name"}, [1], [None], ["first_name"], [[]])
 BAD_REPORTS = (
-    *({"state": state} for state in (None, 1, True, "", "FILLED", "reread", "gone", "sent", ["filled"], {"a": 1})),
+    *({"state": state} for state in (None, 1, True, "", "FILLED", "sent", ["filled"], {"a": 1})),
     *(
         {"state": "stopped", "kind": kind}
         for kind in (None, 1, True, "", "other", "too-many-fields", "nothing-to-fill", ["limit"], {"a": 1})

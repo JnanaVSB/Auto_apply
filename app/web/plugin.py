@@ -202,13 +202,21 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         if ticket is None:
             raise HTTPException(404, NO_TICKET)
         state, stop = body.get("state"), body.get("kind")
+        reading = state in ("reread", "clicked") and stop is None and ticket.answered
+        leaving = state == "gone" and stop is None
         finished = state == "filled" and stop is None and ticket.answered
-        if not (finished or (state == "stopped" and stop in PAGE_STOPS)):
+        if not (reading or leaving or finished or (state == "stopped" and stop in PAGE_STOPS)):
             raise HTTPException(400, BAD_REQUEST)
-        filled = list(_lines(body.get("values"), "value", _is_value))  # only the keys: an answer goes no further
+        if reading and tickets.closed_by_record(conn, ticket):
+            raise HTTPException(404, NO_TICKET)
+        values = _lines(body.get("values"), "value", _is_value)
         left = _lines(body.get("left"), "why", _is_why)
-        if not ticket.reported:
-            tickets.report(conn, ticket, stop, filled, left)
+        if reading:
+            tickets.reread(conn, ticket, values, state == "clicked")
+        elif leaving:
+            tickets.gone(conn, ticket)
+        elif not ticket.reported:
+            tickets.report(conn, ticket, stop, list(values), left)  # only the keys: an answer goes no further
         return JSONResponse({"ok": True})
 
     @app.post(PREFIX + "file")

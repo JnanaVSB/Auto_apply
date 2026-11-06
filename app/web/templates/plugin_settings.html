@@ -44,7 +44,7 @@
   <tbody>
     {% for fill in recent %}
     <tr>
-      <td>{{ fill.when }}</td>
+      <td>{{ fill.when }}{% if fill.taken and fill.taken != fill.when %}<br>opened {{ fill.taken }}{% endif %}</td>
       <td><a href="/jobs/{{ fill.job }}">{{ fill.title }}, {{ fill.company }}</a></td>
       <td>{{ fill.browser or "No browser yet" }}</td>
       <td>{{ "Toolbar" if fill.toolbar else "Open and fill" }}</td>

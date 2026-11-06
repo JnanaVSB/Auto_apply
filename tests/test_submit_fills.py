@@ -471,6 +471,15 @@ def test_a_taken_ticket_lasts_2_hours(conn, laptop, at, tickets, clock):
     assert tickets.running(ticket.id, laptop) is None
 
 
+def test_taking_a_ticket_saves_when_a_browser_took_it(conn, laptop, at, tickets):
+    tickets.make(conn, job(conn), READY, LIMITS)
+    fill = only(tickets).fill
+    assert one(conn, "SELECT taken_on FROM fills WHERE id = ?", fill)[0] is None
+    at(LATER)
+    tickets.take(conn, ADDRESS, laptop, "Laptop")
+    assert one(conn, "SELECT started_on, taken_on FROM fills WHERE id = ?", fill) == (NOON, LATER)
+
+
 def test_a_busy_database_uses_nothing_up(conn, data_dir, laptop, at, tickets):
     tickets.make(conn, job(conn), READY, LIMITS)
     with busy(conn, data_dir), pytest.raises(sqlcipher3.OperationalError):

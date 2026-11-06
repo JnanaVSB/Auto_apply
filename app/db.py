@@ -760,6 +760,13 @@ UPGRADES = (
     ALTER TABLE fills ADD COLUMN filled TEXT;  -- JSON: the questions filled. Public form text, never an answer
     ALTER TABLE fills ADD COLUMN files TEXT;  -- JSON: the PDF slots handed out
     """,
+    """
+    ALTER TABLE fills ADD COLUMN taken_on TEXT;  -- when a browser took the ticket
+    ALTER TABLE fills ADD COLUMN checked_on TEXT;  -- when values_read was saved
+    ALTER TABLE fills ADD COLUMN values_read TEXT;  -- JSON by key: holds answers, wiped when the fill ends
+    ALTER TABLE fills ADD COLUMN clicked_on TEXT;  -- when you pressed the site's Submit
+    ALTER TABLE submissions ADD COLUMN checked_on TEXT;  -- when the read behind this record was saved
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

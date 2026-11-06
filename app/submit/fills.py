@@ -18,15 +18,20 @@ import sqlcipher3
 
 from app.collect import now
 from app.config import Config
+from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
 from app.submit import MAX_FIELDS, ashby, compare, greenhouse, lever, preview, record
 from app.submit.fill_words import (
     BROWSER_REMOVED,
+    CHANGED_FILE,
+    GONE,
     LEFT,
     LOGGED_OUT,
+    NOT_SENT,
     NOTHING_TO_FILL,
     REPLACED,
+    SAME_FILE,
     SUBMITTED,
     TOO_MANY_FIELDS,
     UNEXPECTED_PAGE,
@@ -50,12 +55,21 @@ NEW = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state
     VALUES (?, ?, ?, ?, ?, 'waiting')"""
 # started_on stays, so the pause doesn't move; a later button press never hides that a toolbar pressed, or which browser
 REUSE = "UPDATE fills SET toolbar = max(toolbar, ?), browser = coalesce(?, browser) WHERE id = ?"
-STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
-# A row that had its answers stays `sent` or `filled`, whatever ended it
-ENDED = "UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ? WHERE id = ?"
+STARTED = "UPDATE fills SET state = 'started', browser = ?, taken_on = ? WHERE id = ?"
+# A row that had its answers stays `sent` or `filled`, whatever ended it. Its read and the read's time go, unless the
+# tab just left: that is how a real Submit ends, and "I submitted it" comes after
+ENDED = """UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ?1,
+    values_read = iif(?1 = 'gone', values_read, NULL), checked_on = iif(?1 = 'gone', checked_on, NULL) WHERE id = ?2"""
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? WHERE id = ?"
 HANDED = "UPDATE fills SET files = ? WHERE id = ?"
+READ = "UPDATE fills SET values_read = ?, checked_on = ? WHERE id = ?"
+CLICKED = "UPDATE fills SET clicked_on = ? WHERE id = ?"
+WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL WHERE job_id = ?"
+ALL_WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL"
+# Only the job's newest row: a newer press that is still waiting is left alone
+UNSENT = """UPDATE fills SET stop_kind = ?, values_read = NULL, checked_on = NULL WHERE state IN ('sent', 'filled')
+    AND id = (SELECT max(id) FROM fills WHERE job_id = ?)"""
 
 
 def form_address(job: dict) -> str | None:
@@ -131,6 +145,9 @@ class Ticket:
     reported: bool = False  # the browser has said how it went: it says so once
     files: dict[str, tuple[Path, str]] = field(default_factory=dict)  # each PDF the pack named, with its SHA-256 then
     handed: list[str] = field(default_factory=list)  # the slots given out: each goes once
+    known: frozenset[str] = frozenset()  # the keys a read may keep as they are
+    pdfs: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
+    read: dict = field(default_factory=dict)  # the read held on the row
 
 
 @dataclass
@@ -159,6 +176,7 @@ class Tickets:
         old, moment, address = self._live().get(job["id"]), now(), form_address(job)
         toolbar, unused = browser_id is not None, _unused(conn, job["id"], moment)
         with conn:
+            conn.execute(WIPED, (job["id"],))
             if old and old.taken:
                 conn.execute(ENDED, (REPLACED, old.fill))
             if unused is None:
@@ -178,7 +196,7 @@ class Tickets:
         for ticket in self._live().values():
             if ticket.address == address and not ticket.taken and ticket.browser in (None, browser_id):
                 with conn:
-                    conn.execute(STARTED, (name, ticket.fill))
+                    conn.execute(STARTED, (name, now(), ticket.fill))
                 ticket.browser, ticket.taken, ticket.ends = browser_id, True, self.clock() + RUNNING_SECONDS
                 return ticket
         return None
@@ -201,6 +219,11 @@ class Tickets:
         except ValueError:
             raise BadForm from None
         found = preview.preview(conn, data_dir, ticket.job)
+        ticket.known = frozenset(
+            line.field.key
+            for line in (found.lines if found else ())
+            if line.status != "hidden" and line.field.kind != "file" and "password" not in line.field.label.lower()
+        )
         passed, changes = compare.compare(found.lines if found else (), fields, SITES[ticket.site].DRAWN)
         if not passed:
             self.save_answer(conn, ticket, changes, UNEXPECTED_PAGE)
@@ -211,8 +234,9 @@ class Tickets:
         self.save_answer(conn, ticket, changes, None if answers else NOTHING_TO_FILL)
         labels = {line.field.key: line.field.label for line, _ in passed}
         ticket.questions = {answer["key"]: labels[answer["key"]] for answer in answers}
-        slots = [answer["value"]["slot"] for answer in answers if answer["kind"] == "file"]
-        ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots}
+        slots = {answer["key"]: answer["value"]["slot"] for answer in answers if answer["kind"] == "file"}
+        ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots.values()}
+        ticket.pdfs = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
@@ -261,12 +285,46 @@ class Tickets:
             conn.execute(HANDED, (_json(handed), ticket.fill))
         ticket.handed = handed
 
+    def reread(self, conn: sqlcipher3.Connection, ticket: Ticket, values: dict, clicked: bool) -> None:
+        """What the form holds now, kept only for keys the app knows; of a file box only whether it still shows our PDF,
+        as another file's name may hold a person's. It replaces the held read whole, or not at all: it must have
+        something filled and at least half as many as the held one, so a form reset after Submit is ignored. `clicked`
+        is your press of Submit, which counts even when the read doesn't. Saved first: a busy database raises and
+        changes nothing."""
+        read = {key: _clean(value) for key, value in values.items() if key in ticket.known}
+        read |= {key: _file_verdict(values[key], name) for key, name in ticket.pdfs.items() if key in values}
+        count, held = sum(map(_filled, read.values())), sum(map(_filled, ticket.read.values()))
+        accepted, moment = count >= 1 and 2 * count >= held, now()
+        with conn:
+            if accepted:
+                conn.execute(READ, (_json(read), moment, ticket.fill))
+            if clicked:
+                conn.execute(CLICKED, (moment, ticket.fill))
+        if accepted:
+            ticket.read = read
+
+    def gone(self, conn: sqlcipher3.Connection, ticket: Ticket) -> None:
+        """The form's tab closed or moved on: the fill ends, its read stays and nothing is recorded."""
+        with conn:
+            self._end(conn, [(ticket, GONE)])
+
+    def not_sent(self, conn: sqlcipher3.Connection, job_id: int) -> None:
+        """I didn't send it: closes the job's newest fill if its answers went, with or without a ticket. Nothing is
+        recorded, and the fill still counts: it went out."""
+        with conn:
+            closed = conn.execute(UNSENT, (NOT_SENT, job_id)).rowcount
+        if closed:
+            self.tickets.pop(job_id, None)
+
     def end_browser(self, conn: sqlcipher3.Connection, browser_id: int) -> None:
-        """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser."""
+        """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser. Every
+        read goes, as a row names its browser only in words."""
+        self._wipe_all(conn)
         self._end(conn, [(ticket, BROWSER_REMOVED) for ticket in self._live().values() if ticket.browser == browser_id])
 
     def end_all(self, conn: sqlcipher3.Connection) -> None:
-        """Every ticket, for "Log out all devices"; a button ticket nobody took never had a browser to remove."""
+        """Every ticket and read, for "Log out all devices"; a button ticket nobody took had no browser to remove."""
+        self._wipe_all(conn)
         live = self._live().values()
         self._end(conn, [(ticket, LOGGED_OUT if ticket.browser is None else BROWSER_REMOVED) for ticket in live])
 
@@ -279,6 +337,11 @@ class Tickets:
         conn.executemany(ENDED, [(kind, ticket.fill) for ticket, kind in ended])
         for ticket, _ in ended:
             del self.tickets[ticket.job]
+
+    def _wipe_all(self, conn: sqlcipher3.Connection) -> None:
+        conn.execute(ALL_WIPED)
+        for ticket in self.tickets.values():
+            ticket.read = {}
 
     def _live(self) -> dict[int, Ticket]:
         """The tickets still in time; the others are forgotten, and their rows stay as they are."""
@@ -303,8 +366,23 @@ def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
     return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == sha256 else None
 
 
-def _json(items: list) -> str:
+def _json(items: list | dict) -> str:
     return json.dumps(items, ensure_ascii=False)
+
+
+def _clean(value: str | list[str]) -> str | list[str]:
+    return CONTROL.sub("", value) if isinstance(value, str) else [CONTROL.sub("", text) for text in value]
+
+
+def _file_verdict(value: str | list[str], name: str) -> str:
+    shown = _clean(value)
+    if not _filled(shown):
+        return ""
+    return SAME_FILE if shown == name else CHANGED_FILE
+
+
+def _filled(value: str | list[str]) -> bool:
+    return any(text.strip() for text in ([value] if isinstance(value, str) else value))
 
 
 def _unused(conn: sqlcipher3.Connection, job_id: int, moment: str) -> int | None:
