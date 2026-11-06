@@ -1,11 +1,13 @@
 """The browser plugin's door: pairing a browser, and who may come in on /plugin/. Fake keys and made-up plugins only."""
 
+import base64
 import hashlib
 import json
 import logging
 import re
 from contextlib import ExitStack
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -18,6 +20,7 @@ from test_web_phone import FORWARDED, FUNNEL, HOST, IDENTITY, ORIGIN, PHONE, pho
 
 from app import collect, config, submit
 from app.config import Config
+from app.documents import pdf
 from app.fetch import Fetcher
 from app.submit import Field, Form, fills, match, preview
 from app.web import main, preparer, queries, security
@@ -28,7 +31,8 @@ KNOWN = "/plugin/known"
 FILL = "/plugin/fill"
 FORM = "/plugin/form"
 REPORT = "/plugin/report"
-ROUTES = (HELLO, START, KNOWN, FILL, FORM, REPORT)
+PAPER = "/plugin/file"
+ROUTES = (HELLO, START, KNOWN, FILL, FORM, REPORT, PAPER)
 SETTINGS = "/settings/plugin"
 REMOVE = "/settings/plugin/remove"
 LOG_OUT_ALL = "/settings/phone/log-out-all"
@@ -44,6 +48,13 @@ SECOND_KEY = "second-fake-key"
 FILLS = "SELECT toolbar, browser, state, stop_kind FROM fills ORDER BY id"
 NAME_BOX = {"key": "first_name", "label": "First Name*", "kind": "text", "required": True}
 NAME_PACK = {"key": "first_name", "kind": "text", "value": "Fake"}
+RESUME_FIELD = Field("resume", "Resume/CV", "file", True, "standard")
+LETTER_FIELD = Field("cover_letter", "Cover Letter", "file", False, "standard")
+RESUME_BOX = {"key": "resume", "label": "Resume/CV", "kind": "file", "required": True}
+LETTER_BOX = {"key": "cover_letter", "label": "Cover Letter", "kind": "file", "required": False}
+RESUME_PDF, LETTER_PDF = b"%PDF-1.7 a fake resume", b"%PDF-1.7 a fake letter"
+DONE = """INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on)
+    VALUES (?, ?, ?, '[]', '{}', 'done', '{}', 'then')"""
 STOP = {"go": False, "reason": "unexpected-page"}
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
 BAD_ORIGINS = (
@@ -1061,7 +1072,7 @@ def test_a_bad_body_is_still_answered_first_with_no_login(door, conn):
     assert refused(door.post(FORM, content=b"{", headers=sent()), 400, "bad-request")
 
 
-@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+@pytest.mark.parametrize("path", [START, KNOWN, FILL, PAPER])
 def test_a_key_with_no_login_gets_nothing_from_any_route(door, conn, limits, path):
     pair(conn, plugin=PLUGIN)
     ready_job(conn)
@@ -1421,6 +1432,269 @@ def test_a_report_s_values_are_left_nowhere(owner, door, conn, data_dir, paired,
     }
     assert ok(answers[1]) and kept.reported
     assert [place for place, text in places.items() if fake_value in text] == []  # names the place, never the value
+
+
+# /plugin/file
+
+
+def paper(conn, data_dir, job, kind="resume", version=1, body=RESUME_PDF):
+    """A finished version of a job's resume or letter, with its PDF; where that is."""
+    with conn:
+        conn.execute(DONE, (job, kind, version))
+    target = pdf.tailored(data_dir, job, version, kind)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
+    return target
+
+
+def packed(door, conn, data_dir, letter=False, body=RESUME_PDF):
+    """A fill that has had its answers, with a resume and, if asked, a letter in the pack; its job, ticket and PDF."""
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((FIRST_NAME, RESUME_FIELD, LETTER_FIELD)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    target = paper(conn, data_dir, job, body=body)
+    if letter:
+        paper(conn, data_dir, job, "cover_letter", body=LETTER_PDF)
+    ticket = running(door, conn, data_dir, job)
+    pack = send(door, ticket, [NAME_BOX, RESUME_BOX, LETTER_BOX]).json()["pack"]
+    assert [line["value"] for line in pack if line["kind"] == "file"] == [
+        {"slot": slot} for slot in ("resume", "cover_letter")[: 1 + letter]
+    ]
+    return job, ticket, target
+
+
+def fetch(door, ticket, slot="resume", key=KEY, origin=PLUGIN):
+    return door.post(PAPER, json={"protocol": 1, "ticket": ticket, "slot": slot}, headers=sent(key, origin))
+
+
+def handed_out(conn):
+    return one(conn, "SELECT files FROM fills ORDER BY id DESC")[0]
+
+
+def goes_out(response, name, body):
+    return (response.status_code, response.json()) == (200, {"name": name, "data": base64.b64encode(body).decode()})
+
+
+def test_a_pdf_the_pack_named_goes_out_once_with_its_trail(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+    assert handed_out(conn) == '["resume"]'
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+    assert handed_out(conn) == '["resume"]'
+
+
+def test_two_slots_each_go_out_once(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir, letter=True)
+    assert goes_out(fetch(door, ticket, "cover_letter"), "Cover-letter.pdf", LETTER_PDF)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+    assert handed_out(conn) == '["cover_letter", "resume"]'
+    assert refused(fetch(door, ticket, "cover_letter"), 404, "no-ticket")
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("slot", ["cover_letter", "made-up", "", "../resume", None, 1, True, ["resume"], {"a": 1}])
+def test_a_slot_the_pack_didn_t_name_is_no_ticket(door, conn, data_dir, paired, slot):
+    _, ticket, target = packed(door, conn, data_dir)
+    paper(conn, data_dir, one(conn, "SELECT id FROM jobs")[0], "cover_letter", body=LETTER_PDF)  # made after the pack
+    assert refused(fetch(door, ticket, slot), 404, "no-ticket")
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", target.read_bytes())
+
+
+def test_no_slot_in_the_body_is_no_ticket(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert refused(door.post(PAPER, json={"protocol": 1, "ticket": ticket}, headers=sent()), 404, "no-ticket")
+
+
+def test_a_made_up_ticket_gets_no_pdf(door, conn, data_dir, paired):
+    packed(door, conn, data_dir)
+    assert refused(fetch(door, "made-up"), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_pdf_s_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    packed(door, conn, data_dir)
+    assert refused(fetch(door, ticket), 400, "bad-request")
+
+
+def test_another_browser_s_ticket_gets_no_pdf(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert refused(fetch(door, ticket, key=SECOND_KEY, origin=OTHER_PLUGIN), 404, "no-ticket")
+    assert handed_out(conn) is None and goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_ticket_with_no_answers_yet_gets_no_pdf(door, conn, data_dir, paired):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((FIRST_NAME, RESUME_FIELD)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    paper(conn, data_dir, job)
+    assert refused(fetch(door, running(door, conn, data_dir, job)), 404, "no-ticket")
+
+
+def test_no_live_login_gets_no_pdf_and_uses_nothing_up(owner, door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    log_out(owner)
+    assert refused(fetch(door, ticket), 403, "not-logged-in")
+    assert handed_out(conn) is None
+    log_in(owner)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_job_with_its_record_gets_no_pdf_and_ends_the_fill(door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(
+            "INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+            "VALUES (?, '2026-11-05', 'then', 'by hand', ?, '[]', '[]')",
+            (job, FORM_ADDRESS),
+        )
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+    assert handed_out(conn) is None and not held(door)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", "submitted")]
+
+
+def outside_the_folder(target, data_dir):
+    copy = data_dir / "elsewhere.pdf"
+    copy.write_bytes(RESUME_PDF)
+    target.unlink()
+    target.symlink_to(copy)
+
+
+def in_another_job_s_folder(target, data_dir):
+    copy = data_dir / "documents" / "999" / target.name
+    copy.parent.mkdir()
+    copy.write_bytes(RESUME_PDF)
+    target.unlink()
+    target.symlink_to(copy)
+
+
+def changed_after_the_pack(target, data_dir):
+    target.write_bytes(b"%PDF-1.7 rebuilt since")
+
+
+def gone(target, data_dir):
+    target.unlink()
+
+
+def a_folder_in_its_place(target, data_dir):
+    target.unlink()
+    target.mkdir()
+
+
+def a_link_to_itself(target, data_dir):
+    target.unlink()
+    target.symlink_to(target)
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        outside_the_folder,
+        in_another_job_s_folder,
+        changed_after_the_pack,
+        gone,
+        a_folder_in_its_place,
+        a_link_to_itself,
+    ],
+)
+def test_a_spoiled_file_is_no_file_and_can_be_fetched_once_put_back(door, conn, data_dir, paired, spoil):
+    _, ticket, target = packed(door, conn, data_dir)
+    spoil(target, data_dir)
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert handed_out(conn) is None
+    if target.is_dir() and not target.is_symlink():
+        target.rmdir()
+    else:
+        target.unlink(missing_ok=True)
+    target.write_bytes(RESUME_PDF)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_job_s_folder_that_leads_elsewhere_is_no_file(door, conn, data_dir, paired):
+    _, ticket, target = packed(door, conn, data_dir)
+    moved = data_dir / "elsewhere"
+    target.parent.rename(moved)
+    target.parent.symlink_to(moved)
+    assert refused(fetch(door, ticket), 404, "no-file")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not a pdf", b"", b" %PDF-1.7", b"%PDF", b"%PDF 1.7", b"%PDF-" + bytes(10 * 2**20 - 4)],
+    ids=["text", "empty", "a space first", "too short", "no dash", "a byte over 10 MB"],
+)
+def test_what_isn_t_a_pdf_of_at_most_10_mb_is_no_file(door, conn, data_dir, paired, body):
+    _, ticket, _ = packed(door, conn, data_dir, body=body)
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert handed_out(conn) is None
+
+
+def test_a_pdf_of_exactly_10_mb_goes_out(door, conn, data_dir, paired):
+    body = b"%PDF-" + bytes(10 * 2**20 - 5)
+    _, ticket, _ = packed(door, conn, data_dir, body=body)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", body)
+
+
+def test_a_file_over_10_mb_is_never_read(door, conn, data_dir, paired, monkeypatch):
+    _, ticket, target = packed(door, conn, data_dir)
+    with target.open("ab") as file:
+        file.truncate(11 * 2**20)
+    read, reader = [], Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read.append(path.name) or reader(path))
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert target.name not in read
+
+
+def test_a_newer_version_made_during_the_fill_never_goes_out(door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    paper(conn, data_dir, job, version=2, body=b"%PDF-1.7 a newer resume")
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_busy_database_sends_no_pdf_and_uses_nothing_up(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = fetch(door, ticket)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_no_answer_holds_a_path_and_no_log_holds_a_pdf(owner, door, conn, data_dir, paired, caplog):
+    caplog.set_level(logging.DEBUG)
+    _, ticket, target = packed(door, conn, data_dir)
+    answers = [fetch(door, ticket, "made-up"), fetch(door, "made-up")]
+    moved = target.with_suffix(".moved")
+    target.rename(moved)
+    answers.append(fetch(door, ticket))
+    moved.rename(target)
+    answers += [fetch(door, ticket), fetch(door, ticket)]
+    assert [answer.status_code for answer in answers] == [404, 404, 404, 200, 404]
+    paths = [word for answer in answers for word in (str(data_dir), target.name, "documents") if word in answer.text]
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    pdf_words = (RESUME_PDF.decode(), base64.b64encode(RESUME_PDF).decode(), target.name)
+    assert paths == [] and [word for word in pdf_words if word in logged] == []
+
+
+def test_the_trail_outlives_a_report_and_remove(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    fetch(door, ticket)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert handed_out(conn) == '["resume"]'
+    owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
+    assert handed_out(conn) == '["resume"]' and fills.latest(conn, job)["files"] == "resume"
+
+
+def test_a_trail_survives_a_stop_too(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    fetch(door, ticket)
+    assert ok(report(door, ticket, "stopped", kind="bot-check"))
+    assert handed_out(conn) == '["resume"]'
 
 
 @pytest.fixture

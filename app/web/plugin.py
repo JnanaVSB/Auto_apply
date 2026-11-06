@@ -2,6 +2,7 @@
 login. It reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages
 out."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -31,9 +32,12 @@ ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 VERSION = re.compile(r"[0-9]+(\.[0-9]+){0,3}")  # as Chrome writes one; \d would also take other scripts' digits
 NO_KEY, WRONG_PLUGIN, OLD_PLUGIN = "no-key", "wrong-plugin", "old-plugin"
 TOO_BIG, BAD_REQUEST, APP_ERROR = "too-big", "bad-request", "app-error"
-NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB = "no-ticket", "not-logged-in", "not-ready", "no-job"
+NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB, NO_FILE = "no-ticket", "not-logged-in", "not-ready", "no-job", "no-file"
 # every refusal the plugin can get, from the agreement between the two; anything else is never passed on
-KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
+KINDS = {
+    NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB,
+    NO_FILE,
+}  # fmt: skip
 STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
 PAGE_STOPS = (fills.BOT_CHECK, fills.LIMIT, fills.UNEXPECTED_PAGE, fills.CANT_SET)
 
@@ -206,6 +210,24 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         if not ticket.reported:
             tickets.report(conn, ticket, stop, filled, left)
         return JSONResponse({"ok": True})
+
+    @app.post(PREFIX + "file")
+    async def file(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        ticket_id = _text(body, "ticket")
+        conn, tickets = request.app.state.conn, request.app.state.tickets
+        ticket = tickets.running(ticket_id, request.state.browser_id)
+        if ticket is None or not ticket.answered or tickets.closed_by_record(conn, ticket):
+            raise HTTPException(404, NO_TICKET)
+        slot = body.get("slot")
+        if not isinstance(slot, str) or slot not in ticket.files or slot in ticket.handed:
+            raise HTTPException(404, NO_TICKET)
+        data = fills.named_pdf(data_dir, ticket, slot)
+        if data is None:
+            raise HTTPException(404, NO_FILE)
+        tickets.hand(conn, ticket, slot)  # the trail first: if this can't be saved, nothing goes out
+        return JSONResponse({"name": fills.PDF_NAMES[slot], "data": base64.b64encode(data).decode()})
 
 
 def _text(body: dict, name: str) -> str:

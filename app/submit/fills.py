@@ -2,9 +2,11 @@
 fill, the `fills` row that counts it (what the daily cap and the pause read), its ticket and the one-time pass a browser
 needs to start. Tickets live in memory: stopping the dashboard ends them all, and the rows stay."""
 
+import hashlib
 import json
 import math
 import secrets
+import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -23,6 +25,8 @@ SITES = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
 SIGN_DAYS = 7  # how far back the first page counts toolbar fills
+MAX_PDF = 10 * 1024 * 1024  # bytes
+PDF_NAMES = {"resume": "Resume.pdf", "cover_letter": "Cover-letter.pdf"}  # by slot: no version, and no person's name
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 AT_LINK = "SELECT id, open_manually_only FROM jobs WHERE apply_url = ?"
@@ -41,12 +45,13 @@ STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
 ENDED = "UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ? WHERE id = ?"
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? WHERE id = ?"
-LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled FROM fills WHERE job_id = ?
+HANDED = "UPDATE fills SET files = ? WHERE id = ?"
+LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled, files FROM fills WHERE job_id = ?
     ORDER BY id DESC LIMIT 1"""
 TOOLBAR_FILLS = "SELECT count(*) FROM fills WHERE toolbar = 1 AND started_on >= ?"
 ALL_FILLS = "SELECT count(*) FROM fills JOIN jobs ON jobs.id = fills.job_id"
 RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
-    fills.filled, jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id
+    fills.filled, fills.files, jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id
     ORDER BY fills.id DESC LIMIT ?"""
 UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
 BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
@@ -186,6 +191,8 @@ class Ticket:
     changes: list[dict] = field(default_factory=list)  # all the compare said, uncut, so a report's count stays true
     questions: dict[str, str] = field(default_factory=dict)  # each key in the pack, with the app's own saved label
     reported: bool = False  # the browser has said how it went: it says so once
+    files: dict[str, tuple[Path, str]] = field(default_factory=dict)  # each PDF the pack named, with its SHA-256 then
+    handed: list[str] = field(default_factory=list)  # the slots given out: each goes once
 
 
 @dataclass
@@ -260,11 +267,14 @@ class Tickets:
         if not passed:
             self.save_answer(conn, ticket, changes, UNEXPECTED_PAGE)
             return None
-        answers = compare.pack(passed, record.documents(conn, data_dir, ticket.job))
+        documents = record.documents(conn, data_dir, ticket.job)
+        answers = compare.pack(passed, documents)
         # the trail first: if this can't be saved, nothing goes out
         self.save_answer(conn, ticket, changes, None if answers else NOTHING_TO_FILL)
         labels = {line.field.key: line.field.label for line, _ in passed}
         ticket.questions = {answer["key"]: labels[answer["key"]] for answer in answers}
+        slots = [answer["value"]["slot"] for answer in answers if answer["kind"] == "file"]
+        ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots}
         return answers
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
@@ -306,6 +316,13 @@ class Tickets:
         if stop:
             del self.tickets[ticket.job]
 
+    def hand(self, conn: sqlcipher3.Connection, ticket: Ticket, slot: str) -> None:
+        """Saves that this PDF goes out, before it does: a busy database raises and uses nothing up."""
+        handed = [*ticket.handed, slot]
+        with conn:
+            conn.execute(HANDED, (_json(handed), ticket.fill))
+        ticket.handed = handed
+
     def end_browser(self, conn: sqlcipher3.Connection, browser_id: int) -> None:
         """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser."""
         self._end(conn, [(ticket, BROWSER_REMOVED) for ticket in self._live().values() if ticket.browser == browser_id])
@@ -332,6 +349,22 @@ class Tickets:
         return self.tickets
 
 
+def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
+    """The PDF the pack named, byte for byte, so a newer one can't slip in; None if it isn't a plain file in the job's
+    own folder, is too big, isn't a PDF or has changed. A link can't lead out, as only real paths are compared."""
+    path, sha256 = ticket.files[slot]
+    folder = data_dir.resolve() / "documents" / str(ticket.job)
+    try:
+        real = path.resolve()
+        found = real.stat()
+        if not (real.is_relative_to(folder) and stat.S_ISREG(found.st_mode) and found.st_size <= MAX_PDF):
+            return None
+        data = real.read_bytes()
+    except (OSError, RuntimeError):  # RuntimeError: a link that leads to itself
+        return None
+    return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == sha256 else None
+
+
 def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
     """The job's newest fill, in plain words; None before its first."""
     row = conn.execute(LATEST, (job_id,)).fetchone()
@@ -341,7 +374,7 @@ def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
 def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
     """The newest fills of any job, in plain words, with each job's title and company. They outlive their browser."""
     return [
-        _plain(row[:7]) | {"job": row[7], "title": row[8], "company": row[9]} for row in conn.execute(RECENT, (limit,))
+        _plain(row[:8]) | {"job": row[8], "title": row[9], "company": row[10]} for row in conn.execute(RECENT, (limit,))
     ]
 
 
@@ -357,12 +390,13 @@ def toolbar_fills(conn: sqlcipher3.Connection) -> int:
 
 
 def _plain(row: tuple) -> dict:
-    started_on, toolbar, browser, state, stop_kind, changes, filled = row
+    started_on, toolbar, browser, state, stop_kind, changes, filled, files = row
     moment = datetime.fromisoformat(started_on).astimezone()  # the laptop's own clock
     return {
         "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
         "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
         "filled": json.loads(filled or "[]"),
+        "files": ", ".join(slot.replace("_", " ") for slot in json.loads(files or "[]")),
     }  # fmt: skip
 
 

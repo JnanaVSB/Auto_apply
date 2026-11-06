@@ -48,7 +48,7 @@
       <td><a href="/jobs/{{ fill.job }}">{{ fill.title }}, {{ fill.company }}</a></td>
       <td>{{ fill.browser or "No browser yet" }}</td>
       <td>{{ "Toolbar" if fill.toolbar else "Open and fill" }}</td>
-      <td>{{ fill.what }}</td>
+      <td>{{ fill.what }}{% if fill.files %}<br>PDF went to the browser: {{ fill.files }}{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

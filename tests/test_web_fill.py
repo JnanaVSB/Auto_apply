@@ -41,8 +41,8 @@ from app.web import actions
 from app.web import submit as form_part
 
 NEEDS_A_FILE = Form((Field("resume", "Resume/CV", "file", True, "standard"),))
-ADD_FILL = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state, stop_kind, changes, filled)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+ADD_FILL = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state, stop_kind, changes, filled,
+    files) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 HONEST = (
     "Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this "
     "browser can read them too."
@@ -145,10 +145,11 @@ def button(job):
 
 
 def past_fill(
-    conn, job, started_on=STARTED_ON, toolbar=0, browser=None, state="sent", stop=None, changes=None, filled=None
-):
+    conn, job, started_on=STARTED_ON, toolbar=0, browser=None, state="sent", stop=None, changes=None, filled=None,
+    files=None,
+):  # fmt: skip
     with conn:
-        conn.execute(ADD_FILL, (job, FORM_ADDRESS, started_on, toolbar, browser, state, stop, changes, filled))
+        conn.execute(ADD_FILL, (job, FORM_ADDRESS, started_on, toolbar, browser, state, stop, changes, filled, files))
 
 
 def now_fill(conn, job):
@@ -835,6 +836,29 @@ def test_nothing_filled_means_no_heading(client, conn, paired, filled):
     assert "<h3>Filled</h3>" not in box(client, job)
 
 
+@pytest.mark.parametrize(
+    ("files", "words"),
+    [
+        ('["resume"]', "resume"),
+        ('["cover_letter"]', "cover letter"),
+        ('["resume", "cover_letter"]', "resume, cover letter"),
+    ],
+)
+def test_the_box_and_settings_say_which_pdfs_went(client, conn, paired, files, words):
+    job = ready_job(conn)
+    past_fill(conn, job, state="sent", files=files)
+    last_fill = box(client, job).partition("Last fill:")[2].partition("</p>")[0]
+    assert last_fill.endswith(f"your answers went to the browser. PDF went to the browser: {words}.")
+    assert f"PDF went to the browser: {words}" in recent_part(client.get(SETTINGS).text)
+
+
+@pytest.mark.parametrize("files", [None, "[]"])
+def test_no_pdf_sent_says_nothing_about_one(client, conn, paired, files):
+    job = ready_job(conn)
+    past_fill(conn, job, state="sent", files=files)
+    assert "PDF went" not in box(client, job) and "PDF went" not in client.get(SETTINGS).text
+
+
 def test_settings_keeps_a_filled_fill_to_one_row(client, conn, paired):
     job = ready_job(conn)
     past_fill(conn, job, state="filled", filled=json.dumps(["A made-up question"]))
@@ -932,3 +956,6 @@ def test_the_rows_read_back_in_plain_words(conn):
     assert (recent["job"], recent["title"], recent["company"]) == (job, "ML Intern", "Acme")
     past_fill(conn, job, state="filled", filled='["Q"]')
     assert fills.latest(conn, job)["filled"] == ["Q"] and fills.recent(conn)[0]["filled"] == ["Q"]
+    assert latest["files"] == ""
+    past_fill(conn, job, state="sent", files='["cover_letter", "resume"]')
+    assert fills.latest(conn, job)["files"] == fills.recent(conn)[0]["files"] == "cover letter, resume"
