@@ -17,7 +17,7 @@
         {% if field.kind != "long_text" and field.key not in this_job_only %}<label class="tick"><input type="checkbox" name="save" value="1"> Save to my Questionnaire</label>{% endif %}
         <p><button type="submit">Save</button></p>{% endcall %}{% endmacro %}
 {% macro writing_line() %}<p class="muted" role="status" hx-get="/jobs/{{ job_id }}/form/writing" hx-trigger="every 3s" hx-swap="outerHTML">The Writer is writing these answers…</p>{% endmacro %}
-{% if writing_only %}{{ writing_line() }}{% else %}
+{% if fill_status %}<p id="fill-status" role="status" hx-swap-oob="true">{{ fill_status }}</p>{% elif writing_only %}{{ writing_line() }}{% else %}
 <section class="found" id="form-part">
   <h2>Application form</h2>
   {% if found and not record %}
@@ -142,6 +142,24 @@
     </tbody>
   </table>
   {% if hidden %}<p class="muted">{{ hidden }} hidden box{{ "es" if hidden != 1 }}, never filled.</p>{% endif %}
+  {% endif %}
+
+  {% if not record and (fill_address or fill_reason or last_fill) %}
+  <h3>Fill the form</h3>
+  {% if fill_address %}
+  <p><span hx-post="/jobs/{{ job_id }}/form/fill" hx-swap="none"><a href="{{ fill_address }}" target="_blank" rel="noopener">Open and fill</a></span></p>
+  <p class="muted">Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this browser can read them too.</p>
+  {% elif fill_reason %}<p class="muted">{{ fill_reason }}</p>{% endif %}
+  <p id="fill-status" role="status"></p>
+  {% if last_fill %}
+  <p class="muted">Last fill: {{ last_fill.when }}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}</p>
+  {% if last_fill.changes %}
+  <h3>Check these on the form</h3>
+  <ul class="reasons">
+    {% for change in last_fill.changes %}<li>{{ change.question }} <span class="muted">({{ change.what }})</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
   {% endif %}
 
   <h3>To copy</h3>

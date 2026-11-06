@@ -56,6 +56,23 @@ REUSE = "UPDATE fills SET toolbar = max(toolbar, ?), browser = coalesce(?, brows
 STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
 ENDED = "UPDATE fills SET state = 'ended', stop_kind = ? WHERE id = ?"
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
+LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes FROM fills WHERE job_id = ?
+    ORDER BY id DESC LIMIT 1"""
+RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
+    jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id ORDER BY fills.id DESC LIMIT ?"""
+HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
+    ("waiting", None): "no browser has opened it yet",
+    ("started", None): "opened in a browser",
+    ("sent", None): "your answers went to the browser",
+    ("stopped", "unexpected-page"): (
+        "stopped: the page didn't look like this job's form, so nothing was filled. Check the tab, then press Open and "
+        "fill again."
+    ),
+    ("stopped", "too-many-fields"): "stopped: the page had more boxes than a form has, so nothing was filled.",
+    ("ended", "browser-removed"): "ended when its browser was removed",
+    ("ended", "replaced"): "ended by a newer press",
+    ("ended", "submitted"): "ended when you pressed I submitted it",
+}
 
 
 def form_address(job: dict) -> str | None:
@@ -265,6 +282,28 @@ class Tickets:
         moment = self.clock()
         self.tickets = {job: ticket for job, ticket in self.tickets.items() if moment <= ticket.ends}
         return self.tickets
+
+
+def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
+    """The job's newest fill, in plain words; None before its first."""
+    row = conn.execute(LATEST, (job_id,)).fetchone()
+    return _plain(row) if row else None
+
+
+def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
+    """The newest fills of any job, in plain words, with each job's title and company. They outlive their browser."""
+    return [
+        _plain(row[:6]) | {"job": row[6], "title": row[7], "company": row[8]} for row in conn.execute(RECENT, (limit,))
+    ]
+
+
+def _plain(row: tuple) -> dict:
+    started_on, toolbar, browser, state, stop_kind, changes = row
+    moment = datetime.fromisoformat(started_on).astimezone()  # the laptop's own clock
+    return {
+        "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
+        "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
+    }  # fmt: skip
 
 
 def _drawn_field(item: object) -> Field:
