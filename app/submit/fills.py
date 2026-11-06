@@ -114,7 +114,7 @@ LEFT = {  # why the plugin left a line, as the job's box says it
     "no-choice": "the plugin couldn't tell which choice is yours",
     "cant-set": "the form wouldn't let the plugin set this",
     "no-file": "the PDF couldn't be fetched",
-    "file-refused": "the box didn't take the PDF",
+    "file-refused": "the box doesn't show the PDF: check it",
     "didnt-stick": "the form shows something else here: check it",
     "not-reached": "the fill stopped before this one",
 }

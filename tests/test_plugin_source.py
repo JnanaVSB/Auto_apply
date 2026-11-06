@@ -9,8 +9,10 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from app.resume import CONTROL
 from app.sources import closed_site
-from app.submit import ashby, greenhouse, lever
+from app.submit import ashby, fills, greenhouse, lever
+from app.web import plugin
 
 PLUGIN = Path(__file__).parents[1] / "plugin"
 BACKGROUND, PAGE, POPUP, OPTIONS = "background.js", "page.js", "popup.js", "options.js"
@@ -261,6 +263,75 @@ def test_storage_is_locked_before_the_key_is_saved():
 def test_no_reply_holds_the_ticket_or_the_key():
     replies = [re.sub(r'"[^"]*"', "", reply) for reply in re.findall(r"return \{[^\n]*", code(BACKGROUND))]
     assert replies and [reply for reply in replies if re.search(r"\b(?:ticket|key)\b", reply)] == []
+
+
+# The page part
+
+
+def page_function(name):
+    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", code(PAGE), re.S | re.M)
+    assert found, name
+    return found[0]
+
+
+@pytest.mark.parametrize("name", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
+def test_the_page_part_s_files_exist(name):
+    assert (PLUGIN / name).is_file()
+
+
+@pytest.mark.parametrize("site", FORM_PAGES)
+def test_a_board_is_one_constant_with_an_anchor(site):
+    assert code(f"boards/{site}.js").startswith("const BOARD = {") and "anchor:" in code(f"boards/{site}.js")
+
+
+def test_the_click_is_inside_tick_after_its_check():
+    tick = page_function("tick")
+    assert tick.index("box.matches(TICK_BOX) && !box.checked") < tick.index(".click(")
+    assert """TICK_BOX = 'input[type="radio"], input[type="checkbox"]';""" in code(PAGE)
+
+
+def test_only_raise_makes_an_event():
+    raise_ = page_function("raise")
+    assert raise_.count("dispatchEvent") == 2 and code(PAGE).count("dispatchEvent") == 2
+    assert '"input", { bubbles: true }' in raise_ and '"change", { bubbles: true }' in raise_
+
+
+def test_a_password_box_and_the_other_skipped_sorts_are_never_read():
+    skipped = re.search(r"^const SKIPPED = new Set\(\[(.*?)\]\);$", code(PAGE), re.M)[1]
+    assert set(re.findall(r'"(\w+)"', skipped)) == {"hidden", "password", "submit", "button", "reset", "image"}
+
+
+def test_no_message_from_the_page_carries_an_address():
+    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE))
+    assert len(messages) == 4 and code(PAGE).count("sendMessage(") == 1  # open, file, done, form
+    assert [message for message in messages if re.search(r"address|location|href", message)] == []
+
+
+def test_the_page_part_never_looks_outside_its_own_frame():
+    assert [word for word in ("window.top", "parent.", "contentWindow", "contentDocument") if word in code(PAGE)] == []
+
+
+def test_tidy_takes_out_the_same_characters_as_the_app():
+    assert f"const CONTROL = /{CONTROL.pattern}/g;" in code(PAGE)
+
+
+def test_every_why_and_stop_is_one_the_app_knows():
+    literals = set(re.findall(r'"([^"\n]*)"', code(PAGE)))
+    known = {*fills.LEFT, *plugin.PAGE_STOPS}
+    assert known <= literals
+    assert {word for word in literals if re.fullmatch(r"[a-z]+(?:-[a-z]+)+", word)} <= known | {
+        "aria-label", "aria-required", "one-time-code",
+    }  # fmt: skip
+
+
+def test_the_page_s_words_are_read_only_for_the_limit_check():
+    assert code(PAGE).count("innerText") == 1
+    assert "innerText" in re.search(r"^const noForm = .*$", code(PAGE), re.M)[0]
+
+
+def test_begin_is_answered_at_once():
+    listener = code(PAGE).partition("onMessage.addListener(")[2]
+    assert "async" not in listener.partition("\n")[0] and "reply({});" in listener
 
 
 # The popup and the options page
