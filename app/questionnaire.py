@@ -47,6 +47,11 @@ def clean(text: str) -> str:
     return " ".join(WORDS.findall(text.lower()))
 
 
+def spelled(text: str) -> str:
+    """Words as they must match where a symbol can change the meaning: only case and spacing don't count."""
+    return " ".join(text.lower().split())
+
+
 def _visible(text: str) -> str:
     if CONTROL.search(text):
         raise ValueError("contains an invisible (control) character")

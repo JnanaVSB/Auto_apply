@@ -19,6 +19,7 @@ import sqlcipher3
 
 from app.collect import now
 from app.config import Config
+from app.questionnaire import spelled
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
 from app.submit import Choice, Drawn, Field, ashby, distinct, greenhouse, lever, match, record
@@ -133,11 +134,6 @@ def why_not(conn: sqlcipher3.Connection, job: dict, found: Preview | None, limit
         left = "1 minute" if minutes == 1 else f"{minutes} minutes"
         return f"The next fill can start in {left}: that's the pause you set in Settings."
     return None
-
-
-def spelled(text: str) -> str:
-    """Words as the compare reads them: every symbol counts, only case and spacing don't."""
-    return " ".join(text.lower().split())
 
 
 def drawn(items: list) -> tuple[Field, ...]:
@@ -355,10 +351,9 @@ def _is_choice(item: object) -> bool:
 
 
 def _question(text: str) -> str:
-    """A question's words as the compare reads them: its required mark at the end doesn't count, where on a choice a
-    star is part of the choice."""
-    words = spelled(text)
-    return words[:-1].rstrip() if words.endswith(("*", "✱")) else words
+    """A question's words as the compare reads them: required marks at the end don't count, where on a choice a star is
+    part of the choice."""
+    return spelled(text).rstrip(" *✱")
 
 
 def _choices(found: Field) -> Counter[str]:

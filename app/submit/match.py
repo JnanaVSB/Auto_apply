@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 
 from app import places
-from app.questionnaire import DISABILITY, MONTH, NO_ANSWER, OLD_MARKER, RACES, SECTIONS, VETERAN, clean, place
+from app.questionnaire import DISABILITY, MONTH, NO_ANSWER, OLD_MARKER, RACES, SECTIONS, VETERAN, clean, place, spelled
 from app.submit import Choice, Field, Form
 from app.submit.wordings import (
     KEYS,
@@ -398,8 +398,8 @@ class _Matcher:
         """The values of the choices the answer names (for a multi field, one a line); () unless each names exactly
         one choice. Your own pick is found by its exact label first."""
         chosen = []
-        for text in filter(clean, answer.splitlines() or [answer]):
-            found = _named(field, text) if own else [c for c in field.choices if clean(c.label) == clean(text)]
+        for text in filter(str.strip, answer.splitlines() or [answer]):
+            found = _named(field, text) if own else [c for c in field.choices if spelled(c.label) == spelled(text)]
             found = [choice.value for choice in found]
             if len(found) != 1:
                 return ()
@@ -441,11 +441,9 @@ def written(answers: dict) -> dict[str, str]:
 
 
 def _named(field: Field, text: str) -> list[Choice]:
-    """The choices your pick names: the same label, else the same words, else for yes or no, one starting with it."""
-    wanted, labels = clean(text), [(choice, clean(choice.label)) for choice in field.choices]
+    """The choices your pick names: the same label, else the same label in another case or spacing."""
     exact = [choice for choice in field.choices if choice.label == text.strip()]
-    same = [choice for choice, label in labels if label == wanted]
-    return exact or same or [c for c, label in labels if wanted in ("yes", "no") and label.startswith(f"{wanted} ")]
+    return exact or [choice for choice in field.choices if spelled(choice.label) == spelled(text)]
 
 
 def _eeo_fits(topic: str, label: str, answer: str) -> bool:

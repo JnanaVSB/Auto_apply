@@ -493,15 +493,25 @@ def choice_box(labels, kind="single"):
     }  # fmt: skip
 
 
-def fill_choice(client, door, conn, labels, pick, drawn, kind="single"):
-    """A job asking your name and this question with `pick` as your answer, pressed and opened on a form drawing
-    `drawn` choices; what the browser was told."""
+def choice_job(conn, labels, pick, kind="single"):
+    """A job asking your name and this question, with `pick` as your answer."""
     with conn:
         job = add_job(conn, "ML Intern", apply_url=LINK)
     asked = question(labels, kind)
     submit.save(conn, job, Form((FIRST_NAME, asked)), "api")
     preview.keep(conn, job, FIRST_NAME, "Fake")
     preview.keep(conn, job, asked, pick)
+    return job
+
+
+def read_again(conn, job, labels):
+    """The form read again, its question now offering `labels`."""
+    submit.save(conn, job, Form((FIRST_NAME, question(labels))), "api")
+
+
+def fill_choice(client, door, conn, labels, pick, drawn, kind="single"):
+    """`choice_job`, pressed and opened on a form drawing `drawn` choices; what the browser was told."""
+    job = choice_job(conn, labels, pick, kind)
     assert FILLING in press(client, job).text
     ticket = call(door, START).json()["ticket"]
     return send(door, ticket, [NAME_BOX, choice_box(drawn, kind)]).json()
@@ -572,6 +582,56 @@ def test_a_star_is_part_of_a_choice_so_5_is_not_5_star(client, door, conn, paire
 def test_a_star_added_to_a_choice_is_a_change(client, door, conn, paired):
     assert fill_choice(client, door, conn, ["5", "5+"], "5", ["5*", "5+"]) == {"go": True, "pack": [NAME_PACK]}
     assert said_about_it(conn) == [CHOICES_CHANGED]
+
+
+def test_a_multi_can_hold_a_choice_that_is_only_a_symbol(client, door, conn, paired):
+    labels = ["+", "A", "B"]
+    answer = fill_choice(client, door, conn, labels, "+\nA", labels, "multi")
+    assert answer["pack"][1]["value"] == ["+", "A"]
+
+
+READ_AGAIN = [
+    (["5", "10"], "5", ["5+", "10"]),
+    (["<1 year", "1-3"], "<1 year", [">1 year", "1-3"]),
+    (["C", "Go"], "C", ["C++", "Go"]),
+]
+
+
+@pytest.mark.parametrize(("labels", "pick", "new"), READ_AGAIN)
+def test_your_pick_never_moves_to_a_choice_changed_by_a_symbol(client, conn, data_dir, paired, labels, pick, new):
+    job = choice_job(conn, labels, pick)
+    read_again(conn, job, new)
+    line = preview.preview(conn, data_dir, job).lines[1]
+    assert (line.status, line.note) == ("decide", match.LOST)
+    text = press(client, job).text
+    assert OPEN_FIRST in text and NOT_FILLED in text
+    assert fill_rows(conn) == [] and not held(client)
+
+
+@pytest.mark.parametrize(("labels", "pick", "new"), READ_AGAIN)
+def test_a_read_that_lands_during_a_fill_leaves_that_field_out(client, door, conn, paired, labels, pick, new):
+    job = choice_job(conn, labels, pick)
+    press(client, job)
+    ticket = call(door, START).json()["ticket"]
+    read_again(conn, job, new)
+    assert send(door, ticket, [NAME_BOX, choice_box(new)]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+@pytest.mark.parametrize(
+    ("labels", "pick", "new", "goes_out"),
+    [
+        (["Yes", "No"], "Yes", ["YES", "No"], "YES"),
+        (["Two weeks", "A month"], "Two weeks", ["two  WEEKS", "A month"], "two WEEKS"),
+    ],
+)
+def test_a_read_that_only_changes_case_or_spacing_keeps_your_pick(
+    client, door, conn, paired, labels, pick, new, goes_out
+):
+    job = choice_job(conn, labels, pick)
+    read_again(conn, job, new)
+    press(client, job)
+    answer = send(door, call(door, START).json()["ticket"], [NAME_BOX, choice_box(new)]).json()
+    assert answer["pack"][1]["value"] == goes_out and changes(conn) == []
 
 
 def only_alike(conn, job):

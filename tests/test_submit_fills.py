@@ -882,8 +882,9 @@ def test_only_case_and_spacing_are_ignored(text, as_spelled):
         ("Phone *", "phone"),
         ("Resume/CV ✱", "resume/cv"),
         (" Phone*  ", "phone"),
-        ("Phone**", "phone*"),
-        ("Phone* ✱", "phone*"),
+        ("Phone**", "phone"),
+        ("Phone* ✱", "phone"),
+        ("Years? * *", "years?"),
         ("*Phone", "*phone"),
         ("Phone?", "phone?"),
         ("", ""),
@@ -903,6 +904,9 @@ def test_a_question_also_loses_one_required_mark_at_the_end(text, as_read):
         ("Your phone", "Your\xa0phone"),
         ("Need sponsorship?", "Need sponsorship?*"),
         ("(Optional) Pronouns", "(Optional) Pronouns"),
+        ("Years?*", "Years?**"),
+        ("Years? *", "Years? * *"),
+        ("Phone", "Phone**"),
     ],
 )
 def test_a_question_s_case_spacing_and_required_mark_don_t_count(saved, shown):
@@ -911,9 +915,7 @@ def test_a_question_s_case_spacing_and_required_mark_don_t_count(saved, shown):
     assert keys(passed) == ["phone"] and changes == []
 
 
-@pytest.mark.parametrize(
-    ("saved", "shown"), [("Phone", "Phone?"), ("Phone", "Phone**"), ("<1 year", ">1 year"), ("Pay in $", "Pay in €")]
-)
+@pytest.mark.parametrize(("saved", "shown"), [("Phone", "Phone?"), ("<1 year", ">1 year"), ("Pay in $", "Pay in €")])
 def test_a_question_s_symbols_count(saved, shown):
     form = Form((Field("phone", saved, "text", True, "standard"),))
     passed, changes = compared(lines_of(form, {"phone": "Fake"}), [box("phone", shown, required=True)])
