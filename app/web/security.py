@@ -92,13 +92,22 @@ class Logins:
 
     def session(self, token: str | None) -> Session | None:
         """The live session for this cookie, marked as used now; an ended one is forgotten."""
-        session, now = self.sessions.get(token or ""), self.clock()
-        if session and (now - session.last_seen > IDLE_SECONDS or now - session.started > MAX_SESSION_SECONDS):
+        session = self.sessions.get(token or "")
+        if session and self._ended(session):
             del self.sessions[token]
             return None
         if session:
-            session.last_seen = now
+            session.last_seen = self.clock()
         return session
+
+    def live(self) -> bool:
+        """Whether anyone is logged in now. It only looks, so the plugin can never keep a login alive."""
+        # a copy: a login can land from its thread
+        return any(not self._ended(session) for session in list(self.sessions.values()))
+
+    def _ended(self, session: Session) -> bool:
+        now = self.clock()
+        return now - session.last_seen > IDLE_SECONDS or now - session.started > MAX_SESSION_SECONDS
 
     def log_out(self, token: str | None) -> None:
         self.sessions.pop(token or "", None)

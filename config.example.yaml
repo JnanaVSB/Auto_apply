@@ -47,6 +47,10 @@ gmail_every_minutes: 30
 gmail_read_all: false
 # New requests per second to each job site (1 to 5). 1 is polite; each site is read on its own, all at once.
 requests_per_second: 1
+# Forms the browser plugin may fill in a day, counted on this computer's calendar (1 to 50).
+fills_per_day: 10
+# Minutes between two fills, for any job (0 to 60). 0 = off.
+fill_pause_minutes: 2
 # The phone's way in, from Tailscale: Settings → Phone sets it, and docs/phone-setup.md shows how. Empty: off.
 # phone_address: https://laptop.tail0000.ts.net
 

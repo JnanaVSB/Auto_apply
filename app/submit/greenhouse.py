@@ -6,9 +6,10 @@ from typing import Any
 
 from app.fetch import Fetcher, FetchError, NotFound
 from app.sources import html_to_text
-from app.submit import BROKEN, Choice, Field, Form, FormClosed, FormError, distinct
+from app.submit import BROKEN, Choice, Drawn, Field, Form, FormClosed, FormError, distinct
 
 FORM_API = "https://boards-api.greenhouse.io/v1/boards/{}/jobs/{}?questions=true"
+FORM_PAGE = "https://job-boards.greenhouse.io/embed/job_app?for={}&token={}"
 KINDS = {
     "input_text": "text", "textarea": "long_text", "input_file": "file", "input_hidden": "hidden",
     "multi_value_single_select": "single", "multi_value_multi_select": "multi",
@@ -22,6 +23,10 @@ CONSENTS = {
     "requires_retention_consent": "Consent to keeping your data ({})",
 }
 EDUCATION = {"school": "School", "degree": "Degree", "discipline": "Discipline"}
+DRAWN = Drawn(
+    frozenset({"race", *EDUCATION}), ("demographic_", "data_compliance["), frozenset({"country", "hispanic_ethnicity"}),
+    hidden_choices=True,
+)  # fmt: skip
 UNREADABLE = "Greenhouse's form for this job could not be read."
 CLOSED = "This posting is closed or was removed (Greenhouse says not found)."
 

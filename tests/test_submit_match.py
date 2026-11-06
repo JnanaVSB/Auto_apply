@@ -100,6 +100,36 @@ def test_a_kept_choice_is_matched_and_a_lost_one_is_yours_to_decide():
 
 
 @pytest.mark.parametrize(
+    ("labels", "text", "named"),
+    [
+        (("5", "5+"), "5+", ["5+"]),
+        (("Yes", "No"), "yes", ["Yes"]),
+        (("Yes", "No"), " Yes ", ["Yes"]),
+        (("Two weeks", "No"), "two  WEEKS", ["Two weeks"]),
+        (("5+", "10"), "5", []),
+        (("<1 year", "1-3"), ">1 year", []),
+        (("A", "a"), "A", ["A"]),
+        (("A", "a"), "a", ["a"]),
+        (("Yes", "YES"), "yes", ["Yes", "YES"]),
+        (("Yes, I am authorized", "No"), "Yes", []),
+    ],
+)
+def test_your_pick_names_a_choice_by_its_exact_label_else_only_its_case_and_spacing_may_differ(labels, text, named):
+    assert [choice.label for choice in match._named(field("Pick one", "single", choices=labels), text)] == named
+
+
+def test_a_pick_whose_choice_changed_by_a_symbol_is_yours_to_decide_though_the_wording_is_the_same():
+    asked = field("Years?", "single", choices=("5+", "10"))
+    assert match.wording(asked) == match.wording(field("Years?", "single", choices=("5", "10")))
+    assert said(line(asked, kept={"Years?": ("5", "you")})) == ("decide", "unknown", match.LOST)
+
+
+def test_a_picked_yes_never_lands_on_a_longer_choice():
+    asked = field("Pick one", "single", choices=("Yes, I am", "No"))
+    assert said(line(asked, kept={"Pick one": ("Yes", "you")})) == ("decide", "unknown", match.LOST)
+
+
+@pytest.mark.parametrize(
     ("key", "label", "value"),
     [
         ("first_name", "First Name", "Sam Lee"),
@@ -206,6 +236,43 @@ def test_uploads_take_the_newest_pdf_or_say_why_not(upload, files, result):
 def test_known_questions_take_the_questionnaire_answer(label, value, section):
     found = line(field(label, required=True))
     assert (found.status, found.value, found.source) == ("fill", value, f"Questionnaire: {section}")
+
+
+# A Questionnaire answer against a form's choices: every symbol counts
+
+
+@pytest.mark.parametrize(
+    ("label", "choices"),
+    [
+        ("Cumulative GPA", ("<3.9", "4.0")),
+        ("Cumulative GPA", ("3.9+", "3.0")),
+        ("Notice period", ("<Two weeks", "A month")),
+        ("Highest level of education completed", ("Master's+", "Bachelor's")),
+    ],
+)
+def test_a_questionnaire_answer_differing_by_a_symbol_is_yours_to_decide(label, choices):
+    found = line(field(label, "single", required=True, choices=choices))
+    assert said(found) == ("decide", "unknown", "your Questionnaire answer is not one of the choices")
+
+
+@pytest.mark.parametrize(
+    ("label", "choices", "picked"),
+    [
+        ("Are you open to relocation?", YES_NO, "Yes"),
+        ("Are you open to relocation?", ("yes", "no"), "yes"),
+        ("Highest level of education completed", ("Master's", "PhD"), "Master's"),
+        ("Cumulative GPA", ("3.9", "4.0"), "3.9"),
+    ],
+)
+def test_a_questionnaire_answer_spelled_the_same_still_fills(label, choices, picked):
+    found = line(field(label, "single", required=True, choices=choices))
+    assert found.status == "fill" and chosen(found) == [picked]
+
+
+def test_a_saved_more_answer_differing_by_a_symbol_suggests_nothing():
+    saved = ANSWERS | {"more": [{"question": "Favourite size?", "answer": "5"}]}
+    found = line(field("Favourite size?", "single", required=True, choices=("5+", "10")), saved)
+    assert said(found) == ("decide", "unknown", "")
 
 
 def test_a_legal_question_is_filled_only_on_exactly_yes_and_no():

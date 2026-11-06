@@ -1,9 +1,11 @@
 """The browser plugin's door: pairing a browser, and who may come in on /plugin/. Fake keys and made-up plugins only."""
 
 import hashlib
+import json
 import logging
 import re
 from contextlib import ExitStack
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -14,11 +16,18 @@ from helpers import ADDRESS, add_job, csrf, log_in, one
 from starlette.exceptions import HTTPException
 from test_web_phone import FORWARDED, FUNNEL, HOST, IDENTITY, ORIGIN, PHONE, phone_login, words
 
-from app import collect, config
+from app import collect, config, submit
+from app.config import Config
 from app.fetch import Fetcher
-from app.web import main, preparer, security
+from app.submit import Field, Form, fills, match, preview
+from app.web import main, preparer, queries, security
 
 HELLO = "/plugin/hello"
+START = "/plugin/start"
+KNOWN = "/plugin/known"
+FILL = "/plugin/fill"
+FORM = "/plugin/form"
+ROUTES = (HELLO, START, KNOWN, FILL, FORM)
 SETTINGS = "/settings/plugin"
 REMOVE = "/settings/plugin/remove"
 LOG_OUT_ALL = "/settings/phone/log-out-all"
@@ -27,6 +36,14 @@ PLUGIN = "chrome-extension://" + "a" * 32
 OTHER_PLUGIN = "chrome-extension://" + "p" * 32
 JOB_PAGE = "http://127.0.0.1:8767"
 GOOD = {"protocol": 1, "version": "1.2.3"}
+LINK = "https://job-boards.greenhouse.io/acme/jobs/123"
+FORM_ADDRESS = "https://job-boards.greenhouse.io/embed/job_app?for=acme&token=123"
+FIRST_NAME = Field("first_name", "First Name", "text", True, "standard")
+SECOND_KEY = "second-fake-key"
+FILLS = "SELECT toolbar, browser, state, stop_kind FROM fills ORDER BY id"
+NAME_BOX = {"key": "first_name", "label": "First Name*", "kind": "text", "required": True}
+NAME_PACK = {"key": "first_name", "kind": "text", "value": "Fake"}
+STOP = {"go": False, "reason": "unexpected-page"}
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
 BAD_ORIGINS = (
     None,
@@ -128,6 +145,8 @@ def raw(client, method, path, headers=None, chunks=()):
         chunk = next(waiting, None)
         if chunk is None:
             return {"type": "http.request", "body": b"", "more_body": False}
+        if isinstance(chunk, dict):  # a message of its own, such as the connection dropping
+            return chunk
         return {"type": "http.request", "body": chunk, "more_body": True}
 
     async def send(message):
@@ -167,7 +186,7 @@ def test_a_new_browser_says_hello_and_is_pinned_to_its_plugin(door, conn):
 
 
 @pytest.mark.parametrize("method", METHODS)
-@pytest.mark.parametrize("path", [HELLO, "/plugin/nothing-here"])
+@pytest.mark.parametrize("path", [*ROUTES, "/plugin/nothing-here"])
 def test_every_method_needs_the_key(door, conn, method, path):
     pair(conn, plugin=PLUGIN)
     pair(conn, "another-fake-key", "Removed one")
@@ -191,10 +210,11 @@ def test_every_method_needs_the_key(door, conn, method, path):
 
 
 @pytest.mark.parametrize("method", METHODS)
-def test_every_method_needs_the_pinned_plugin(door, conn, method):
+@pytest.mark.parametrize("path", ROUTES)
+def test_every_method_needs_the_pinned_plugin(door, conn, method, path):
     pair(conn, plugin=PLUGIN)
     for origin in (*BAD_ORIGINS, OTHER_PLUGIN):
-        response = door.request(method, HELLO, headers=sent(origin=origin))
+        response = door.request(method, path, headers=sent(origin=origin))
         assert response.status_code == 403
         if method != "HEAD":
             assert response.json() == {"error": "wrong-plugin"}
@@ -202,11 +222,12 @@ def test_every_method_needs_the_pinned_plugin(door, conn, method):
 
 
 @pytest.mark.parametrize("method", METHODS)
-def test_a_bad_origin_never_pins_a_new_browser(door, conn, method):
+@pytest.mark.parametrize("path", ROUTES)
+def test_a_bad_origin_never_pins_a_new_browser(door, conn, method, path):
     """On a browser with no pin the shape check alone decides: nothing else stands behind it."""
     pair(conn)
     for origin in BAD_ORIGINS:
-        response = door.request(method, HELLO, json=GOOD, headers=sent(origin=origin))
+        response = door.request(method, path, json=GOOD, headers=sent(origin=origin))
         assert response.status_code == 403
         if method != "HEAD":
             assert response.json() == {"error": "wrong-plugin"}
@@ -276,12 +297,13 @@ def test_two_browsers_each_have_their_own_key_and_plugin(door, conn):
 
 
 @pytest.mark.parametrize("site", ["same-site", "cross-site"])
-def test_a_job_pages_simple_post_is_refused_and_writes_nothing(door, conn, site):
+@pytest.mark.parametrize("path", ROUTES)
+def test_a_job_pages_simple_post_is_refused_and_writes_nothing(door, conn, site, path):
     """Piece 0 showed this one reaches the server: only the door can stop it."""
     pair(conn)
     headers = {"Origin": JOB_PAGE, "Content-Type": "text/plain;charset=UTF-8", "Sec-Fetch-Site": site}
     for mode in ("cors", "no-cors"):
-        response = door.post(HELLO, content="hello=page", headers=headers | {"Sec-Fetch-Mode": mode})
+        response = door.post(path, content="hello=page", headers=headers | {"Sec-Fetch-Mode": mode})
         assert refused(response, 401, "no-key")
     assert row(conn) == (None, None, None)
 
@@ -343,14 +365,15 @@ def test_near_misses_of_the_door_are_ordinary_paths(door, conn):
         assert (status, text) == (303, "")
 
 
-def test_no_body_is_read_before_the_door_has_decided(door, conn):
+@pytest.mark.parametrize("path", ROUTES)
+def test_no_body_is_read_before_the_door_has_decided(door, conn, path):
     pair(conn, plugin=PLUGIN)
     big = [b"x" * 2**20, b"x" * 2**20]
     headers = {"Content-Length": str(2 * 2**20), "Content-Type": "application/json"}
     for extra in ({}, {"Authorization": "Bearer a-wrong-fake-key", "Origin": PLUGIN}):
-        status, text, reads = raw(door, "POST", HELLO, headers | extra, big)
+        status, text, reads = raw(door, "POST", path, headers | extra, big)
         assert (status, text, reads) == (401, '{"error":"no-key"}', 0)
-    status, text, reads = raw(door, "POST", HELLO, headers | sent(origin=JOB_PAGE), big)
+    status, text, reads = raw(door, "POST", path, headers | sent(origin=JOB_PAGE), big)
     assert (status, text, reads) == (403, '{"error":"wrong-plugin"}', 0)
 
 
@@ -378,9 +401,10 @@ def test_a_repeated_hello_changes_only_the_time(door, conn, monkeypatch):
 
 
 @pytest.mark.parametrize("protocol", [2, 0, "1", True, 1.0, None, [1]])
-def test_any_other_protocol_is_an_old_plugin(door, conn, protocol):
+@pytest.mark.parametrize("path", ROUTES)
+def test_any_other_protocol_is_an_old_plugin(door, conn, protocol, path):
     pair(conn, plugin=PLUGIN)
-    assert refused(door.post(HELLO, json=GOOD | {"protocol": protocol}, headers=sent()), 400, "old-plugin")
+    assert refused(door.post(path, json=GOOD | {"protocol": protocol}, headers=sent()), 400, "old-plugin")
     assert row(conn)[1:] == (None, None)
 
 
@@ -473,11 +497,631 @@ def test_a_body_of_exactly_one_megabyte_is_read(door, conn):
 # Refusals are JSON, from a fixed list, with no page text
 
 
+# The reader, for every route
+
+
+def call(door, path, address=FORM_ADDRESS, key=KEY):
+    return door.post(path, json={"protocol": 1, "address": address}, headers=sent(key))
+
+
+def ready_job(conn, link=LINK, title="ML Intern", **values):
+    """A job with its form read and every line answered, so it can be filled."""
+    with conn:
+        job = add_job(conn, title, apply_url=link, **values)
+    submit.save(conn, job, Form((FIRST_NAME,)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    return job
+
+
+def press(door, conn, data_dir, job):
+    """Open and fill: a ticket for whichever browser opens the form."""
+    limits = Config(data_dir=data_dir, fill_pause_minutes=0)
+    found = preview.preview(conn, data_dir, job)
+    assert door.app.state.tickets.make(conn, queries.job(conn, job), found, limits) is None
+
+
+def fill_rows(conn):
+    return conn.execute(FILLS).fetchall()
+
+
+def held(door):
+    return door.app.state.tickets.tickets
+
+
 @pytest.fixture
-def refusals(door, conn):
+def limits(tmp_path, data_dir, monkeypatch):
+    """Writes the settings /plugin/fill reads at each call; no pause and the usual cap until a test says otherwise."""
+    path = tmp_path / "config.yaml"
+    monkeypatch.setattr(config, "CONFIG_PATH", path)
+
+    def write(cap=10, pause=0):
+        path.write_text(f"data_dir: {data_dir}\nfills_per_day: {cap}\nfill_pause_minutes: {pause}\n", encoding="utf-8")
+
+    write()
+    return write
+
+
+@pytest.mark.parametrize("path", ROUTES)
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"not json",
+        b"[1]",
+        b"{",
+        b'{"address": "x"}',
+        b'{"version": "1.2.3"}',
+        b'{"note": "\\ud800", "protocol": 1}',
+    ],
+)
+def test_every_route_refuses_a_damaged_body(owner, door, conn, path, body):
+    pair(conn, plugin=PLUGIN)
+    assert refused(door.post(path, content=body, headers=sent()), 400, "bad-request")
+    assert fill_rows(conn) == [] and not held(door)
+
+
+@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+@pytest.mark.parametrize("address", [None, 1, True, 1.5, [FORM_ADDRESS], {"address": FORM_ADDRESS}, "x" * 2001])
+def test_an_address_must_be_a_string_of_at_most_2000_characters(owner, door, conn, limits, path, address):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    assert refused(call(door, path, address), 400, "bad-request")
+    assert fill_rows(conn) == [] and not held(door)
+
+
+@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+def test_no_address_is_a_bad_request(owner, door, conn, path):
+    pair(conn, plugin=PLUGIN)
+    assert refused(door.post(path, json={"protocol": 1}, headers=sent()), 400, "bad-request")
+
+
+def test_an_address_of_2000_characters_is_only_unknown(owner, door, conn):
+    pair(conn, plugin=PLUGIN)
+    assert refused(call(door, START, "x" * 2000), 404, "no-ticket")
+    assert call(door, KNOWN, "x" * 2000).json() == {"job": None}
+    assert refused(call(door, FILL, "x" * 2000), 404, "no-job")
+
+
+@pytest.mark.parametrize("path", ROUTES)
+def test_a_browser_removed_while_its_body_is_read_gets_nothing(owner, door, conn, data_dir, limits, path):
+    gone = pair(conn, plugin=PLUGIN)
+    pair(conn, SECOND_KEY, "Second", plugin=PLUGIN)
+    press(door, conn, data_dir, ready_job(conn))
+    body = json.dumps(GOOD | {"address": FORM_ADDRESS}).encode()
+
+    def sending():
+        yield body[:10]
+        with door.app.state.conn as app_conn:  # in the dashboard's own thread, as a Remove press would be
+            app_conn.execute("DELETE FROM paired_browsers WHERE id = ?", (gone,))
+        yield body[10:]
+
+    status, text, _ = raw(door, "POST", path, sent(), sending())
+    assert (status, text) == (401, '{"error":"no-key"}')
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+    assert not next(iter(held(door).values())).taken
+
+
+@pytest.mark.parametrize("path", ROUTES)
+def test_a_dropped_connection_is_quiet(door, conn, caplog, path):
+    pair(conn, plugin=PLUGIN)
+    caplog.set_level(logging.DEBUG)
+    status, text, _ = raw(door, "POST", path, sent(), [b"{", {"type": "http.disconnect"}])
+    assert (status, text) == (400, '{"error":"bad-request"}')
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+# /plugin/known and /plugin/fill need a live login
+
+
+@pytest.mark.parametrize("path", [KNOWN, FILL])
+def test_the_key_alone_makes_nothing(door, conn, limits, path):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    assert refused(call(door, path), 403, "not-logged-in")
+    assert fill_rows(conn) == [] and not held(door)
+
+
+@pytest.mark.parametrize("path", [KNOWN, FILL])
+@pytest.mark.parametrize("gone", [security.IDLE_SECONDS, security.MAX_SESSION_SECONDS])
+def test_a_timed_out_login_is_no_login(owner, door, conn, clock, limits, path, gone):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    clock.now += gone + 1
+    assert refused(call(door, path), 403, "not-logged-in")
+    assert fill_rows(conn) == [] and not held(door)
+
+
+@pytest.mark.parametrize("path", [KNOWN, FILL])
+def test_the_plugin_s_calls_keep_no_login_alive(owner, door, conn, clock, limits, path):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    (session,) = owner.app.state.logins.sessions.values()
+    seen = session.last_seen
+    clock.now += 60
+    assert call(door, path).status_code == 200
+    assert session.last_seen == seen
+
+
+def test_a_known_form_gives_the_job(owner, door, conn):
+    pair(conn, plugin=PLUGIN)
+    job = ready_job(conn)
+    assert call(door, KNOWN).json() == {"job": f"/jobs/{job}", "title": "ML Intern", "company": "Acme"}
+
+
+def test_an_unknown_form_gives_no_job(owner, door, conn):
+    pair(conn, plugin=PLUGIN)
+    response = call(door, KNOWN, "https://jobs.lever.co/acme/1/apply")
+    assert (response.status_code, response.json()) == (200, {"job": None})
+
+
+NEAR_MISSES = (
+    LINK,
+    FORM_ADDRESS.replace("https:", "http:"),
+    FORM_ADDRESS + "/",
+    FORM_ADDRESS + "&x=1",
+    FORM_ADDRESS + "#top",
+    FORM_ADDRESS + " ",
+    " " + FORM_ADDRESS,
+    FORM_ADDRESS.replace("for=acme", "for=ACME"),
+    FORM_ADDRESS.replace("job-boards", "JOB-BOARDS"),
+    FORM_ADDRESS.replace("job-boards", "boards"),
+    "https://job-boards.greenhouse.io/embed/job_app?token=123&for=acme",
+    "",
+)
+
+
+@pytest.mark.parametrize("address", NEAR_MISSES)
+def test_a_near_miss_finds_no_job(owner, door, conn, data_dir, limits, address):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    assert call(door, KNOWN, address).json() == {"job": None}
+    assert refused(call(door, FILL, address), 404, "no-job")
+    press(door, conn, data_dir, 1)
+    assert refused(call(door, START, address), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("address", ["https://[", "http://[::1", "https://℀.greenhouse.io/a/jobs/1"])
+def test_a_broken_address_is_simply_no_job(owner, door, conn, limits, caplog, address):
+    pair(conn, plugin=PLUGIN)
+    caplog.set_level(logging.DEBUG)
+    response = call(door, KNOWN, address)
+    assert (response.status_code, response.json()) == (200, {"job": None})
+    assert refused(call(door, FILL, address), 404, "no-job")
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def test_a_job_opened_by_hand_is_no_job(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn, open_manually_only=1)
+    assert call(door, KNOWN).json() == {"job": None}
+    assert refused(call(door, FILL), 404, "no-job")
+
+
+# /plugin/fill
+
+
+def not_ready(response, job):
+    return (response.status_code, response.json()) == (409, {"error": "not-ready", "job": f"/jobs/{job}"})
+
+
+def test_the_toolbar_makes_a_fill_only_its_browser_can_start(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ready_job(conn)
+    response = call(door, FILL)
+    assert (response.status_code, response.json()) == (200, {"ok": True})
+    assert fill_rows(conn) == [(1, "Laptop Chrome", "waiting", None)]
+    other = door.post(START, json={"protocol": 1, "address": FORM_ADDRESS}, headers=sent(SECOND_KEY, OTHER_PLUGIN))
+    assert refused(other, 404, "no-ticket")
+    assert fill_rows(conn) == [(1, "Laptop Chrome", "waiting", None)]
+    started = call(door, START)
+    assert started.status_code == 200
+    assert fill_rows(conn) == [(1, "Laptop Chrome", "started", None)]
+
+
+def test_a_repeat_toolbar_press_makes_no_second_row(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    limits(pause=2)
+    assert call(door, FILL).status_code == 200
+    assert call(door, FILL).status_code == 200
+    assert len(fill_rows(conn)) == 1
+
+
+def test_a_form_never_read_is_not_ready(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    assert not_ready(call(door, FILL), job)
+
+
+def test_a_job_with_a_record_is_not_ready(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    job = ready_job(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+            "VALUES (?, '2026-11-05', 'then', 'by hand', ?, '[]', '[]')",
+            (job, FORM_ADDRESS),
+        )
+    assert not_ready(call(door, FILL), job)
+
+
+def test_open_decisions_are_not_ready(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((Field("resume", "Resume/CV", "file", True, "standard"),)), "api")
+    assert not_ready(call(door, FILL), job)
+    assert fill_rows(conn) == []
+
+
+def test_the_cap_and_the_pause_are_not_ready(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    second = ready_job(conn, "https://jobs.lever.co/acme/1", "Second")
+    assert call(door, FILL).status_code == 200
+    limits(pause=2)
+    assert not_ready(call(door, FILL, "https://jobs.lever.co/acme/1/apply"), second)
+    limits(cap=1)
+    assert not_ready(call(door, FILL, "https://jobs.lever.co/acme/1/apply"), second)
+    assert len(fill_rows(conn)) == 1
+
+
+def test_settings_that_can_t_be_read_are_not_ready(owner, door, conn):
+    pair(conn, plugin=PLUGIN)
+    job = ready_job(conn)
+    assert not_ready(call(door, FILL), job)  # no settings file in this test
+    assert fill_rows(conn) == [] and not held(door)
+
+
+def test_a_busy_database_makes_no_fill(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    conn.execute("BEGIN IMMEDIATE")
+    response = call(door, FILL)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert fill_rows(conn) == [] and not held(door)
+
+
+# /plugin/start
+
+
+def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    assert refused(call(door, START, FORM_ADDRESS + "&x=1"), 404, "no-ticket")
+    response = call(door, START)
+    ticket = next(iter(held(door).values()))
+    assert (response.status_code, response.json()) == (
+        200,
+        {"ticket": ticket.id, "mode": "fill", "board": "greenhouse"},
+    )
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
+    assert refused(call(door, START), 404, "no-ticket")  # a reload finds nothing
+
+
+def test_start_with_no_ticket_is_no_ticket(door, paired):
+    assert refused(call(door, START), 404, "no-ticket")
+
+
+def test_a_ticket_past_its_time_can_t_start(door, conn, data_dir, clock, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    clock.now += fills.UNUSED_SECONDS + 1
+    assert refused(call(door, START), 404, "no-ticket")
+
+
+def test_a_busy_database_gives_app_error_and_uses_no_ticket(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    conn.execute("BEGIN IMMEDIATE")
+    response = call(door, START)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+    assert call(door, START).status_code == 200
+
+
+# /plugin/form
+
+
+def send(door, ticket, fields, key=KEY, origin=PLUGIN):
+    return door.post(FORM, json={"protocol": 1, "ticket": ticket, "fields": fields}, headers=sent(key, origin))
+
+
+def running(door, conn, data_dir, job=None):
+    """A fill this browser has started; its ticket."""
+    press(door, conn, data_dir, job or ready_job(conn))
+    return call(door, START).json()["ticket"]
+
+
+def changes(conn):
+    return json.loads(one(conn, "SELECT changes FROM fills ORDER BY id DESC")[0])
+
+
+@pytest.fixture
+def paired(owner, conn):
+    """A connected browser, with you logged in: a fill runs only under a live login."""
+    return pair(conn, plugin=PLUGIN)
+
+
+def test_a_form_that_matches_gets_its_answers_once(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    response = send(door, ticket, [NAME_BOX])
+    assert (response.status_code, response.json()) == (200, {"go": True, "pack": [NAME_PACK]})
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", None)] and changes(conn) == []
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")  # a reload can't fill again
+
+
+def test_what_was_left_out_is_kept_on_the_row(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Why Acme?", "kind": "long_text", "required": False}
+    assert send(door, ticket, [NAME_BOX, extra]).json() == {"go": True, "pack": [NAME_PACK]}
+    assert changes(conn) == [{"question": 'The form shows "Why Acme?"', "what": "new on the form"}]
+
+
+def test_an_ashby_form_read_by_the_browser_fills_too(door, conn, data_dir, paired):
+    link = "https://jobs.ashbyhq.com/acme/0a1b-2c3d"
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=link)
+    field = Field("_systemfield_name", "Name", "text", True, "standard")
+    submit.save(conn, job, Form((field,)), "browser")
+    preview.keep(conn, job, field, "Fake Person")
+    press(door, conn, data_dir, job)
+    answer = call(door, START, f"{link}/application").json()
+    assert answer["board"] == "ashby"
+    drawn_box = {"key": "_systemfield_name", "label": "Name*", "kind": "text", "required": True}
+    assert send(door, answer["ticket"], [drawn_box]).json()["pack"] == [
+        {"key": "_systemfield_name", "kind": "text", "value": "Fake Person"}
+    ]
+
+
+def test_the_answers_are_read_when_the_form_is_sent(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    preview.keep(conn, job, FIRST_NAME, "Changed on the phone")
+    assert send(door, ticket, [NAME_BOX]).json()["pack"] == [NAME_PACK | {"value": "Changed on the phone"}]
+
+
+def test_a_line_no_longer_to_fill_stays_out_but_still_matches(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    preview.keep(conn, job, FIRST_NAME, match.IN_WINDOW)
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": []}
+    assert fill_rows(conn)[0][2:] == ("stopped", "nothing-to-fill")  # it matched: not an unexpected page
+
+
+@pytest.mark.parametrize("fields", [[], [{"key": "other", "label": "Other", "kind": "text", "required": False}]])
+def test_no_field_matching_stops_the_fill(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    assert send(door, ticket, fields).json() == STOP
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page")]
+    assert {"question": "First Name", "what": "no longer on the form"} in changes(conn)
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_a_saved_read_that_is_gone_stops_the_fill(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    with conn:
+        conn.execute("DELETE FROM forms")
+    assert send(door, ticket, [NAME_BOX]).json() == STOP
+    assert fill_rows(conn)[0][2:] == ("stopped", "unexpected-page")
+
+
+def test_over_500_fields_are_never_read(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert send(door, ticket, [None] * 501).json() == STOP  # nothing in them is even looked at
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "too-many-fields")]
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_exactly_500_fields_are_read(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    others = [{"key": f"k{number}", "label": "x", "kind": "text", "required": False} for number in range(499)]
+    assert send(door, ticket, [NAME_BOX, *others]).json()["pack"] == [NAME_PACK]
+
+
+def test_a_stopped_fill_stays_stopped_after_a_new_press(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    send(door, running(door, conn, data_dir, job), [])
+    press(door, conn, data_dir, job)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page"), (0, None, "waiting", None)]
+
+
+def test_a_field_that_matches_with_nothing_to_fill_goes_with_an_empty_pack(door, conn, data_dir, paired):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((replace(FIRST_NAME, required=False),)), "api")
+    ticket = running(door, conn, data_dir, job)
+    assert send(door, ticket, [NAME_BOX | {"required": False}]).json() == {"go": True, "pack": []}
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    running(door, conn, data_dir)
+    assert refused(send(door, ticket, [NAME_BOX]), 400, "bad-request")
+    assert fill_rows(conn)[0][2] == "started"
+
+
+def test_no_ticket_in_the_body_is_a_bad_request(door, conn, paired):
+    assert refused(door.post(FORM, json={"protocol": 1, "fields": []}, headers=sent()), 400, "bad-request")
+
+
+def test_a_made_up_ticket_is_no_ticket_whatever_the_fields(door, conn, data_dir, paired):
+    running(door, conn, data_dir)
+    assert refused(send(door, "made-up", [NAME_BOX]), 404, "no-ticket")
+    assert refused(send(door, "made-up", "not a list"), 404, "no-ticket")
+    assert fill_rows(conn)[0][2] == "started"
+
+
+def test_another_browser_s_ticket_is_no_ticket(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, [NAME_BOX], SECOND_KEY, OTHER_PLUGIN), 404, "no-ticket")
+    assert send(door, ticket, [NAME_BOX]).status_code == 200
+
+
+def test_a_ticket_not_yet_started_is_no_ticket(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    (ticket,) = held(door).values()
+    assert refused(send(door, ticket.id, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_a_ticket_past_its_time_is_no_ticket(owner, door, conn, data_dir, clock, paired):
+    ticket = running(door, conn, data_dir)
+    clock.now += fills.RUNNING_SECONDS + 1
+    log_in(owner)  # the first login ran out long before
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [None, 1, "x", {"key": "first_name"}, [1], [NAME_BOX | {"kind": "dropdown"}], [NAME_BOX | {"key": "x" * 1001}]],
+)
+def test_a_bad_body_uses_nothing_up(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, fields), 400, "bad-request")
+    assert fill_rows(conn)[0][2] == "started"
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+def test_no_fields_in_the_body_is_a_bad_request(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert refused(door.post(FORM, json={"protocol": 1, "ticket": ticket}, headers=sent()), 400, "bad-request")
+
+
+@pytest.mark.parametrize("fields", [[NAME_BOX], [], [None] * 501])
+def test_a_busy_database_sends_nothing_and_uses_nothing_up(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = send(door, ticket, fields)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert fill_rows(conn)[0][2] == "started"
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+def test_no_label_or_value_reaches_the_logs(door, conn, data_dir, paired, caplog):
+    caplog.set_level(logging.DEBUG)
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Fake page words", "kind": "text", "required": False}
+    answers = [send(door, ticket, [NAME_BOX | {"kind": "dropdown"}]), send(door, ticket, [NAME_BOX, extra])]
+    assert answers[1].json()["pack"] == [NAME_PACK]
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "Fake page words" not in logged and ticket not in logged
+    assert '"value": "Fake"' not in logged and "First Name" not in logged
+
+
+def test_a_broken_saved_read_is_not_taken_for_a_bad_list(door, conn, data_dir, paired, monkeypatch):
+    def broken(*_):
+        raise ValueError("fake")
+
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, [1]), 400, "bad-request")
+    monkeypatch.setattr(preview, "preview", broken)
+    assert refused(send(door, ticket, [NAME_BOX]), 500, "app-error")
+
+
+def log_out(owner):
+    assert owner.post("/logout", data={"csrf_token": csrf(owner)}, follow_redirects=False).status_code == 303
+
+
+def test_with_no_live_login_a_press_can_t_be_taken_and_nothing_is_used_up(owner, door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    log_out(owner)
+    assert refused(call(door, START), 403, "not-logged-in")
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+    assert not next(iter(held(door).values())).taken
+    log_in(owner)
+    assert call(door, START).status_code == 200
+
+
+def test_with_no_live_login_a_taken_ticket_gets_no_answers_until_you_log_in(owner, door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    log_out(owner)
+    assert refused(send(door, ticket, [NAME_BOX]), 403, "not-logged-in")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
+    assert not next(iter(held(door).values())).answered
+    log_in(owner)
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+@pytest.mark.parametrize("gone", [security.IDLE_SECONDS, security.MAX_SESSION_SECONDS])
+def test_a_timed_out_login_starts_nothing_and_gets_nothing(door, conn, clock, data_dir, paired, gone):
+    ticket = running(door, conn, data_dir)
+    press(door, conn, data_dir, ready_job(conn, "https://jobs.lever.co/acme/1", "Second"))
+    clock.now += gone + 1
+    assert refused(call(door, START, "https://jobs.lever.co/acme/1/apply"), 403, "not-logged-in")
+    assert refused(send(door, ticket, [NAME_BOX]), 403, "not-logged-in")
+
+
+def test_a_bad_body_is_still_answered_first_with_no_login(door, conn):
+    pair(conn, plugin=PLUGIN)
+    assert refused(door.post(START, content=b"{", headers=sent()), 400, "bad-request")
+    assert refused(door.post(FORM, content=b"{", headers=sent()), 400, "bad-request")
+
+
+@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+def test_a_key_with_no_login_gets_nothing_from_any_route(door, conn, limits, path):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    assert refused(call(door, path), 403, "not-logged-in")
+    assert refused(send(door, "any-ticket", [NAME_BOX]), 403, "not-logged-in")
+
+
+def test_starting_and_answering_keep_no_login_alive(owner, door, conn, clock, data_dir, paired):
+    (session,) = owner.app.state.logins.sessions.values()
+    seen = session.last_seen
+    clock.now += 60
+    assert send(door, running(door, conn, data_dir), [NAME_BOX]).status_code == 200
+    assert session.last_seen == seen
+
+
+def test_a_browser_removed_in_the_middle_of_a_fill_gets_nothing(owner, door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = running(door, conn, data_dir)
+    owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
+    assert refused(send(door, ticket, [NAME_BOX]), 401, "no-key")
+    assert refused(send(door, ticket, [NAME_BOX], SECOND_KEY, OTHER_PLUGIN), 404, "no-ticket")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "browser-removed")]
+
+
+def test_a_new_press_ends_a_fill_that_has_had_its_answers(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    assert send(door, running(door, conn, data_dir, job), [NAME_BOX]).status_code == 200
+    press(door, conn, data_dir, job)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", "replaced"), (0, None, "waiting", None)]
+
+
+def test_the_answers_set_no_cookie_and_open_no_cors(owner, door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    answers = [send(door, ticket, [1]), send(door, ticket, [NAME_BOX]), send(door, ticket, [NAME_BOX])]
+    assert [response.status_code for response in answers] == [400, 200, 404]
+    for response in answers:
+        assert "set-cookie" not in response.headers
+        assert not [name for name in response.headers if name.lower().startswith("access-control-")]
+        assert response.headers["content-type"] == "application/json"
+
+
+def test_the_kinds_with_a_job_or_an_answer_hold_no_words(owner, door, conn, limits):
+    pair(conn, plugin=PLUGIN)
+    job = ready_job(conn)
+    limits(cap=1, pause=60)
+    answers = [call(door, FILL), call(door, FILL, "https://jobs.lever.co/acme/1/apply")]
+    answers += [call(door, KNOWN), call(door, START), call(door, START)]
+    for response in answers:
+        assert "set-cookie" not in response.headers
+        assert not [name for name in response.headers if name.lower().startswith("access-control-")]
+        assert response.headers["content-type"] == "application/json"
+    assert answers[1].json() == {"error": "no-job"}
+    assert answers[2].json()["job"] == f"/jobs/{job}"
+    assert answers[4].json() == {"error": "no-ticket"}
+
+
+@pytest.fixture
+def refusals(client, door, conn):
     """One answer of each kind the door can give."""
     pair(conn, plugin=PLUGIN)
-    return {
+    answers = {
         "no key": door.post(HELLO, json=GOOD),
         "wrong plugin": door.post(HELLO, json=GOOD, headers=sent(origin=OTHER_PLUGIN)),
         "not found": door.get("/plugin/nothing-here", headers=sent()),
@@ -490,9 +1134,13 @@ def refusals(door, conn):
         "too big": door.post(HELLO, content=b"x" * (2**20 + 1), headers=sent()),
         "bad body": door.post(HELLO, content=b"{", headers=sent()),
         "old plugin": door.post(HELLO, json=GOOD | {"protocol": 2}, headers=sent()),
+        "not logged in": call(door, KNOWN),
+        "not logged in to fill": call(door, FILL),
         "a stranger's Host": door.post(HELLO, json=GOOD, headers=sent() | {"Host": "attacker.example"}),
         "welcome": door.post(HELLO, json=GOOD, headers=sent()),
     }  # fmt: skip
+    log_in(client)
+    return answers | {"no ticket": call(door, START)}
 
 
 def test_the_kinds_of_refusal(refusals):
@@ -502,6 +1150,9 @@ def test_the_kinds_of_refusal(refusals):
     assert refused(refusals["a page's preflight"], 401, "no-key")
     assert refused(refusals["too big"], 413, "too-big")
     assert refused(refusals["a stranger's Host"], 400, "bad-request")
+    assert refused(refusals["no ticket"], 404, "no-ticket")
+    assert refused(refusals["not logged in"], 403, "not-logged-in")
+    assert refused(refusals["not logged in to fill"], 403, "not-logged-in")
 
 
 def test_no_answer_at_the_door_sets_a_cookie_or_opens_cors(refusals):
@@ -760,6 +1411,80 @@ def test_remove_deletes_that_browser_only_and_its_key_stops_working(owner, door,
     assert one(conn, "SELECT id FROM jobs WHERE id = ?", job) == (job,)
     assert refused(door.post(HELLO, json=GOOD, headers=sent()), 401, "no-key")
     assert door.post(HELLO, json=GOOD, headers=sent("second-fake-key")).status_code == 200
+
+
+def two_browsers_with_fills(owner, door, conn, data_dir):
+    """The first browser's running fill and toolbar fill, the second's toolbar fill, and a button fill nobody took."""
+    first = pair(conn, plugin=PLUGIN)
+    second = pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    addresses = [f"https://jobs.lever.co/acme/{number}/apply" for number in range(4)]
+    jobs = [ready_job(conn, address.removesuffix("/apply"), f"Job {address[-7]}") for address in addresses]
+    assert call(door, FILL, addresses[0]).status_code == 200
+    assert call(door, START, addresses[0]).status_code == 200
+    assert call(door, FILL, addresses[1]).status_code == 200
+    door.post(FILL, json={"protocol": 1, "address": addresses[2]}, headers=sent(SECOND_KEY, OTHER_PLUGIN))
+    press(door, conn, data_dir, jobs[3])
+    return first, second, addresses
+
+
+def test_remove_ends_that_browser_s_fills_and_leaves_the_rest(owner, door, conn, data_dir, limits):
+    first, _, addresses = two_browsers_with_fills(owner, door, conn, data_dir)
+    owner.post(REMOVE, data={"id": str(first), "csrf_token": csrf(owner)})
+    assert fill_rows(conn) == [
+        (1, "Laptop Chrome", "ended", "browser-removed"),
+        (1, "Laptop Chrome", "ended", "browser-removed"),
+        (1, "Second", "waiting", None),
+        (0, None, "waiting", None),
+    ]
+    assert len(held(door)) == 2
+    assert refused(call(door, START, addresses[0]), 401, "no-key")
+    assert refused(call(door, FILL, addresses[1]), 401, "no-key")
+    headers = sent(SECOND_KEY, OTHER_PLUGIN)
+    assert door.post(START, json={"protocol": 1, "address": addresses[1]}, headers=headers).status_code == 404
+    assert door.post(START, json={"protocol": 1, "address": addresses[2]}, headers=headers).status_code == 200
+    assert door.post(START, json={"protocol": 1, "address": addresses[3]}, headers=headers).status_code == 200
+
+
+def test_log_out_all_ends_every_fill(owner, door, conn, data_dir, limits):
+    _, _, addresses = two_browsers_with_fills(owner, door, conn, data_dir)
+    owner.post(LOG_OUT_ALL, data={"csrf_token": csrf(owner)}, follow_redirects=False)
+    ended = [row_[2:] for row_ in fill_rows(conn)]
+    assert ended == [("ended", "browser-removed")] * 3 + [("ended", "logged-out")]
+    assert not held(door)
+    assert refused(call(door, START, addresses[3]), 401, "no-key")
+    assert refused(call(door, FILL, addresses[3]), 401, "no-key")
+    pair(conn, "third-fake-key", "Third", plugin=PLUGIN)
+    assert refused(call(door, START, addresses[3], "third-fake-key"), 403, "not-logged-in")
+    assert refused(call(door, FILL, addresses[3], "third-fake-key"), 403, "not-logged-in")
+    log_in(owner)
+    assert refused(call(door, START, addresses[3], "third-fake-key"), 404, "no-ticket")  # the old press is gone too
+
+
+@pytest.mark.parametrize("browser_id", ["999", "not a number", "", "1.0", "9" * 40])
+def test_a_bad_id_at_remove_ends_nothing(owner, door, conn, data_dir, limits, browser_id):
+    two_browsers_with_fills(owner, door, conn, data_dir)
+    response = owner.post(REMOVE, data={"id": browser_id, "csrf_token": csrf(owner)}, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, SETTINGS)
+    assert count(conn) == 2 and len(held(door)) == 4
+    assert [row_[2] for row_ in fill_rows(conn)] == ["started", "waiting", "waiting", "waiting"]
+
+
+def test_a_busy_database_at_remove_ends_nothing(owner, door, conn, data_dir, limits):
+    first, _, _ = two_browsers_with_fills(owner, door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = owner.post(REMOVE, data={"id": str(first), "csrf_token": csrf(owner)})
+    conn.rollback()
+    assert response.status_code == 503
+    assert len(held(door)) == 4 and count(conn) == 2
+
+
+def test_a_busy_database_at_log_out_all_ends_nothing(owner, door, conn, data_dir, limits):
+    two_browsers_with_fills(owner, door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = owner.post(LOG_OUT_ALL, data={"csrf_token": csrf(owner)}, follow_redirects=False)
+    conn.rollback()
+    assert response.status_code == 503
+    assert len(held(door)) == 4 and count(conn) == 2
 
 
 def test_a_new_browser_never_gets_a_removed_browsers_number(owner, conn):

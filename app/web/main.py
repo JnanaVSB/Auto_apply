@@ -25,6 +25,7 @@ from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.feeds import FEEDS
+from app.submit import fills
 from app.web import (
     actions,
     answer_key,
@@ -131,6 +132,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.logins = logins or security.Logins()
+    app.state.tickets = fills.Tickets(app.state.logins.clock)
     app.state.phone_host = urlsplit(phone_address).netloc  # read once: a new address applies at the next start
     app.state.collector = Collector(data_dir, new_fetcher())  # one downloader for everything the dashboard reads
     app.state.scorer = Scorer(data_dir, app.state.collector.fetcher)
@@ -206,7 +208,7 @@ def create_app(
         low = bool(view.scoring) and set(view.scoring) <= {"low", "quick"}  # the Low score tab shows the reasons
         return _page(
             request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS, low=low,
-            counts=queries.counts(conn, scoring),
+            counts=queries.counts(conn, scoring), toolbar_fills=fills.toolbar_fills(conn), sign_days=fills.SIGN_DAYS,
         )  # fmt: skip
 
     @app.get("/jobs/{job_id:int}")
@@ -397,7 +399,7 @@ def create_app(
     export_settings.add_routes(app, _page, data_dir)
     phone_settings.add_routes(app, _page)
     usajobs_settings.add_routes(app, _page)
-    plugin.add_routes(app)
+    plugin.add_routes(app, data_dir)
     plugin_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())

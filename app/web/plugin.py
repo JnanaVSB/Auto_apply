@@ -1,29 +1,38 @@
-"""The browser plugin's door (/plugin/), kept apart from main.py: a key and a pinned plugin in place of a login. It
-reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages out."""
+"""The browser plugin's door (/plugin/) and its routes, kept apart from main.py: a key and a pinned plugin in place of a
+login. It reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages
+out."""
 
 import hashlib
 import hmac
 import json
 import re
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException
+from starlette.requests import ClientDisconnect
 
 from app import collect
+from app.config import ConfigError, load_config
+from app.submit import fills, preview
+from app.web import queries
 
 PREFIX = "/plugin/"
 HELLO = PREFIX + "hello"
 PROTOCOL = 1
 MAX_BODY = 1024 * 1024
 MAX_VERSION = 32
+MAX_TEXT = 2_000  # an address or a ticket
+BROWSER = "SELECT name FROM paired_browsers WHERE id = ?"
 ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 VERSION = re.compile(r"[0-9]+(\.[0-9]+){0,3}")  # as Chrome writes one; \d would also take other scripts' digits
 NO_KEY, WRONG_PLUGIN, OLD_PLUGIN = "no-key", "wrong-plugin", "old-plugin"
 TOO_BIG, BAD_REQUEST, APP_ERROR = "too-big", "bad-request", "app-error"
+NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB = "no-ticket", "not-logged-in", "not-ready", "no-job"
 # every refusal the plugin can get, from the agreement between the two; anything else is never passed on
-KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR}
-KINDS |= {"no-ticket", "not-logged-in", "not-ready", "no-job"}  # used from chunk 2 on
+KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
+STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
 
 
 def key_hash(key: str) -> str:
@@ -76,14 +85,41 @@ async def read_json(request: Request) -> dict:
     return parsed
 
 
-def add_routes(app: FastAPI) -> None:
+async def read_call(request: Request) -> dict:
+    """A call's body, from a plugin that speaks this protocol and a browser still paired once the body has arrived,
+    which can take a while: its name is kept for the trail."""
+    try:
+        body = await read_json(request)
+    except ClientDisconnect:  # nobody is left to answer, and nothing went wrong here
+        raise HTTPException(400, BAD_REQUEST) from None
+    if "protocol" not in body:
+        raise HTTPException(400, BAD_REQUEST)
+    if (type(body["protocol"]), body["protocol"]) != (int, PROTOCOL):  # type too: in Python, True == 1
+        raise HTTPException(400, OLD_PLUGIN)
+    found = request.app.state.conn.execute(BROWSER, (request.state.browser_id,)).fetchone()
+    if found is None:
+        raise HTTPException(401, NO_KEY)
+    request.state.browser_name = found[0]
+    return body
+
+
+def unpair(request: Request, browser_id: int | None = None) -> None:
+    """Removes this browser, or every browser, and ends its fills, all in one save: the delete goes first, so a busy
+    database stops the press with nothing done."""
+    conn, tickets = request.app.state.conn, request.app.state.tickets
+    with conn:
+        if browser_id is None:
+            conn.execute("DELETE FROM paired_browsers")
+            tickets.end_all(conn)
+        else:
+            conn.execute("DELETE FROM paired_browsers WHERE id = ?", (browser_id,))
+            tickets.end_browser(conn, browser_id)
+
+
+def add_routes(app: FastAPI, data_dir: Path) -> None:
     @app.post(HELLO)
     async def hello(request: Request) -> Response:
-        body = await read_json(request)
-        if "protocol" not in body:
-            raise HTTPException(400, BAD_REQUEST)
-        if (type(body["protocol"]), body["protocol"]) != (int, PROTOCOL):  # type too: in Python, True == 1
-            raise HTTPException(400, OLD_PLUGIN)
+        body = await read_call(request)
         version = body.get("version")
         if not (isinstance(version, str) and len(version) <= MAX_VERSION and VERSION.fullmatch(version)):
             raise HTTPException(400, BAD_REQUEST)
@@ -94,3 +130,77 @@ def add_routes(app: FastAPI) -> None:
                 (version, collect.now(), request.state.browser_id),
             )
         return JSONResponse({"app": "auto_apply", "protocol": PROTOCOL})
+
+    @app.post(PREFIX + "start")
+    async def start(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        address = _text(body, "address")
+        state = request.state
+        ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
+        if ticket is None:
+            raise HTTPException(404, NO_TICKET)
+        return JSONResponse({"ticket": ticket.id, "mode": "fill", "board": ticket.site})
+
+    @app.post(PREFIX + "known")
+    async def known(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        conn = request.app.state.conn
+        job_id = fills.job_at(conn, _text(body, "address"))
+        if job_id is None:
+            return JSONResponse({"job": None})
+        job = queries.job(conn, job_id)
+        return JSONResponse({"job": f"/jobs/{job_id}", "title": job["title"], "company": job["company"]})
+
+    @app.post(PREFIX + "fill")
+    async def fill(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        conn, state = request.app.state.conn, request.state
+        job_id = fills.job_at(conn, _text(body, "address"))
+        if job_id is None:
+            raise HTTPException(404, NO_JOB)
+        try:
+            limits = load_config()
+        except ConfigError:
+            return _not_ready(job_id)
+        job, found = queries.job(conn, job_id), preview.preview(conn, data_dir, job_id)
+        reason = request.app.state.tickets.make(conn, job, found, limits, state.browser_id, state.browser_name)
+        return JSONResponse({"ok": True}) if reason is None else _not_ready(job_id)
+
+    @app.post(PREFIX + "form")
+    async def form(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        ticket_id = _text(body, "ticket")
+        conn, tickets = request.app.state.conn, request.app.state.tickets
+        ticket = tickets.running(ticket_id, request.state.browser_id)
+        if ticket is None or ticket.answered or tickets.closed_by_record(conn, ticket):
+            raise HTTPException(404, NO_TICKET)
+        items = body.get("fields")
+        if not isinstance(items, list):
+            raise HTTPException(400, BAD_REQUEST)
+        try:
+            answers = tickets.answer(conn, data_dir, ticket, items)
+        except fills.BadForm:
+            raise HTTPException(400, BAD_REQUEST) from None
+        return JSONResponse(STOP if answers is None else {"go": True, "pack": answers})
+
+
+def _text(body: dict, name: str) -> str:
+    text = body.get(name)
+    if not (isinstance(text, str) and len(text) <= MAX_TEXT):
+        raise HTTPException(400, BAD_REQUEST)
+    return text
+
+
+def _logged_in(request: Request) -> None:
+    """Only looks: a key alone, or a key with a login that has run out, can't start anything."""
+    if not request.app.state.logins.live():
+        raise HTTPException(403, NOT_LOGGED_IN)
+
+
+def _not_ready(job_id: int) -> JSONResponse:
+    """The one refusal with more than its kind: the job's page says why, so the plugin sends you there."""
+    return JSONResponse({"error": NOT_READY, "job": f"/jobs/{job_id}"}, 409)

@@ -144,3 +144,20 @@ def test_the_file_holds_every_saved_answer(conn):
     text = questionnaire.as_file(values)
     assert text.startswith("# Your auto_apply questionnaire answers. Keep this file somewhere safe")
     assert yaml.safe_load(text) == values
+
+
+@pytest.mark.parametrize(
+    ("text", "as_spelled"),
+    [
+        ("Phone", "phone"),
+        ("  Phone  ", "phone"),
+        ("Your\xa0 phone\n number", "your phone number"),
+        ("Phone*", "phone*"),
+        ("Phone?", "phone?"),
+        ("<1 year", "<1 year"),
+        ("C++", "c++"),
+        ("", ""),
+    ],
+)
+def test_only_case_and_spacing_are_ignored(text, as_spelled):
+    assert questionnaire.spelled(text) == as_spelled

@@ -36,6 +36,25 @@
 <p class="hint">Compare each plugin ID with the ID on your browser's extensions page: if it's different, remove that browser.</p>
 {% endif %}
 {% endif %}
+{% if recent %}
+<h2>Recent fills</h2>
+{% if all_fills > recent | length %}<p class="muted">The last {{ recent | length }} of {{ all_fills }}.</p>{% endif %}
+<table>
+  <thead><tr><th>When</th><th>Job</th><th>Browser</th><th>How</th><th>What happened</th></tr></thead>
+  <tbody>
+    {% for fill in recent %}
+    <tr>
+      <td>{{ fill.when }}</td>
+      <td><a href="/jobs/{{ fill.job }}">{{ fill.title }}, {{ fill.company }}</a></td>
+      <td>{{ fill.browser or "No browser yet" }}</td>
+      <td>{{ "Toolbar" if fill.toolbar else "Open and fill" }}</td>
+      <td>{{ fill.what }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="hint">If you see a fill you didn't start, remove that browser.</p>
+{% endif %}
 <h2>Add a browser</h2>
 <form method="post" action="/settings/plugin" class="stacked">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">

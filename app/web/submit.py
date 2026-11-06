@@ -10,19 +10,20 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+import sqlcipher3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
 from app import questionnaire, sources, submit, tracker
-from app.config import load_config
+from app.config import ConfigError, load_config
 from app.council import answers, flow, runs
 from app.resume import CONTROL
-from app.submit import Field, FormError, greenhouse, lever, match, preview, record, wordings
+from app.submit import Field, FormError, fills, greenhouse, lever, match, preview, record, wordings
 from app.submit.match import MINE, WRITER
 from app.submit.preview import Preview
-from app.web import queries
+from app.web import actions, queries
 from app.web.prepare import BUSY_JOB, NO_WRITER, writer_chosen
 
 READERS = {"greenhouse": (greenhouse, "api"), "lever": (lever, "page")}  # site -> its reader, and where it reads from
@@ -47,6 +48,10 @@ NO_YES = "This consent has no single yes choice: decide in the window"
 CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 CHANGED_QUESTION = "This question changed: look at it again"
 SAME_DRAFT = "This is the Writer's draft unchanged: only your own changed words close it"
+ON_PHONE = "Filling happens on a computer. Your answers are saved here."
+FILLING = "Filling in the new tab…"
+NOT_FILLED = "The form opened without filling."
+PRESS_FAILED = "That press couldn't be saved."
 
 
 class _Refused(Exception):  # noqa: N818 (shown as it is)
@@ -244,7 +249,29 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             note = record.submit(conn, data_dir, job, on, found.lines if found else None)
         except record.Refused as refused:
             return _part(request, job, failed=str(refused))
+        with conn:
+            request.app.state.tickets.end_job(conn, job_id)
         return _part(request, job, note=note)
+
+    @app.post("/jobs/{job_id:int}/form/fill")
+    async def fill(request: Request, job_id: int) -> Response:
+        """Open and fill: the press also opens the form in a new tab, so whatever happens here, it answers with only the
+        line beside the button (hx-swap="none" still takes it, where a refusal would show nothing)."""
+        return page(request, "form.html", fill_status=_pressed(request, _job(request, job_id)))
+
+    def _pressed(request: Request, job: dict) -> str:
+        """What came of a press, once the fill is made or refused."""
+        if request.state.remote:
+            return ON_PHONE
+        conn = request.app.state.conn
+        try:
+            limits = load_config()
+            reason = request.app.state.tickets.make(conn, job, preview.preview(conn, data_dir, job["id"]), limits)
+        except ConfigError as error:
+            reason = str(error)
+        except sqlcipher3.OperationalError as error:
+            reason = actions.BUSY if "locked" in str(error) else PRESS_FAILED
+        return FILLING if reason is None else f"{reason} {NOT_FILLED}".strip()
 
     @app.get("/jobs/{job_id:int}/form/writing")
     async def writing(request: Request, job_id: int) -> Response:
@@ -280,6 +307,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             {flag["field"]: ", ".join(flag["numbers"]) for flag in json.loads(done["flags"] or "[]")} if done else {}
         )
         suggested = _usable(found)
+        fill_address, fill_reason = _fill_button(request, job, found)
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
             (line, answers.in_words(answers.limit(line.field), ","), flags.get(line.field.key), _over_limit(line))
             for line in lines
@@ -306,6 +334,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE, writer=WRITER,
             max_line=MAX_LINE, max_long=MAX_LONG,
+            fill_address=fill_address, fill_reason=fill_reason, last_fill=fills.latest(conn, job_id),
             job=job, record=recorded, heading=recorded and record.HEADING[recorded["how"]],
             may_differ=record.MAY_DIFFER, no_copy=record.NO_COPY,
             moved_back=back and record.MOVED_BACK.format(_day(back)),
@@ -314,6 +343,17 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             papers=[(found_file[0], f"/documents/{job_id}/{found_file[1].name}")
                     for found_file in record.documents(conn, data_dir, job_id).values() if found_file],
         )  # fmt: skip
+
+
+def _fill_button(request: Request, job: dict, found: Preview | None) -> tuple[str | None, str]:
+    """The form's address for the button, or what the box says in its place ("": nothing)."""
+    try:
+        reason = fills.why_not(request.app.state.conn, job, found, load_config())
+    except ConfigError as error:
+        reason = str(error)
+    if request.state.remote and reason != "":
+        return None, ON_PHONE
+    return (fills.form_address(job), "") if reason is None else (None, reason)
 
 
 def _job(request: Request, job_id: int) -> dict:

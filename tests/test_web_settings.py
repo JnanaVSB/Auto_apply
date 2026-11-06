@@ -63,7 +63,7 @@ def form(**changes):
         "simplify_categories": "AI/ML/Data", "keywords": "ML\ndeep learning", "extra_boards": "greenhouse:acme",
         "collect_every_hours": "0", "phonebook_every_days": "30", "tracker_stale_days": "21",
         "gmail_lookback_days": "60", "gmail_every_minutes": "30",
-        "requests_per_second": "1",
+        "requests_per_second": "1", "fills_per_day": "10", "fill_pause_minutes": "2",
         "list_url_0": LIST, "list_level_0": "intern", "list_url_1": "",
         "list_level_1": "intern", "phonebook_lists": "",
     }  # fmt: skip
@@ -166,6 +166,8 @@ def test_saving_the_form_adds_no_empty_export_section(client, settings_file, sec
         ({"phonebook_every_days": "366"}, "phonebook_every_days", 'value="366"'),
         ({"requests_per_second": "0"}, "requests_per_second", 'value="0"'),
         ({"requests_per_second": "6"}, "requests_per_second", 'value="6"'),
+        ({"fills_per_day": "51"}, "fills_per_day", 'value="51"'),
+        ({"fill_pause_minutes": "61"}, "fill_pause_minutes", 'value="61"'),
     ],
 )  # fmt: skip
 def test_a_refused_save_changes_nothing_and_keeps_what_was_typed(client, settings_file, changes, problem, shown):
@@ -186,6 +188,19 @@ def test_the_phone_book_schedule_and_requests_per_second_are_saved_and_shown(cli
     config = load_config(settings_file)
     assert (config.phonebook_every_days, config.requests_per_second, config.tracker_stale_days) == (7, 2, 30)
     assert 'name="requests_per_second" type="number" min="1" max="5" step="1" value="2"' in client.get("/settings").text
+
+
+def test_the_fill_numbers_are_saved_and_shown(client, settings_file):
+    page = client.get("/settings").text
+    assert "Fills per day" in page and "Pause between fills, in minutes" in page
+    assert 'name="fills_per_day" type="number" min="1" max="50" step="1" value="10"' in page
+    assert 'name="fill_pause_minutes" type="number" min="0" max="60" step="1" value="2"' in page
+    save(client, fills_per_day="5", fill_pause_minutes="0")
+    config = load_config(settings_file)
+    assert (config.fills_per_day, config.fill_pause_minutes) == (5, 0)
+    page = client.get("/settings").text
+    assert 'name="fills_per_day" type="number" min="1" max="50" step="1" value="5"' in page
+    assert 'name="fill_pause_minutes" type="number" min="0" max="60" step="1" value="0"' in page
 
 
 def test_reading_all_e_mails_is_saved_and_shown(client, settings_file):

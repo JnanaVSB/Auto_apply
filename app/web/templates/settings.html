@@ -85,6 +85,12 @@
   <p class="hint">Each site is read on its own, all at the same time. A higher number makes collections faster but asks
     more of each site. Common Crawl is always read slowly.</p>
 
+  <h2>Filling forms</h2>
+  <label>Fills per day (1 to 50; 10 is the default)
+    <input name="fills_per_day" type="number" min="1" max="50" step="1" value="{{ form.fills_per_day }}"></label>
+  <label>Pause between fills, in minutes (0 = off, up to 60; 2 is the default)
+    <input name="fill_pause_minutes" type="number" min="0" max="60" step="1" value="{{ form.fill_pause_minutes }}"></label>
+
   <h2>Scoring</h2>
   <p class="hint">Nothing leaves this computer: the quick check and the AI both run here.
     <strong>{{ ollama_line }}</strong></p>

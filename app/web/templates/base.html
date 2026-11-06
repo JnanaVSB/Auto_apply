@@ -4,8 +4,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  {# HTMX without anything the safety rules forbid; it keeps no copies of pages in the browser's storage #}
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "selfRequestsOnly": true, "historyCacheSize": 0}'>
+  {# HTMX without anything the safety rules forbid; it keeps no copies of pages in the browser's storage, and a button works from the moment it is drawn #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "selfRequestsOnly": true, "historyCacheSize": 0, "defaultSettleDelay": 0}'>
   <title>{% block title %}Jobs{% endblock %} · auto_apply</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="manifest" href="/static/manifest.webmanifest">

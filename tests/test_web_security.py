@@ -1,12 +1,13 @@
 """Dashboard login and safety checks, with a throwaway database, a fake clock and the fake keychain."""
 
 import hashlib
+import json
 import re
 import threading
 from contextlib import closing
 
 import pytest
-from helpers import PASSWORD, csrf, log_in
+from helpers import PASSWORD, add_job, csrf, log_in
 
 from app import collect, db
 from app.config import Config
@@ -295,6 +296,20 @@ def test_guesses_sent_all_at_once_still_lock_login(clock):
     for guess in guesses:
         guess.join(10)
     assert logins.locked_minutes() == 15 and logins.log_in(PASSWORD, stored) is None
+
+
+def test_every_page_has_htmx_wire_a_button_as_it_draws_it(client, conn):
+    """By default htmx wires new content 20 ms late, and a press in that gap acts only as a plain link or form."""
+    with conn:
+        job = add_job(conn, "ML Intern")
+    pages = [client.get("/login").text]
+    log_in(client)
+    pages += [client.get(path).text for path in ("/", f"/jobs/{job}", "/settings")]
+    for page in pages:
+        (settings,) = re.findall(r"""<meta name="htmx-config" content='(.*?)'>""", page)
+        assert json.loads(settings)["defaultSettleDelay"] == 0
+    with_a_head = [path.name for path in (main.HERE / "templates").glob("*.html") if "<head" in path.read_text("utf-8")]
+    assert with_a_head == ["base.html"]  # every whole page gets its settings from there
 
 
 def test_the_local_htmx_file_is_the_recorded_release():
