@@ -31,6 +31,7 @@ from test_web_plugin import (
     phone_dashboard,  # noqa: F401
     ready_job,
     refused,
+    report,
     send,
 )
 
@@ -40,8 +41,8 @@ from app.web import actions
 from app.web import submit as form_part
 
 NEEDS_A_FILE = Form((Field("resume", "Resume/CV", "file", True, "standard"),))
-ADD_FILL = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state, stop_kind, changes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+ADD_FILL = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state, stop_kind, changes, filled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 HONEST = (
     "Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this "
     "browser can read them too."
@@ -75,6 +76,36 @@ WORDS = {
     ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
     ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
+    ("filled", None): "the plugin filled the form. Check it in the open tab, then press Submit yourself.",
+    ("filled", "browser-removed"): "the plugin filled the form, then its browser was removed",
+    ("filled", "replaced"): "the plugin filled the form, then a newer press ended the fill",
+    ("filled", "submitted"): "the plugin filled the form, then you pressed I submitted it",
+    ("stopped", "bot-check"): (
+        "stopped: the site wants to check you are a person. Finish it in the open tab, then press Open and fill again."
+    ),
+    ("stopped", "limit"): (
+        "stopped: the site says you've reached its limit on applications, so nothing was filled. Try this job again "
+        "later."
+    ),
+    ("stopped", "cant-set"): (
+        "stopped: the form wouldn't let the plugin set any box. Fill it in yourself in the open tab."
+    ),
+    ("sent", "bot-check"): (
+        "your answers went to the browser, then the fill stopped: the site wants to check you are a person. Finish it "
+        "in the open tab, then check the form."
+    ),
+    ("sent", "limit"): (
+        "your answers went to the browser, then the fill stopped: the site says you've reached its limit on "
+        "applications. Check the open tab."
+    ),
+    ("sent", "unexpected-page"): (
+        "your answers went to the browser, then the fill stopped: the page changed to something else. Check the open "
+        "tab and fill in the rest yourself."
+    ),
+    ("sent", "cant-set"): (
+        "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
+        "it in yourself in the open tab."
+    ),
 }
 ALIKE = "two choices look the same, so pick yours on the form"
 SIGN = '<p>{} in the last 7 days: check {} in <a href="/settings/plugin">Settings → Browser plugin</a></p>'
@@ -113,9 +144,11 @@ def button(job):
     )
 
 
-def past_fill(conn, job, started_on=STARTED_ON, toolbar=0, browser=None, state="sent", stop=None, changes=None):
+def past_fill(
+    conn, job, started_on=STARTED_ON, toolbar=0, browser=None, state="sent", stop=None, changes=None, filled=None
+):
     with conn:
-        conn.execute(ADD_FILL, (job, FORM_ADDRESS, started_on, toolbar, browser, state, stop, changes))
+        conn.execute(ADD_FILL, (job, FORM_ADDRESS, started_on, toolbar, browser, state, stop, changes, filled))
 
 
 def now_fill(conn, job):
@@ -440,8 +473,9 @@ ENDINGS = [
 ]
 
 
-def fill_then(client, door, conn, end, browser, answered):
-    """A fill this browser has started, with or without its answers, ended by `end`; what Settings then says."""
+def fill_then(client, door, conn, end, browser, answered, reported=False):
+    """A fill this browser has started, with or without its answers and a report of them, ended by `end`; what Settings
+    then says."""
     job = ready_job(conn)
     with conn:
         conn.execute(ON_BOARD, (job,))
@@ -449,6 +483,8 @@ def fill_then(client, door, conn, end, browser, answered):
     ticket = call(door, START).json()["ticket"]
     if answered:
         assert send(door, ticket, [NAME_BOX]).json()["go"]
+    if reported:
+        assert report(door, ticket, values=[{"key": "first_name", "value": "Fake"}]).json() == {"ok": True}
     end(client, job, browser)
     return recent_part(client.get(SETTINGS).text)
 
@@ -458,6 +494,14 @@ def test_a_fill_that_sent_your_answers_still_says_so_once_it_ends(client, door, 
     part = fill_then(client, door, conn, end, paired, answered=True)
     assert fill_rows(conn)[0] == (0, "Laptop Chrome", "sent", stop)
     assert WORDS["sent", stop] in part
+
+
+@pytest.mark.parametrize(("end", "stop"), ENDINGS)
+def test_a_filled_fill_still_says_so_once_it_ends(client, door, conn, paired, end, stop):
+    part = fill_then(client, door, conn, end, paired, answered=True, reported=True)
+    assert fill_rows(conn)[0] == (0, "Laptop Chrome", "filled", stop)
+    assert one(conn, "SELECT filled FROM fills ORDER BY id")[0] == '["First Name"]'
+    assert WORDS["filled", stop] in part
 
 
 @pytest.mark.parametrize(("end", "stop"), ENDINGS)
@@ -775,6 +819,30 @@ def test_what_was_left_for_you_is_listed_and_escaped(client, conn, paired):
     assert "new on the form" in page
 
 
+def test_what_was_filled_is_listed_under_the_last_fill_and_escaped(client, conn, paired):
+    job = ready_job(conn)
+    past_fill(conn, job, state="filled", filled=json.dumps(["First Name", "<script>alert(1)</script>"]))
+    page = box(client, job)
+    after = page.partition("Last fill:")[2].partition("To copy")[0]
+    assert "<h3>Filled</h3>" in after and "<li>First Name</li>" in after
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in after and "<script>alert(1)" not in page
+
+
+@pytest.mark.parametrize("filled", [None, "[]"])
+def test_nothing_filled_means_no_heading(client, conn, paired, filled):
+    job = ready_job(conn)
+    past_fill(conn, job, state="sent", filled=filled)
+    assert "<h3>Filled</h3>" not in box(client, job)
+
+
+def test_settings_keeps_a_filled_fill_to_one_row(client, conn, paired):
+    job = ready_job(conn)
+    past_fill(conn, job, state="filled", filled=json.dumps(["A made-up question"]))
+    part = recent_part(client.get(SETTINGS).text)
+    assert part.count("<tr>") == 2 and WORDS["filled", None] in part  # the heading's row and this one
+    assert "A made-up question" not in part
+
+
 def test_no_changes_means_no_heading(client, conn, paired):
     job = ready_job(conn)
     past_fill(conn, job, state="sent", changes="[]")
@@ -858,7 +926,9 @@ def test_the_rows_read_back_in_plain_words(conn):
     past_fill(conn, job, toolbar=1, browser="Laptop Chrome", state="sent", changes='[{"question": "Q", "what": "W"}]')
     latest = fills.latest(conn, job)
     assert latest["what"] == "your answers went to the browser"
-    assert latest["changes"] == [{"question": "Q", "what": "W"}]
+    assert latest["changes"] == [{"question": "Q", "what": "W"}] and latest["filled"] == []
     assert (latest["toolbar"], latest["browser"]) == (1, "Laptop Chrome")
     (recent,) = fills.recent(conn)
     assert (recent["job"], recent["title"], recent["company"]) == (job, "ML Intern", "Acme")
+    past_fill(conn, job, state="filled", filled='["Q"]')
+    assert fills.latest(conn, job)["filled"] == ["Q"] and fills.recent(conn)[0]["filled"] == ["Q"]

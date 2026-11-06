@@ -27,7 +27,8 @@ START = "/plugin/start"
 KNOWN = "/plugin/known"
 FILL = "/plugin/fill"
 FORM = "/plugin/form"
-ROUTES = (HELLO, START, KNOWN, FILL, FORM)
+REPORT = "/plugin/report"
+ROUTES = (HELLO, START, KNOWN, FILL, FORM, REPORT)
 SETTINGS = "/settings/plugin"
 REMOVE = "/settings/plugin/remove"
 LOG_OUT_ALL = "/settings/phone/log-out-all"
@@ -895,7 +896,7 @@ def test_no_field_matching_stops_the_fill(door, conn, data_dir, paired, fields):
     ticket = running(door, conn, data_dir)
     assert send(door, ticket, fields).json() == STOP
     assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page")]
-    assert {"question": "First Name", "what": "no longer on the form"} in changes(conn)
+    assert {"question": "First Name", "what": "not showing on the form"} in changes(conn)
     assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
 
 
@@ -1115,6 +1116,311 @@ def test_the_kinds_with_a_job_or_an_answer_hold_no_words(owner, door, conn, limi
     assert answers[1].json() == {"error": "no-job"}
     assert answers[2].json()["job"] == f"/jobs/{job}"
     assert answers[4].json() == {"error": "no-ticket"}
+
+
+# /plugin/report
+
+
+def report(door, ticket, state="filled", key=KEY, origin=PLUGIN, **body):
+    whole = {"protocol": 1, "ticket": ticket, "state": state, "values": [], "left": []} | body
+    return door.post(REPORT, json=whole, headers=sent(key, origin))
+
+
+def answered(door, conn, data_dir, job=None):
+    """A fill that has had its answers; its ticket."""
+    ticket = running(door, conn, data_dir, job)
+    assert send(door, ticket, [NAME_BOX]).json()["go"]
+    return ticket
+
+
+def reported(conn):
+    return one(conn, "SELECT state, stop_kind, changes, filled FROM fills ORDER BY id DESC")
+
+
+def ok(response):
+    return (response.status_code, response.json()) == (200, {"ok": True})
+
+
+STOPS = ("bot-check", "limit", "unexpected-page", "cant-set")
+LEFT_WORDS = {
+    "no-box": "the plugin couldn't find this box",
+    "custom": "this drop-down is yours to pick",
+    "place": "pick this place from the site's list yourself",
+    "no-choice": "the plugin couldn't tell which choice is yours",
+    "cant-set": "the form wouldn't let the plugin set this",
+    "no-file": "the PDF couldn't be fetched",
+    "file-refused": "the box didn't take the PDF",
+    "didnt-stick": "the form shows something else here: check it",
+    "not-reached": "the fill stopped before this one",
+}
+VALUE = {"key": "first_name", "value": "Fake Person"}
+LEFT = {"key": "first_name", "why": "no-box"}
+BAD_KEYS = (
+    {"key": None}, {"key": 1}, {"key": True}, {"key": ["first_name"]}, {"key": {"a": 1}}, {"key": "x" * 1001},
+)  # fmt: skip
+BAD_VALUES = (None, 1, True, 1.5, {"a": 1}, [1], [None], ["ok", 1], [["nested"]], "x" * 20_001, ["ok", "x" * 20_001])
+BAD_LISTS = (None, 1, True, "x", {"key": "first_name"}, [1], [None], ["first_name"], [[]])
+BAD_REPORTS = (
+    *({"state": state} for state in (None, 1, True, "", "FILLED", "reread", "gone", "sent", ["filled"], {"a": 1})),
+    *(
+        {"state": "stopped", "kind": kind}
+        for kind in (None, 1, True, "", "other", "too-many-fields", "nothing-to-fill", ["limit"], {"a": 1})
+    ),
+    *({"kind": kind} for kind in (*STOPS, "other", "", 0, False, ["limit"])),
+    *({"values": values} for values in BAD_LISTS),
+    *({"left": left} for left in BAD_LISTS),
+    *({"values": [VALUE | key]} for key in BAD_KEYS),
+    *({"left": [LEFT | key]} for key in BAD_KEYS),
+    *({"values": [VALUE | {"value": value}]} for value in BAD_VALUES),
+    *({"left": [LEFT | {"why": why}]} for why in (None, 1, True, "", "other", ["no-box"], {"a": 1})),
+    {"values": [{"key": "first_name"}]},
+    {"values": [{"value": "Fake Person"}]},
+    {"left": [{"key": "first_name"}]},
+    {"left": [{"why": "no-box"}]},
+    {"values": [VALUE] * 501},
+    {"left": [LEFT] * 501},
+    {"values": [VALUE, None]},  # one bad line refuses the good one with it
+    {"left": [LEFT, None]},
+)
+
+
+def test_a_filled_report_keeps_the_questions_and_the_ticket(door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert reported(conn) == ("filled", None, "[]", '["First Name"]')
+    assert door.app.state.tickets.running(ticket, paired).reported
+
+
+def test_a_filled_report_of_nothing_saves_an_empty_list(door, conn, data_dir, paired):
+    assert ok(report(door, answered(door, conn, data_dir)))
+    assert reported(conn) == ("filled", None, "[]", "[]")
+
+
+@pytest.mark.parametrize(("why", "words"), LEFT_WORDS.items())
+def test_each_line_left_goes_on_the_row_in_the_app_s_own_words(door, conn, data_dir, paired, why, words):
+    assert ok(report(door, answered(door, conn, data_dir), left=[{"key": "first_name", "why": why}]))
+    assert changes(conn) == [{"question": "First Name", "what": words}]
+    assert reported(conn)[3] == "[]"
+
+
+def test_lines_left_come_before_what_the_compare_said(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Why Acme?", "kind": "long_text", "required": False}
+    assert send(door, ticket, [NAME_BOX, extra]).json()["go"]
+    assert ok(report(door, ticket, left=[LEFT]))
+    assert changes(conn) == [
+        {"question": "First Name", "what": LEFT_WORDS["no-box"]},
+        {"question": 'The form shows "Why Acme?"', "what": "new on the form"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("extras", "last"),
+    [
+        (99, {"question": 'The form shows "x"', "what": "new on the form"}),
+        (100, {"question": "1 more", "what": "not shown here"}),
+        (150, {"question": "51 more", "what": "not shown here"}),
+    ],
+)
+def test_lines_left_keep_the_limit_of_100_and_its_count(door, conn, data_dir, paired, extras, last):
+    ticket = running(door, conn, data_dir)
+    others = [{"key": f"k{number}", "label": "x", "kind": "text", "required": False} for number in range(extras)]
+    assert send(door, ticket, [NAME_BOX, *others]).json()["go"]
+    assert ok(report(door, ticket, left=[LEFT]))
+    assert len(changes(conn)) == (100 if extras == 99 else 101) and changes(conn)[-1] == last
+    assert changes(conn)[0] == {"question": "First Name", "what": LEFT_WORDS["no-box"]}  # never lost in the count
+
+
+@pytest.mark.parametrize("body", [{"values": [VALUE] * 3}, {"left": [LEFT] * 3}])
+def test_a_repeated_key_counts_once(door, conn, data_dir, paired, body):
+    assert ok(report(door, answered(door, conn, data_dir), **body))
+    assert len(json.loads(reported(conn)[3])) + len(changes(conn)) == 1
+
+
+def test_a_line_that_didn_t_stick_is_only_for_you_to_check(owner, door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = answered(door, conn, data_dir, job)
+    assert ok(report(door, ticket, values=[VALUE], left=[LEFT | {"why": "didnt-stick"}]))
+    assert reported(conn)[3] == "[]"
+    assert changes(conn) == [{"question": "First Name", "what": LEFT_WORDS["didnt-stick"]}]
+    page = owner.get(f"/jobs/{job}/form").text
+    assert "<h3>Filled</h3>" not in page and "<h3>Check these on the form</h3>" in page
+
+
+def test_a_page_s_key_and_a_made_up_question_reach_nothing(owner, door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    drawn = {"key": "question_1", "label": "Drawn by the page", "kind": "text", "required": False}
+    assert send(door, ticket, [NAME_BOX | {"label": "First Name *"}, drawn]).json()["go"]
+    before = reported(conn)[2]
+    made_up = {"question": "Made-up question", "label": "Made-up question"}
+    assert ok(
+        report(
+            door, ticket,
+            values=[VALUE | made_up, {"key": "question_1", "value": "x"}, {"key": "not-in-the-pack", "value": "x"}],
+            left=[{"key": "question_1", "why": "custom"}, {"key": "Made-up key", "why": "no-box"}],
+            question="Made-up question",
+        )
+    )  # fmt: skip
+    assert reported(conn) == ("filled", None, before, '["First Name"]')
+    pages = owner.get(f"/jobs/{job}/form").text + owner.get(SETTINGS).text
+    assert "Made-up" not in pages and "not-in-the-pack" not in pages and "<li>First Name</li>" in pages
+
+
+def test_with_no_answers_out_no_key_counts_on_a_stop(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind="bot-check", values=[VALUE], left=[LEFT]))
+    assert reported(conn) == ("stopped", "bot-check", "[]", "[]")
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_report_s_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    answered(door, conn, data_dir)
+    assert refused(report(door, ticket), 400, "bad-request")
+    assert reported(conn)[0] == "sent"
+
+
+def test_a_made_up_ticket_is_no_ticket_whatever_the_report(door, conn, data_dir, paired):
+    answered(door, conn, data_dir)
+    assert refused(report(door, "made-up"), 404, "no-ticket")
+    assert refused(report(door, "made-up", "reread", values=None), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+def test_another_browser_s_ticket_is_no_ticket_for_a_report(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = answered(door, conn, data_dir)
+    assert refused(report(door, ticket, key=SECOND_KEY, origin=OTHER_PLUGIN), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+def test_a_ticket_not_yet_started_is_no_ticket_for_a_report(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    (ticket,) = held(door).values()
+    assert refused(report(door, ticket.id, "stopped", kind="limit"), 404, "no-ticket")
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+
+
+def test_a_ticket_past_its_time_is_no_ticket_for_a_report(door, conn, data_dir, clock, paired):
+    ticket = answered(door, conn, data_dir)
+    clock.now += fills.RUNNING_SECONDS + 1
+    assert refused(report(door, ticket), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+@pytest.mark.parametrize("body", BAD_REPORTS)
+def test_a_bad_report_saves_nothing_and_uses_nothing_up(door, conn, data_dir, paired, body):
+    ticket = answered(door, conn, data_dir)
+    assert refused(report(door, ticket, **body), 400, "bad-request")
+    assert reported(conn) == ("sent", None, "[]", None)
+    assert ok(report(door, ticket, values=[VALUE]))
+
+
+@pytest.mark.parametrize("name", ["state", "values", "left"])
+def test_a_report_missing_a_part_is_a_bad_request(door, conn, data_dir, paired, name):
+    ticket = answered(door, conn, data_dir)
+    whole = {"protocol": 1, "ticket": ticket, "state": "filled", "values": [], "left": []}
+    del whole[name]
+    assert refused(door.post(REPORT, json=whole, headers=sent()), 400, "bad-request")
+    assert reported(conn)[0] == "sent"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"values": [VALUE] * 500, "left": [LEFT] * 500},
+        {"values": [VALUE | {"key": "x" * 1000}], "left": [LEFT | {"key": "x" * 1000}]},
+        {"values": [VALUE | {"value": "x" * 20_000}]},
+        {"values": [VALUE | {"value": ["x" * 20_000, "y"]}]},
+        {"values": [VALUE | {"value": []}]},
+        {"kind": None},
+    ],
+)
+def test_a_report_at_the_limits_is_read(door, conn, data_dir, paired, body):
+    assert ok(report(door, answered(door, conn, data_dir), **body))
+    assert reported(conn)[0] == "filled"
+
+
+def test_filled_before_the_answers_went_out_is_a_bad_request(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert refused(report(door, ticket, values=[VALUE]), 400, "bad-request")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
+    assert send(door, ticket, [NAME_BOX]).json()["go"]  # nothing was used up
+
+
+@pytest.mark.parametrize("second", [{}, {"state": "stopped", "kind": "limit"}, {"left": [LEFT]}])
+def test_a_second_report_says_ok_and_changes_nothing(door, conn, data_dir, paired, second):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, values=[VALUE]))
+    first = reported(conn)
+    assert ok(report(door, ticket, **second))
+    assert reported(conn) == first and len(held(door)) == 1
+
+
+@pytest.mark.parametrize("kind", STOPS)
+def test_a_stop_before_the_answers_went_out_ends_the_fill_as_stopped(door, conn, data_dir, paired, kind):
+    ticket = running(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind=kind))
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", kind)]
+    assert not held(door) and refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("kind", STOPS)
+def test_a_stop_after_the_answers_went_out_stays_sent(door, conn, data_dir, paired, kind):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind=kind, values=[VALUE]))
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", kind)]
+    assert reported(conn)[3] == '["First Name"]' and not held(door)
+
+
+def test_a_report_after_a_stop_finds_no_ticket_and_changes_nothing(door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind="limit"))
+    first = reported(conn)
+    assert refused(report(door, ticket, "stopped", kind="bot-check"), 404, "no-ticket")
+    assert reported(conn) == first
+
+
+@pytest.mark.parametrize("body", [{}, {"state": "stopped", "kind": "limit"}])
+def test_a_busy_database_changes_nothing_at_a_report(door, conn, data_dir, paired, body):
+    ticket = answered(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = report(door, ticket, **{"values": [VALUE], "left": [LEFT]} | body)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert reported(conn) == ("sent", None, "[]", None) and len(held(door)) == 1
+    assert ok(report(door, ticket, **{"values": [VALUE], "left": [LEFT]} | body))  # the report can be sent again
+
+
+def test_a_report_needs_no_live_login(owner, door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    log_out(owner)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert reported(conn)[0] == "filled"
+
+
+def test_a_report_s_values_are_left_nowhere(owner, door, conn, data_dir, paired, caplog):
+    fake_value = "fake-answer-never-kept"
+    caplog.set_level(logging.DEBUG)
+    job = ready_job(conn)
+    ticket = answered(door, conn, data_dir, job)
+    kept = next(iter(held(door).values()))
+    with_fake_value = [VALUE | {"value": fake_value}, VALUE | {"value": [fake_value, "x"]}]
+    answers = [
+        report(door, ticket, values=[*with_fake_value, {"key": 1, "value": fake_value}]),  # refused
+        report(door, ticket, values=with_fake_value, left=[LEFT]),
+        report(door, ticket, values=with_fake_value),  # a repeat
+    ]
+    places = {
+        "the answers": " ".join(answer.text for answer in answers),
+        "the row": repr(conn.execute("SELECT * FROM fills").fetchall()),
+        "the log": " ".join(record.getMessage() for record in caplog.records),
+        "the ticket": repr(kept),
+        "the box": owner.get(f"/jobs/{job}/form").text,
+        "Settings": owner.get(SETTINGS).text,
+    }
+    assert ok(answers[1]) and kept.reported
+    assert [place for place, text in places.items() if fake_value in text] == []  # names the place, never the value
 
 
 @pytest.fixture

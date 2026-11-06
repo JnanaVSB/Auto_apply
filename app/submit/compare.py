@@ -14,7 +14,7 @@ from app.submit import FIELD_KINDS, Choice, Drawn, Field, distinct, match
 MAX_KEY = 1_000  # characters
 MAX_CHANGES = 100
 MAX_SHOWN = 100  # characters of what only a page says
-GONE, ADDED, UNCHECKED = "no longer on the form", "new on the form", "wasn't checked"
+GONE, ADDED, UNCHECKED = "not showing on the form", "new on the form", "wasn't checked"
 FILE_UNCHECKED = "the app only checked that it's a file box"
 CHOICES_UNCHECKED = "its choices weren't checked"
 ALIKE = "two choices look the same, so pick yours on the form"
@@ -70,7 +70,7 @@ def compare(
         for found in fields
         if found.key not in saved_keys
     ]
-    return passed, _at_most(changes)
+    return passed, changes
 
 
 def pack(passed: list[tuple[match.Line, Field]], documents: dict[str, tuple[str, Path] | None]) -> list[dict]:
@@ -140,7 +140,7 @@ def _page_says(label: str) -> str:
     return f'The form shows "{words[:MAX_SHOWN]}{"…" if len(words) > MAX_SHOWN else ""}"'
 
 
-def _at_most(changes: list[dict]) -> list[dict]:
+def at_most(changes: list[dict]) -> list[dict]:
     """The first MAX_CHANGES, then how many more, so the list never looks complete when it isn't."""
     if len(changes) <= MAX_CHANGES:
         return changes

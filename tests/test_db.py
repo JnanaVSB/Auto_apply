@@ -958,6 +958,37 @@ def test_version_23_adds_fills_and_changes_nothing_else(tmp_path, monkeypatch):
             assert conn.execute("SELECT count(*) FROM fills").fetchone()[0] == 1
 
 
+def test_version_24_adds_two_columns_to_fills_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_23:
+        version_23.setattr(db, "UPGRADES", db.UPGRADES[:23])
+        version_23.setattr(db, "SCHEMA_VERSION", 23)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+                conn.execute("INSERT INTO fills (job_id, address, started_on, toolbar, state) "
+                             "VALUES (1, 'x', 'then', 0, 'sent')")  # fmt: skip
+            before = _everything(conn)
+    with monkeypatch.context() as version_24:
+        version_24.setattr(db, "UPGRADES", db.UPGRADES[:24])
+        version_24.setattr(db, "SCHEMA_VERSION", 24)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 24
+            found, rows = _everything(conn)
+            assert [row for row in found if row[1] != "fills"] == [row for row in before[0] if row[1] != "fills"]
+            assert {name: rows[name] for name in rows if name != "fills"} == {
+                name: before[1][name] for name in before[1] if name != "fills"
+            }
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(fills)")]
+            assert columns[-2:] == ["filled", "files"] and len(columns) == 11
+            assert rows["fills"] == [(*before[1]["fills"][0], None, None)]  # an old row keeps all it had
+            with conn:
+                conn.execute("UPDATE fills SET filled = '[]', files = '[]'")
+        with closing(db.connect(path)) as conn:  # runs once: opening again changes nothing
+            assert conn.execute("SELECT filled, files FROM fills").fetchall() == [("[]", "[]")]
+
+
 def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, monkeypatch):
     path = tmp_path / "upgraded"
     with monkeypatch.context() as version_19:

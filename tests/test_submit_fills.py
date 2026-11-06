@@ -557,6 +557,19 @@ def test_a_failed_mark_ends_nothing(conn, data_dir, laptop, at, tickets):
     assert len(tickets.tickets) == 3
 
 
+@pytest.mark.parametrize("end", ["end_browser", "end_all", "end_job"])
+def test_an_ending_keeps_a_filled_row_and_what_was_filled(conn, laptop, at, tickets, end):
+    running, *_ = three_fills(conn, tickets, laptop)
+    tickets.save_answer(conn, running, [])
+    running.questions = {"first_name": "First Name"}
+    tickets.report(conn, running, None, ["first_name"], {})
+    with conn:
+        getattr(tickets, end)(conn, *{"end_browser": (laptop,), "end_all": (), "end_job": (running.job,)}[end])
+    kind = "submitted" if end == "end_job" else "browser-removed"
+    assert one(conn, ROW, running.fill)[4:] == ("filled", kind)
+    assert fills.latest(conn, running.job)["filled"] == ["First Name"]
+
+
 def test_a_ticket_past_its_time_is_not_marked_when_things_end(conn, laptop, at, tickets, clock):
     running, *_ = three_fills(conn, tickets, laptop)
     clock.now += fills.RUNNING_SECONDS + 1

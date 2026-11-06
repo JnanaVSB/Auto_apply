@@ -37,16 +37,19 @@ NEW = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state
 # started_on stays, so the pause doesn't move; a later button press never hides that a toolbar pressed, or which browser
 REUSE = "UPDATE fills SET toolbar = max(toolbar, ?), browser = coalesce(?, browser) WHERE id = ?"
 STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
-# A row that had its answers stays `sent`, whatever ended it
-ENDED = "UPDATE fills SET state = iif(state = 'sent', 'sent', 'ended'), stop_kind = ? WHERE id = ?"
+# A row that had its answers stays `sent` or `filled`, whatever ended it
+ENDED = "UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ? WHERE id = ?"
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
-LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes FROM fills WHERE job_id = ?
+REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? WHERE id = ?"
+LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled FROM fills WHERE job_id = ?
     ORDER BY id DESC LIMIT 1"""
 TOOLBAR_FILLS = "SELECT count(*) FROM fills WHERE toolbar = 1 AND started_on >= ?"
 ALL_FILLS = "SELECT count(*) FROM fills JOIN jobs ON jobs.id = fills.job_id"
 RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
-    jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id ORDER BY fills.id DESC LIMIT ?"""
+    fills.filled, jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id
+    ORDER BY fills.id DESC LIMIT ?"""
 UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
+BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
 BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
 HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
     ("waiting", None): "no browser has opened it yet",
@@ -55,6 +58,36 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("sent", BROWSER_REMOVED): "your answers went to the browser, then it was removed",
     ("sent", REPLACED): "your answers went to the browser, then a newer press ended the fill",
     ("sent", SUBMITTED): "your answers went to the browser, then you pressed I submitted it",
+    ("sent", BOT_CHECK): (
+        "your answers went to the browser, then the fill stopped: the site wants to check you are a person. Finish it "
+        "in the open tab, then check the form."
+    ),
+    ("sent", LIMIT): (
+        "your answers went to the browser, then the fill stopped: the site says you've reached its limit on "
+        "applications. Check the open tab."
+    ),
+    ("sent", UNEXPECTED_PAGE): (
+        "your answers went to the browser, then the fill stopped: the page changed to something else. Check the open "
+        "tab and fill in the rest yourself."
+    ),
+    ("sent", CANT_SET): (
+        "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
+        "it in yourself in the open tab."
+    ),
+    ("filled", None): "the plugin filled the form. Check it in the open tab, then press Submit yourself.",
+    ("filled", BROWSER_REMOVED): "the plugin filled the form, then its browser was removed",
+    ("filled", REPLACED): "the plugin filled the form, then a newer press ended the fill",
+    ("filled", SUBMITTED): "the plugin filled the form, then you pressed I submitted it",
+    ("stopped", BOT_CHECK): (
+        "stopped: the site wants to check you are a person. Finish it in the open tab, then press Open and fill again."
+    ),
+    ("stopped", LIMIT): (
+        "stopped: the site says you've reached its limit on applications, so nothing was filled. Try this job again "
+        "later."
+    ),
+    ("stopped", CANT_SET): (
+        "stopped: the form wouldn't let the plugin set any box. Fill it in yourself in the open tab."
+    ),
     ("stopped", UNEXPECTED_PAGE): (
         "stopped: the page didn't look like this job's form, so nothing was filled. Check the tab, then press Open and "
         "fill again."
@@ -68,6 +101,17 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
     ("ended", REPLACED): "ended by a newer press",
     ("ended", SUBMITTED): "ended when you pressed I submitted it",
     ("ended", LOGGED_OUT): "ended when you logged out all devices",
+}
+LEFT = {  # why the plugin left a line, as the job's box says it
+    "no-box": "the plugin couldn't find this box",
+    "custom": "this drop-down is yours to pick",
+    "place": "pick this place from the site's list yourself",
+    "no-choice": "the plugin couldn't tell which choice is yours",
+    "cant-set": "the form wouldn't let the plugin set this",
+    "no-file": "the PDF couldn't be fetched",
+    "file-refused": "the box didn't take the PDF",
+    "didnt-stick": "the form shows something else here: check it",
+    "not-reached": "the fill stopped before this one",
 }
 
 
@@ -139,6 +183,9 @@ class Ticket:
     ends: float
     taken: bool = False
     answered: bool = False  # the browser has had its answer: it gets one, so a reload can't fill again
+    changes: list[dict] = field(default_factory=list)  # all the compare said, uncut, so a report's count stays true
+    questions: dict[str, str] = field(default_factory=dict)  # each key in the pack, with the app's own saved label
+    reported: bool = False  # the browser has said how it went: it says so once
 
 
 @dataclass
@@ -216,6 +263,8 @@ class Tickets:
         answers = compare.pack(passed, record.documents(conn, data_dir, ticket.job))
         # the trail first: if this can't be saved, nothing goes out
         self.save_answer(conn, ticket, changes, None if answers else NOTHING_TO_FILL)
+        labels = {line.field.key: line.field.label for line, _ in passed}
+        ticket.questions = {answer["key"]: labels[answer["key"]] for answer in answers}
         return answers
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
@@ -234,8 +283,26 @@ class Tickets:
         is why nothing goes out; that ends the ticket, so a later press can't overwrite why."""
         state = "sent" if stop is None else "stopped"
         with conn:
-            conn.execute(ANSWERED, (state, stop, json.dumps(changes, ensure_ascii=False), ticket.fill))
-        ticket.answered = True
+            conn.execute(ANSWERED, (state, stop, _json(compare.at_most(changes)), ticket.fill))
+        ticket.answered, ticket.changes = True, changes
+        if stop:
+            del self.tickets[ticket.job]
+
+    def report(
+        self, conn: sqlcipher3.Connection, ticket: Ticket, stop: str | None, filled: list[str], left: dict[str, str]
+    ) -> None:
+        """How the fill went, from the browser: `filled` keys, and each `left` key with why, which wins, as a line that
+        didn't stick is in both. Only the pack's keys count, each said in the app's own words, so nothing a page wrote
+        is kept. What you must act on comes first, so it's never lost in the count. Saved first: a busy database raises
+        and changes nothing. `stop` is why it stopped; that ends the ticket, and a row with its answers stays `sent`."""
+        state = "filled" if stop is None else "sent" if ticket.answered else "stopped"
+        questions = ticket.questions.items()
+        lines = [{"question": question, "what": LEFT[left[key]]} for key, question in questions if key in left]
+        changes = compare.at_most(lines + ticket.changes)
+        done = [question for key, question in questions if key in filled and key not in left]
+        with conn:
+            conn.execute(REPORTED, (state, stop, _json(changes), _json(done), ticket.fill))
+        ticket.reported = True
         if stop:
             del self.tickets[ticket.job]
 
@@ -274,7 +341,7 @@ def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
 def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
     """The newest fills of any job, in plain words, with each job's title and company. They outlive their browser."""
     return [
-        _plain(row[:6]) | {"job": row[6], "title": row[7], "company": row[8]} for row in conn.execute(RECENT, (limit,))
+        _plain(row[:7]) | {"job": row[7], "title": row[8], "company": row[9]} for row in conn.execute(RECENT, (limit,))
     ]
 
 
@@ -290,12 +357,17 @@ def toolbar_fills(conn: sqlcipher3.Connection) -> int:
 
 
 def _plain(row: tuple) -> dict:
-    started_on, toolbar, browser, state, stop_kind, changes = row
+    started_on, toolbar, browser, state, stop_kind, changes, filled = row
     moment = datetime.fromisoformat(started_on).astimezone()  # the laptop's own clock
     return {
         "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
         "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
+        "filled": json.loads(filled or "[]"),
     }  # fmt: skip
+
+
+def _json(items: list) -> str:
+    return json.dumps(items, ensure_ascii=False)
 
 
 def _unused(conn: sqlcipher3.Connection, job_id: int, moment: str) -> int | None:

@@ -154,6 +154,12 @@
   {% endif %}
   {% if last_fill %}
   <p class="muted">Last fill: {{ last_fill.when }}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}</p>
+  {% if last_fill.filled %}
+  <h3>Filled</h3>
+  <ul class="reasons">
+    {% for question in last_fill.filled %}<li>{{ question }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   {% if last_fill.changes %}
   <h3>Check these on the form</h3>
   <ul class="reasons">
