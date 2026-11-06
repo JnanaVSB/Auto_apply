@@ -219,7 +219,7 @@ def test_a_failed_call_keeps_no_error_text():
 
 
 def test_each_part_has_its_own_map_of_handlers():
-    assert handlers("PAGE") == {"open": "open", "form": "form", "file": "file", "done": "done"}
+    assert handlers("PAGE") == {"open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved"}
     assert handlers("POPUP") == {"status": "status", "fill": "fill"}
     assert handlers("OPTIONS") == {"pair": "pair", "paired": "paired"}
 
@@ -264,7 +264,7 @@ def test_a_form_the_app_can_t_read_stays_for_the_page_part_to_report():
     form = function("form")
     refused = form.index("answer.status === 400 || answer.status === 413")
     assert form.index('{ stop: "report" }', refused) < form.index("const problem = answer.status === 200")
-    assert '"moved"' not in code(BACKGROUND) and function("onForm")
+    assert 'stop: "moved"' not in code(BACKGROUND)
 
 
 def test_storage_is_locked_before_the_key_is_saved():
@@ -375,7 +375,7 @@ def test_the_skip_list_names_password_and_the_other_sorts():
 
 def test_no_message_from_the_page_carries_an_address():
     messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE))
-    assert len(messages) == 4 and code(PAGE).count("sendMessage(") == 1  # open, file, done, form
+    assert len(messages) == 5 and code(PAGE).count("sendMessage(") == 1  # moved, open, form, file, done
     assert [message for message in messages if re.search(r"address|location|href", message)] == []
 
 
@@ -396,6 +396,15 @@ def test_every_why_and_stop_is_one_the_app_knows():
     }  # fmt: skip
 
 
+def test_a_page_must_be_where_it_landed_before_anything_is_asked():
+    assert 'const landedAt = () => performance.getEntriesByType("navigation")[0]?.name;' in code(PAGE)
+    first, second, third = page_function("fillTheForm").splitlines()[1:4]
+    assert first == "  const address = landedAt();"
+    assert second == '  if (location.href !== address) return ask({ do: "moved" });'
+    assert 'ask({ do: "open" })' in third and page_function("fillTheForm").count("location.href") == 1
+    assert "call(" not in function("moved")
+
+
 def test_the_page_s_words_are_read_only_for_the_limit_check():
     assert code(PAGE).count("innerText") == 1
     assert "innerText" in re.search(r"^const whyNoForm = .*$", code(PAGE), re.M)[0]
@@ -403,7 +412,7 @@ def test_the_page_s_words_are_read_only_for_the_limit_check():
 
 def test_begin_is_answered_at_once_and_only_from_this_plugin():
     listener = code(PAGE).partition("onMessage.addListener(")[2]
-    assert "async" not in listener.partition("\n")[0] and "reply({});" in listener
+    assert "async" not in listener.partition("\n")[0] and "reply({ moved: location.href !== landedAt() });" in listener
     assert 'if (sender.id === chrome.runtime.id && message?.do === "begin") run();' in listener
 
 

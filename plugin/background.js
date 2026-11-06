@@ -163,6 +163,14 @@ async function done(message, sender) {
   return {};
 }
 
+async function moved(message, sender) {
+  const tabId = sender.tab.id;
+  const record = await recordOf(tabId);
+  await flag(tabId, "!");
+  await keep(tabId, { ...record, address: record?.address ?? sender.tab.url, said: { problem: "moved" } });
+  return {};
+}
+
 async function status() {
   const tab = await activeTab();
   const key = await storedKey();
@@ -190,8 +198,8 @@ async function fill() {
   if (answer.body.ok !== true) return { say: answer.body.error ?? "app-error" };
   if (record?.ticket) await keep(tab.id, { address: record.address, said: record.said }); // the press ended that fill
   try {
-    await chrome.tabs.sendMessage(tab.id, { do: "begin" }, { frameId: 0 });
-    return { say: "filling" };
+    const reply = await chrome.tabs.sendMessage(tab.id, { do: "begin" }, { frameId: 0 });
+    return { say: reply?.moved ? "moved" : "filling" };
   } catch {
     return { say: "reload" };
   }
@@ -223,7 +231,7 @@ async function paired() {
 }
 
 // Maps, not objects: `do` comes from outside, and "constructor" must find nothing.
-const PAGE = new Map([["open", open], ["form", form], ["file", file], ["done", done]]);
+const PAGE = new Map([["open", open], ["form", form], ["file", file], ["done", done], ["moved", moved]]);
 const POPUP = new Map([["status", status], ["fill", fill]]);
 const OPTIONS = new Map([["pair", pair], ["paired", paired]]);
 

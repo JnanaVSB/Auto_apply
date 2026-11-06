@@ -28,6 +28,8 @@ const ownLabel = (box) => box.labels?.[0]?.textContent ?? "";
 const realOptions = (box) => [...box.options].filter((option) => option.value && option.text);
 const isGroup = (line, list) => ["single", "multi"].includes(line.kind) && list.every((box) => box.matches(TICK_BOX));
 const anchored = () => document.querySelector(BOARD.anchor);
+// Where the page really loaded from: its own script can rewrite the address, on the same site, but not this.
+const landedAt = () => performance.getEntriesByType("navigation")[0]?.name;
 const rootOf = (anchor) => anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined);
 
 function only(items, textOf, label) {
@@ -284,8 +286,9 @@ async function fillLines(pack, address, root) {
 }
 
 async function fillTheForm() {
+  const address = landedAt();
+  if (location.href !== address) return ask({ do: "moved" });
   if (!(await ask({ do: "open" }))?.go) return undefined;
-  const address = location.href;
   await anchorShown();
   await quiet(); // the page may still swap its form, so the root is taken after this and kept from here on
   const anchor = anchored();
@@ -312,7 +315,7 @@ async function run() {
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (sender.id === chrome.runtime.id && message?.do === "begin") run();
-  reply({});
+  reply({ moved: location.href !== landedAt() });
 });
 
 run();

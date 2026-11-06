@@ -12,6 +12,7 @@ const WORDS = new Map([
   ["no-ticket", "No fill was waiting for this tab. If you pressed Open and fill, it may have gone to another tab or browser: check Settings → Browser plugin."],
   ["reload", "Reload this tab: the fill starts by itself."],
   ["ended", "The fill ended before it finished: check this tab, and fill in the rest yourself."],
+  ["moved", "This page has moved since it loaded, so the plugin won't fill it. Reload the tab and check its address."],
   ["reloaded", "This tab was reloaded, so the form may be empty: a reload doesn't fill again. Press Fill to start over."],
   ["filling", "Filling this tab…"],
   ["known", ""],
