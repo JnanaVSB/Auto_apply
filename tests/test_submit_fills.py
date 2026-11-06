@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app import db
 from app.config import Config
 from app.sources import closed_site, is_simplify_site, posting_of
-from app.submit import Drawn, ashby, fills, greenhouse, lever
+from app.submit import Drawn, ashby, fill_words, fills, greenhouse, lever
 from app.submit.preview import Preview
 from app.web import queries, security
 
@@ -567,7 +567,7 @@ def test_an_ending_keeps_a_filled_row_and_what_was_filled(conn, laptop, at, tick
         getattr(tickets, end)(conn, *{"end_browser": (laptop,), "end_all": (), "end_job": (running.job,)}[end])
     kind = "submitted" if end == "end_job" else "browser-removed"
     assert one(conn, ROW, running.fill)[4:] == ("filled", kind)
-    assert fills.latest(conn, running.job)["filled"] == ["First Name"]
+    assert fill_words.latest(conn, running.job)["filled"] == ["First Name"]
 
 
 def test_a_ticket_past_its_time_is_not_marked_when_things_end(conn, laptop, at, tickets, clock):
@@ -626,16 +626,31 @@ def files_holding(pattern):
 
 def test_only_these_files_name_the_fills_table():
     found = files_holding(re.compile(r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+fills\b"))
-    allowed = {"db.py", "submit/fills.py", "web/plugin.py", "web/plugin_settings.py", "web/submit.py"}
+    allowed = {
+        "db.py",
+        "submit/fill_words.py",
+        "submit/fills.py",
+        "web/plugin.py",
+        "web/plugin_settings.py",
+        "web/submit.py",
+    }
     assert "submit/fills.py" in found and found <= allowed
 
 
 def test_only_the_box_and_settings_read_a_fill_back():
-    found = files_holding(re.compile(r"\bfills\.(?:latest|recent)\b|\bfrom app\.submit\.fills import\b"))
+    reads = r"\bfill_words\.(?:latest|recent)\b|\bfrom app\.submit\.fill_words import[^)]*\b(?:latest|recent)\b"
+    found = files_holding(re.compile(reads))
     assert found == {"web/plugin_settings.py", "web/submit.py"}
 
 
 def test_nothing_that_holds_a_fill_s_changes_logs():
-    holding = {"submit/compare.py", "submit/fills.py", "web/plugin.py", "web/plugin_settings.py", "web/submit.py"}
+    holding = {
+        "submit/compare.py",
+        "submit/fill_words.py",
+        "submit/fills.py",
+        "web/plugin.py",
+        "web/plugin_settings.py",
+        "web/submit.py",
+    }
     logs = files_holding(re.compile(r"\bprint\(|\blogging\b|\blogger\b"))
     assert not logs & holding

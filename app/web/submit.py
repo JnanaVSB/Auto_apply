@@ -20,7 +20,7 @@ from app import questionnaire, sources, submit, tracker
 from app.config import ConfigError, load_config
 from app.council import answers, flow, runs
 from app.resume import CONTROL
-from app.submit import Field, FormError, fills, greenhouse, lever, match, preview, record, wordings
+from app.submit import Field, FormError, fill_words, fills, greenhouse, lever, match, preview, record, wordings
 from app.submit.match import MINE, WRITER
 from app.submit.preview import Preview
 from app.web import actions, queries
@@ -334,7 +334,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE, writer=WRITER,
             max_line=MAX_LINE, max_long=MAX_LONG,
-            fill_address=fill_address, fill_reason=fill_reason, last_fill=fills.latest(conn, job_id),
+            fill_address=fill_address, fill_reason=fill_reason, last_fill=fill_words.latest(conn, job_id),
             job=job, record=recorded, heading=recorded and record.HEADING[recorded["how"]],
             may_differ=record.MAY_DIFFER, no_copy=record.NO_COPY,
             moved_back=back and record.MOVED_BACK.format(_day(back)),

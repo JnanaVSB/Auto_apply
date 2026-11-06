@@ -25,7 +25,7 @@ from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
 from app.sources.feeds import FEEDS
-from app.submit import fills
+from app.submit import fill_words, fills
 from app.web import (
     actions,
     answer_key,
@@ -208,7 +208,8 @@ def create_app(
         low = bool(view.scoring) and set(view.scoring) <= {"low", "quick"}  # the Low score tab shows the reasons
         return _page(
             request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS, low=low,
-            counts=queries.counts(conn, scoring), toolbar_fills=fills.toolbar_fills(conn), sign_days=fills.SIGN_DAYS,
+            counts=queries.counts(conn, scoring), toolbar_fills=fill_words.toolbar_fills(conn),
+            sign_days=fill_words.SIGN_DAYS,
         )  # fmt: skip
 
     @app.get("/jobs/{job_id:int}")

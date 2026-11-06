@@ -17,7 +17,7 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import MAX_FIELDS, compare, fills, preview
+from app.submit import MAX_FIELDS, compare, fill_words, fills, preview
 from app.web import queries
 
 PREFIX = "/plugin/"
@@ -38,8 +38,8 @@ KINDS = {
     NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB,
     NO_FILE,
 }  # fmt: skip
-STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
-PAGE_STOPS = (fills.BOT_CHECK, fills.LIMIT, fills.UNEXPECTED_PAGE, fills.CANT_SET)
+STOP = {"go": False, "reason": fill_words.UNEXPECTED_PAGE}
+PAGE_STOPS = (fill_words.BOT_CHECK, fill_words.LIMIT, fill_words.UNEXPECTED_PAGE, fill_words.CANT_SET)
 
 
 def key_hash(key: str) -> str:
@@ -254,7 +254,7 @@ def _is_value(value: object) -> bool:
 
 
 def _is_why(why: object) -> bool:
-    return isinstance(why, str) and why in fills.LEFT
+    return isinstance(why, str) and why in fill_words.LEFT
 
 
 def _logged_in(request: Request) -> None:

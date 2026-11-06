@@ -11,7 +11,7 @@ import pytest
 
 from app.resume import CONTROL
 from app.sources import closed_site
-from app.submit import ashby, fills, greenhouse, lever
+from app.submit import ashby, fill_words, greenhouse, lever
 from app.web import plugin
 
 PLUGIN = Path(__file__).parents[1] / "plugin"
@@ -389,7 +389,7 @@ def test_tidy_takes_out_the_same_characters_as_the_app():
 
 def test_every_why_and_stop_is_one_the_app_knows():
     literals = set(re.findall(r'"([^"\n]*)"', code(PAGE)))
-    known = {*fills.LEFT, *plugin.PAGE_STOPS}
+    known = {*fill_words.LEFT, *plugin.PAGE_STOPS}
     assert known <= literals
     assert {word for word in literals if re.fullmatch(r"[a-z]+(?:-[a-z]+)+", word)} <= known | {
         "aria-label", "aria-required", "one-time-code",

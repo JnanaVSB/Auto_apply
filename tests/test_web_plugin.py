@@ -23,7 +23,7 @@ from app import collect, config, submit
 from app.config import Config
 from app.documents import pdf
 from app.fetch import Fetcher
-from app.submit import Field, Form, fills, match, preview
+from app.submit import Field, Form, fill_words, fills, match, preview
 from app.web import main, preparer, queries, security
 
 HELLO = "/plugin/hello"
@@ -1698,7 +1698,7 @@ def test_the_trail_outlives_a_report_and_remove(owner, door, conn, data_dir, pai
     assert ok(report(door, ticket, values=[VALUE]))
     assert handed_out(conn) == '["resume"]'
     owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
-    assert handed_out(conn) == '["resume"]' and fills.latest(conn, job)["files"] == "resume"
+    assert handed_out(conn) == '["resume"]' and fill_words.latest(conn, job)["files"] == "resume"
 
 
 def test_a_trail_survives_a_stop_too(door, conn, data_dir, paired):

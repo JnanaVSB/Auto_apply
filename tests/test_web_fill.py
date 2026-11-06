@@ -36,7 +36,7 @@ from test_web_plugin import (
 )
 
 from app import config, submit
-from app.submit import Choice, Field, Form, fills, match, preview
+from app.submit import Choice, Field, Form, fill_words, fills, match, preview
 from app.web import actions
 from app.web import submit as form_part
 
@@ -521,8 +521,8 @@ def test_log_out_all_blames_a_browser_only_for_a_fill_that_had_one(client, door,
     press(client, nobody)
     client.post(LOG_OUT_ALL, data={"csrf_token": csrf(client)}, follow_redirects=False)
     assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "browser-removed"), (0, None, "ended", "logged-out")]
-    assert fills.latest(conn, took)["what"] == WORDS["ended", "browser-removed"]
-    assert fills.latest(conn, nobody)["what"] == WORDS["ended", "logged-out"]
+    assert fill_words.latest(conn, took)["what"] == WORDS["ended", "browser-removed"]
+    assert fill_words.latest(conn, nobody)["what"] == WORDS["ended", "logged-out"]
     log_in(client)
     assert WORDS["ended", "logged-out"] in box(client, nobody)
 
@@ -947,16 +947,16 @@ def test_no_inside_word_reaches_a_page(client, conn, paired):
 def test_the_rows_read_back_in_plain_words(conn):
     with conn:
         job = add_job(conn, "ML Intern", apply_url=LINK)
-    assert fills.latest(conn, job) is None and fills.recent(conn) == []
+    assert fill_words.latest(conn, job) is None and fill_words.recent(conn) == []
     past_fill(conn, job, toolbar=1, browser="Laptop Chrome", state="sent", changes='[{"question": "Q", "what": "W"}]')
-    latest = fills.latest(conn, job)
+    latest = fill_words.latest(conn, job)
     assert latest["what"] == "your answers went to the browser"
     assert latest["changes"] == [{"question": "Q", "what": "W"}] and latest["filled"] == []
     assert (latest["toolbar"], latest["browser"]) == (1, "Laptop Chrome")
-    (recent,) = fills.recent(conn)
+    (recent,) = fill_words.recent(conn)
     assert (recent["job"], recent["title"], recent["company"]) == (job, "ML Intern", "Acme")
     past_fill(conn, job, state="filled", filled='["Q"]')
-    assert fills.latest(conn, job)["filled"] == ["Q"] and fills.recent(conn)[0]["filled"] == ["Q"]
+    assert fill_words.latest(conn, job)["filled"] == ["Q"] and fill_words.recent(conn)[0]["filled"] == ["Q"]
     assert latest["files"] == ""
     past_fill(conn, job, state="sent", files='["cover_letter", "resume"]')
-    assert fills.latest(conn, job)["files"] == fills.recent(conn)[0]["files"] == "cover letter, resume"
+    assert fill_words.latest(conn, job)["files"] == fill_words.recent(conn)[0]["files"] == "cover letter, resume"
