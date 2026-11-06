@@ -83,7 +83,7 @@ class Drawn:
     undrawn_starts: tuple[str, ...]  # the same, by how the key begins
     unlisted: frozenset[str]  # drawn keys the read doesn't list
     hidden_choices: bool  # a drop-down's choices are drawn only once it is opened
-    file_checks: tuple[str, ...]  # what a file box can be compared by: its words and required mark differ when drawn
+    file_checks: tuple[str, ...]  # a file box is matched by its key, then checked only by these: its words differ
 
 
 def fingerprint(form: Form) -> str:

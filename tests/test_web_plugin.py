@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from contextlib import ExitStack
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -18,14 +19,15 @@ from test_web_phone import FORWARDED, FUNNEL, HOST, IDENTITY, ORIGIN, PHONE, pho
 from app import collect, config, submit
 from app.config import Config
 from app.fetch import Fetcher
-from app.submit import Field, Form, fills, preview
+from app.submit import Field, Form, fills, match, preview
 from app.web import main, preparer, queries, security
 
 HELLO = "/plugin/hello"
 START = "/plugin/start"
 KNOWN = "/plugin/known"
 FILL = "/plugin/fill"
-ROUTES = (HELLO, START, KNOWN, FILL)
+FORM = "/plugin/form"
+ROUTES = (HELLO, START, KNOWN, FILL, FORM)
 SETTINGS = "/settings/plugin"
 REMOVE = "/settings/plugin/remove"
 LOG_OUT_ALL = "/settings/phone/log-out-all"
@@ -39,6 +41,9 @@ FORM_ADDRESS = "https://job-boards.greenhouse.io/embed/job_app?for=acme&token=12
 FIRST_NAME = Field("first_name", "First Name", "text", True, "standard")
 SECOND_KEY = "second-fake-key"
 FILLS = "SELECT toolbar, browser, state, stop_kind FROM fills ORDER BY id"
+NAME_BOX = {"key": "first_name", "label": "First Name*", "kind": "text", "required": True}
+NAME_PACK = {"key": "first_name", "kind": "text", "value": "Fake"}
+STOP = {"go": False, "reason": "unexpected-page"}
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
 BAD_ORIGINS = (
     None,
@@ -818,6 +823,220 @@ def test_a_busy_database_gives_app_error_and_uses_no_ticket(door, conn, data_dir
     assert refused(response, 503, "app-error")
     assert fill_rows(conn) == [(0, None, "waiting", None)]
     assert call(door, START).status_code == 200
+
+
+# /plugin/form
+
+
+def send(door, ticket, fields, key=KEY, origin=PLUGIN):
+    return door.post(FORM, json={"protocol": 1, "ticket": ticket, "fields": fields}, headers=sent(key, origin))
+
+
+def running(door, conn, data_dir, job=None):
+    """A fill this browser has started; its ticket."""
+    press(door, conn, data_dir, job or ready_job(conn))
+    return call(door, START).json()["ticket"]
+
+
+def changes(conn):
+    return json.loads(one(conn, "SELECT changes FROM fills ORDER BY id DESC")[0])
+
+
+@pytest.fixture
+def paired(conn):
+    return pair(conn, plugin=PLUGIN)
+
+
+def test_a_form_that_matches_gets_its_answers_once(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    response = send(door, ticket, [NAME_BOX])
+    assert (response.status_code, response.json()) == (200, {"go": True, "pack": [NAME_PACK]})
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", None)] and changes(conn) == []
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")  # a reload can't fill again
+
+
+def test_what_was_left_out_is_kept_on_the_row(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Why Acme?", "kind": "long_text", "required": False}
+    assert send(door, ticket, [NAME_BOX, extra]).json() == {"go": True, "pack": [NAME_PACK]}
+    assert changes(conn) == [{"question": "Why Acme?", "what": "new on the form"}]
+
+
+def test_an_ashby_form_read_by_the_browser_fills_too(door, conn, data_dir, paired):
+    link = "https://jobs.ashbyhq.com/acme/0a1b-2c3d"
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=link)
+    field = Field("_systemfield_name", "Name", "text", True, "standard")
+    submit.save(conn, job, Form((field,)), "browser")
+    preview.keep(conn, job, field, "Fake Person")
+    press(door, conn, data_dir, job)
+    answer = call(door, START, f"{link}/application").json()
+    assert answer["board"] == "ashby"
+    drawn_box = {"key": "_systemfield_name", "label": "Name*", "kind": "text", "required": True}
+    assert send(door, answer["ticket"], [drawn_box]).json()["pack"] == [
+        {"key": "_systemfield_name", "kind": "text", "value": "Fake Person"}
+    ]
+
+
+def test_the_answers_are_read_when_the_form_is_sent(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    preview.keep(conn, job, FIRST_NAME, "Changed on the phone")
+    assert send(door, ticket, [NAME_BOX]).json()["pack"] == [NAME_PACK | {"value": "Changed on the phone"}]
+
+
+def test_a_line_no_longer_to_fill_stays_out_but_still_matches(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    preview.keep(conn, job, FIRST_NAME, match.IN_WINDOW)
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": []}
+    assert fill_rows(conn)[0][2] == "sent"
+
+
+@pytest.mark.parametrize("fields", [[], [{"key": "other", "label": "Other", "kind": "text", "required": False}]])
+def test_no_field_matching_stops_the_fill(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    assert send(door, ticket, fields).json() == STOP
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page")]
+    assert {"question": "First Name", "what": "no longer on the form"} in changes(conn)
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_a_saved_read_that_is_gone_stops_the_fill(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    with conn:
+        conn.execute("DELETE FROM forms")
+    assert send(door, ticket, [NAME_BOX]).json() == STOP
+    assert fill_rows(conn)[0][2:] == ("stopped", "unexpected-page")
+
+
+def test_over_500_fields_are_never_read(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert send(door, ticket, [None] * 501).json() == STOP  # nothing in them is even looked at
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "too-many-fields")]
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_exactly_500_fields_are_read(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    others = [{"key": f"k{number}", "label": "x", "kind": "text", "required": False} for number in range(499)]
+    assert send(door, ticket, [NAME_BOX, *others]).json()["pack"] == [NAME_PACK]
+
+
+def test_a_stopped_fill_stays_stopped_after_a_new_press(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    send(door, running(door, conn, data_dir, job), [])
+    press(door, conn, data_dir, job)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page"), (0, None, "waiting", None)]
+
+
+def test_a_field_that_matches_with_nothing_to_fill_goes_with_an_empty_pack(door, conn, data_dir, paired):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((replace(FIRST_NAME, required=False),)), "api")
+    ticket = running(door, conn, data_dir, job)
+    assert send(door, ticket, [NAME_BOX | {"required": False}]).json() == {"go": True, "pack": []}
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    running(door, conn, data_dir)
+    assert refused(send(door, ticket, [NAME_BOX]), 400, "bad-request")
+    assert fill_rows(conn)[0][2] == "started"
+
+
+def test_no_ticket_in_the_body_is_a_bad_request(door, conn, paired):
+    assert refused(door.post(FORM, json={"protocol": 1, "fields": []}, headers=sent()), 400, "bad-request")
+
+
+def test_a_made_up_ticket_is_no_ticket_whatever_the_fields(door, conn, data_dir, paired):
+    running(door, conn, data_dir)
+    assert refused(send(door, "made-up", [NAME_BOX]), 404, "no-ticket")
+    assert refused(send(door, "made-up", "not a list"), 404, "no-ticket")
+    assert fill_rows(conn)[0][2] == "started"
+
+
+def test_another_browser_s_ticket_is_no_ticket(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, [NAME_BOX], SECOND_KEY, OTHER_PLUGIN), 404, "no-ticket")
+    assert send(door, ticket, [NAME_BOX]).status_code == 200
+
+
+def test_a_ticket_not_yet_started_is_no_ticket(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    (ticket,) = held(door).values()
+    assert refused(send(door, ticket.id, [NAME_BOX]), 404, "no-ticket")
+
+
+def test_a_ticket_past_its_time_is_no_ticket(door, conn, data_dir, clock, paired):
+    ticket = running(door, conn, data_dir)
+    clock.now += fills.RUNNING_SECONDS + 1
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [None, 1, "x", {"key": "first_name"}, [1], [NAME_BOX | {"kind": "dropdown"}], [NAME_BOX | {"key": "x" * 1001}]],
+)
+def test_a_bad_body_uses_nothing_up(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, fields), 400, "bad-request")
+    assert fill_rows(conn)[0][2] == "started"
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+def test_no_fields_in_the_body_is_a_bad_request(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert refused(door.post(FORM, json={"protocol": 1, "ticket": ticket}, headers=sent()), 400, "bad-request")
+
+
+@pytest.mark.parametrize("fields", [[NAME_BOX], [], [None] * 501])
+def test_a_busy_database_sends_nothing_and_uses_nothing_up(door, conn, data_dir, paired, fields):
+    ticket = running(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = send(door, ticket, fields)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert fill_rows(conn)[0][2] == "started"
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+def test_no_label_or_value_reaches_the_logs(door, conn, data_dir, paired, caplog):
+    caplog.set_level(logging.DEBUG)
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Fake page words", "kind": "text", "required": False}
+    answers = [send(door, ticket, [NAME_BOX | {"kind": "dropdown"}]), send(door, ticket, [NAME_BOX, extra])]
+    assert answers[1].json()["pack"] == [NAME_PACK]
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "Fake page words" not in logged and ticket not in logged
+    assert '"value": "Fake"' not in logged and "First Name" not in logged
+
+
+def test_a_browser_removed_in_the_middle_of_a_fill_gets_nothing(owner, door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = running(door, conn, data_dir)
+    owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
+    assert refused(send(door, ticket, [NAME_BOX]), 401, "no-key")
+    assert refused(send(door, ticket, [NAME_BOX], SECOND_KEY, OTHER_PLUGIN), 404, "no-ticket")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "browser-removed")]
+
+
+def test_a_new_press_ends_a_fill_that_has_had_its_answers(door, conn, data_dir, paired):
+    job = ready_job(conn)
+    assert send(door, running(door, conn, data_dir, job), [NAME_BOX]).status_code == 200
+    press(door, conn, data_dir, job)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "replaced"), (0, None, "waiting", None)]
+
+
+def test_the_answers_set_no_cookie_and_open_no_cors(owner, door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    answers = [send(door, ticket, [1]), send(door, ticket, [NAME_BOX]), send(door, ticket, [NAME_BOX])]
+    assert [response.status_code for response in answers] == [400, 200, 404]
+    for response in answers:
+        assert "set-cookie" not in response.headers
+        assert not [name for name in response.headers if name.lower().startswith("access-control-")]
+        assert response.headers["content-type"] == "application/json"
 
 
 def test_the_kinds_with_a_job_or_an_answer_hold_no_words(owner, door, conn, limits):

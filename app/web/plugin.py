@@ -14,7 +14,7 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import fills, preview
+from app.submit import MAX_FIELDS, fills, preview, record
 from app.web import queries
 
 PREFIX = "/plugin/"
@@ -22,7 +22,7 @@ HELLO = PREFIX + "hello"
 PROTOCOL = 1
 MAX_BODY = 1024 * 1024
 MAX_VERSION = 32
-MAX_ADDRESS = 2_000
+MAX_TEXT = 2_000  # an address or a ticket
 BROWSER = "SELECT name FROM paired_browsers WHERE id = ?"
 ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 VERSION = re.compile(r"[0-9]+(\.[0-9]+){0,3}")  # as Chrome writes one; \d would also take other scripts' digits
@@ -32,6 +32,7 @@ TOO_BIG, BAD_REQUEST, APP_ERROR = "too-big", "bad-request", "app-error"
 KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR}
 NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB = "no-ticket", "not-logged-in", "not-ready", "no-job"
 KINDS |= {NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
+STOP = {"go": False, "reason": "unexpected-page"}
 
 
 def key_hash(key: str) -> str:
@@ -132,7 +133,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
 
     @app.post(PREFIX + "start")
     async def start(request: Request) -> Response:
-        address = _address(await read_call(request))
+        address = _text(await read_call(request), "address")
         state = request.state
         ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
         if ticket is None:
@@ -144,7 +145,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         body = await read_call(request)
         _logged_in(request)
         conn = request.app.state.conn
-        job_id = fills.job_at(conn, _address(body))
+        job_id = fills.job_at(conn, _text(body, "address"))
         if job_id is None:
             return JSONResponse({"job": None})
         job = queries.job(conn, job_id)
@@ -155,7 +156,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         body = await read_call(request)
         _logged_in(request)
         conn, state = request.app.state.conn, request.state
-        job_id = fills.job_at(conn, _address(body))
+        job_id = fills.job_at(conn, _text(body, "address"))
         if job_id is None:
             raise HTTPException(404, NO_JOB)
         try:
@@ -166,12 +167,39 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         reason = request.app.state.tickets.make(conn, job, found, limits, state.browser_id, state.browser_name)
         return JSONResponse({"ok": True}) if reason is None else _not_ready(job_id)
 
+    @app.post(PREFIX + "form")
+    async def form(request: Request) -> Response:
+        body = await read_call(request)
+        ticket_id = _text(body, "ticket")
+        conn, tickets = request.app.state.conn, request.app.state.tickets
+        ticket = tickets.running(ticket_id, request.state.browser_id)
+        if ticket is None or ticket.answered:
+            raise HTTPException(404, NO_TICKET)
+        items = body.get("fields")
+        if not isinstance(items, list):
+            raise HTTPException(400, BAD_REQUEST)
+        if len(items) > MAX_FIELDS:  # none of them is read
+            tickets.answered(conn, ticket, [], "too-many-fields")
+            return JSONResponse(STOP)
+        try:
+            fields = fills.drawn(items)
+        except ValueError:
+            raise HTTPException(400, BAD_REQUEST) from None
+        found = preview.preview(conn, data_dir, ticket.job)
+        passed, changes = fills.compare(found.lines if found else (), fields, fills.SITES[ticket.site].DRAWN)
+        if not passed:
+            tickets.answered(conn, ticket, changes, "unexpected-page")
+            return JSONResponse(STOP)
+        answers = fills.pack(passed, record.documents(conn, data_dir, ticket.job))
+        tickets.answered(conn, ticket, changes)  # the trail first: if this can't be saved, nothing goes out
+        return JSONResponse({"go": True, "pack": answers})
 
-def _address(body: dict) -> str:
-    address = body.get("address")
-    if not (isinstance(address, str) and len(address) <= MAX_ADDRESS):
+
+def _text(body: dict, name: str) -> str:
+    text = body.get(name)
+    if not (isinstance(text, str) and len(text) <= MAX_TEXT):
         raise HTTPException(400, BAD_REQUEST)
-    return address
+    return text
 
 
 def _logged_in(request: Request) -> None:

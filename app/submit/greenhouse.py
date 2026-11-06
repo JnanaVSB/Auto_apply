@@ -25,7 +25,7 @@ CONSENTS = {
 EDUCATION = {"school": "School", "degree": "Degree", "discipline": "Discipline"}
 DRAWN = Drawn(
     frozenset({"race", *EDUCATION}), ("demographic_", "data_compliance["), frozenset({"country", "hispanic_ethnicity"}),
-    hidden_choices=True, file_checks=("key", "kind"),
+    hidden_choices=True, file_checks=("kind",),
 )  # fmt: skip
 UNREADABLE = "Greenhouse's form for this job could not be read."
 CLOSED = "This posting is closed or was removed (Greenhouse says not found)."
