@@ -37,7 +37,7 @@ from app.submit import Thanks, ashby, fill_words, fills, greenhouse, lever, reco
 
 CARD = "INSERT INTO tracker VALUES (?, 'ready', NULL, NULL, 'then')"
 APPLIED = "INSERT INTO tracker VALUES (?, 'applied', NULL, '2026-10-17', 'then')"
-LOOKS_SENT = "It looks sent: press I submitted it."
+LOOKS_SENT = "It looks sent. If the site took it, press I submitted it."
 SIGN = Thanks(path="/thanks")
 SAID = "your press of Submit was followed by the site's thank-you page, so it was recorded"
 

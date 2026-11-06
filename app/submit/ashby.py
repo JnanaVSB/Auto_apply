@@ -7,6 +7,8 @@ from app.submit import Drawn, Field, Form
 
 FORM_PAGE = "https://jobs.ashbyhq.com/{}/{}/application"
 DRAWN = Drawn()
+# The page writes this form, so only these go out by themselves: every other answer waits for your decision
+OWN_KEYS = frozenset({"_systemfield_name", "_systemfield_email", "_systemfield_resume"})
 
 
 def form(fields: tuple[Field, ...]) -> Form:

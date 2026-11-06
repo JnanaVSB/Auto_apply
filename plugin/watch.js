@@ -1,9 +1,10 @@
 // The watcher: once a fill's answers are out, it reads the form again and notices your press of Submit.
 // It only listens: it presses, blocks and delays nothing. It loads before page.js, so it uses page.js only when called.
 const REREAD_MS = 5000;
-const SEND_WORDS = /\bsubmit\b|\bsend\b.*\bapplication\b/i;
+const SEND_WORDS = /^(submit|send)( my| your)?( job)?( application)?$/;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
 const SECRET_QUESTION = /password/i;
+const HOLDS_A_BOX = "input, select, textarea, label";
 const THANKS_LOOKS = 60;
 const THANKS_MS = 1000;
 
@@ -14,30 +15,42 @@ let thanksSign; // the app's own words for this site, never a page's
 let lookingForThanks = false;
 
 const isControl = (node) =>
-  ["BUTTON", "A"].includes(node.tagName) ||
+  node.tagName === "BUTTON" ||
   (node.tagName === "INPUT" && ["submit", "button"].includes(node.type)) ||
   node.getAttribute?.("role") === "button";
-const wordsOf = (control) => tidy([control.textContent, control.value, control.getAttribute("aria-label")].join(" "));
+// Its whole words, as a person sees them. Other words aren't noticed, which is the safe side.
+const saysSubmit = (control) =>
+  [control.textContent, control.value].some((words) => SEND_WORDS.test(tidy(words ?? "")));
 
 const isSecret = (box) =>
   box.autocomplete.split(/\s+/).some((word) => SECRET_BOXES.has(word)) || SECRET_QUESTION.test(question(box));
 
-// A custom drop-down's text box doesn't hold the pick, so "empty" would be false. A select on its placeholder is empty.
+// A select on its placeholder is empty, and a ticked box with no words of its own is still ticked.
+function shownHere(key, list) {
+  if (list[0].tagName === "SELECT" && !list[0].value) return "";
+  const kind = kindOf(key, list[0]);
+  if (!isGroup({ kind }, list)) return shownValue({ key, kind, value: "ticked" }, list);
+  const ticked = list.filter((box) => box.checked).map((box) => ownLabel(box).trim() || box.value || "ticked");
+  return kind === "multi" ? ticked : (ticked[0] ?? "");
+}
+
+// A custom drop-down's text box doesn't hold the pick, so "empty" would be false.
 function readForm(root) {
   const values = [];
   for (const [key, list] of boxes(root)) {
     if (list.some((box) => isSecret(box) || box.matches(DROPDOWN))) continue;
-    const unpicked = list[0].tagName === "SELECT" && !list[0].value;
-    const value = unpicked ? "" : cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list));
-    values.push({ key, value });
+    values.push({ key, value: cut(shownHere(key, list)) });
   }
   return values;
 }
 
+// A page chooses what its controls say, so an element wrapped round the boxes, or one you can't see, doesn't count.
+// This can't stop a page that draws a real button with Submit's words on something else.
 function heard(event) {
   if (!event.isTrusted) return;
   const control = event.composedPath().find(isControl);
-  if (!control || !formRoot?.contains(control) || !SEND_WORDS.test(wordsOf(control))) return;
+  if (!control || !formRoot?.contains(control) || !saysSubmit(control)) return;
+  if (!control.checkVisibility(SEEN) || control.querySelector(HOLDS_A_BOX)) return;
   const saved = ask({ do: "read", state: "clicked", values: readForm(formRoot) });
   const already = shownBeforePress();
   saved.then((reply) => (already ? undefined : thanksAfter(reply))).catch(() => {});

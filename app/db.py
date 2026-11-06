@@ -765,6 +765,7 @@ UPGRADES = (
     ALTER TABLE fills ADD COLUMN checked_on TEXT;  -- when values_read was saved
     ALTER TABLE fills ADD COLUMN values_read TEXT;  -- JSON by key: holds answers, wiped when the fill ends
     ALTER TABLE fills ADD COLUMN clicked_on TEXT;  -- when you pressed the site's Submit
+    ALTER TABLE fills ADD COLUMN pdfs TEXT;  -- JSON by slot: the version and SHA-256 of each PDF handed out
     ALTER TABLE submissions ADD COLUMN checked_on TEXT;  -- when the read behind this record was saved
     """,
 )

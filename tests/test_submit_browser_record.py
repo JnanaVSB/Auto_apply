@@ -2,6 +2,7 @@
 """A record frozen from what the plugin last read of the form: each line, each file, the words around them and when the
 read goes. Made-up jobs, forms and answers; nothing here opens a site."""
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -13,14 +14,17 @@ from test_submit_fills import busy
 from test_web_plugin import (
     FORM_ADDRESS,
     LINK,
+    RESUME_PDF,
     VALUE,
     answered,
     door,  # noqa: F401
+    fetch,
     held,
     ok,
     owner,  # noqa: F401
     packed,
     paired,  # noqa: F401
+    paper,
     ready_job,
     refused,
     report,
@@ -247,6 +251,42 @@ def test_a_file_line_goes_by_its_verdict(conn, data_dir, verdict, expected):
         seen(frozen(conn, data_dir, {"resume": verdict, "q": "Fake"}, file_line(data_dir), line()), "resume")
         == expected
     )
+
+
+@pytest.mark.parametrize("said", ["text from when this was a text box", ["a list"], 1, None])
+def test_a_file_line_with_anything_but_a_verdict_could_not_be_read(conn, data_dir, said):
+    found = frozen(conn, data_dir, {"resume": said, "q": "Fake"}, file_line(data_dir), line())
+    assert seen(found, "resume") == ("", NOT_READ)
+
+
+def test_the_record_names_the_pdf_that_went_out(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    assert fetch(door, ticket).status_code == 200
+    held_out = json.loads(one(conn, "SELECT pdfs FROM fills")[0])
+    assert held_out == {"resume": {"version": 1, "sha256": hashlib.sha256(RESUME_PDF).hexdigest()}}
+    paper(conn, data_dir, job, version=2, body=b"%PDF-1.7 a newer made-up resume")
+    assert ok(file_read(door, ticket))
+    submitted(owner, job)
+    (entry,) = record.recorded(conn, job)["files"]
+    assert (entry["label"], entry["version"]) == ("Resume v1", 1)
+    assert entry["sha256"] == hashlib.sha256(RESUME_PDF).hexdigest()
+
+
+def test_a_pdf_that_didn_t_go_out_is_the_newest_as_before(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    paper(conn, data_dir, job, version=2, body=b"%PDF-1.7 a newer made-up resume")
+    assert ok(file_read(door, ticket))
+    submitted(owner, job)
+    (entry,) = record.recorded(conn, job)["files"]
+    assert entry["label"] == "Resume v2"
+
+
+def file_read(door, ticket):
+    return report(door, ticket, "reread", values=[VALUE, {"key": "resume", "value": "Resume.pdf"}])
 
 
 def test_a_file_line_with_no_verdict_could_not_be_read(conn, data_dir):

@@ -193,7 +193,7 @@
   {% for label, address in papers %}<a href="{{ address }}" target="_blank" rel="noopener">{{ label }}</a>{{ " · " if not loop.last }}{% endfor %}
 
   {% if not record %}
-  {% if last_fill and last_fill.looks_sent %}<p role="status">It looks sent: press I submitted it.</p>{% endif %}
+  {% if last_fill and last_fill.looks_sent %}<p role="status">It looks sent. If the site took it, press I submitted it.</p>{% endif %}
   {% call form_to("submitted") %}
     <label>Date you applied <input type="date" name="on" value="{{ today }}"></label>
     <button type="submit">I submitted it</button>{% endcall %}

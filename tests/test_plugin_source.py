@@ -437,9 +437,9 @@ def top_level_names(name):
 
 
 def word_test():
-    found = re.search(r"^const SEND_WORDS = /(.*)/i;$", code(WATCH), re.M)
+    found = re.search(r"^const SEND_WORDS = /(.*)/;$", code(WATCH), re.M)
     assert found
-    return re.compile(found[1], re.I)
+    return re.compile(found[1])
 
 
 def listener(event):
@@ -463,7 +463,7 @@ def test_the_watcher_says_so_at_its_top():
 def test_the_watcher_only_defines_things_as_it_loads_before_page_js():
     lines = [line for line in code(WATCH).splitlines() if line and not line.startswith((" ", "}", ")"))]
     assert lines and [line for line in lines if not re.match(r"(?:const|let|function|async function) ", line)] == []
-    assert "new Set(" in code(WATCH) and not re.search(r"^const \w+ = (?!\(|/|new Set\(|\d)", code(WATCH), re.M)
+    assert "new Set(" in code(WATCH) and not re.search(r'^const \w+ = (?!\(|/|"|new Set\(|\d)', code(WATCH), re.M)
 
 
 @pytest.mark.parametrize("other", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
@@ -496,25 +496,38 @@ def test_a_press_is_read_at_once_and_a_lost_message_is_quiet():
     assert heard.splitlines()[-2].endswith(".catch(() => {});")
 
 
+def test_a_press_must_be_on_a_control_you_can_see_that_holds_no_box():
+    heard = page_function("heard", WATCH)
+    assert (
+        heard.index("event.isTrusted") < heard.index("control.checkVisibility(SEEN)") < heard.index('ask({ do: "read"')
+    )
+    assert "control.querySelector(HOLDS_A_BOX)" in heard
+    assert 'const HOLDS_A_BOX = "input, select, textarea, label";' in code(WATCH)
+
+
 def test_a_press_must_be_on_a_control_inside_the_form():
     heard = page_function("heard", WATCH)
     assert "event.composedPath().find(isControl)" in heard and "formRoot?.contains(control)" in heard
-    assert "SEND_WORDS.test(wordsOf(control))" in heard
-    assert "tidy([control.textContent, control.value" in code(WATCH)  # words over two lines are still one phrase
-    for tag in ("BUTTON", "INPUT", "A"):
-        assert f'"{tag}"' in code(WATCH)
+    assert "saysSubmit(control)" in heard
+    # on its own words, one tidy phrase each, and never what a page wrote only for a screen reader
+    assert '[control.textContent, control.value].some((words) => SEND_WORDS.test(tidy(words ?? "")))' in code(WATCH)
+    assert "aria-label" not in code(WATCH)
+    assert '"BUTTON"' in code(WATCH) and '"INPUT"' in code(WATCH) and '"A"' not in code(WATCH)  # a link is no press
     assert 'getAttribute?.("role") === "button"' in code(WATCH) and '["submit", "button"]' in code(WATCH)
 
 
 @pytest.mark.parametrize(
     ("words", "counts"),
     [
-        ("Submit", True), ("Submit application", True), ("SUBMIT YOUR APPLICATION", True), ("Send application", True),
-        ("Send my application", True), ("Send", False), ("Application", False),
-        ("Subscribe", False), ("Resubmit", False), ("Next", False), ("Save", False),
+        ("submit", True), ("submit application", True), ("submit my application", True),
+        ("submit your application", True), ("submit job application", True), ("send application", True),
+        ("send my application", True), ("send", True),
+        ("application", False), ("subscribe", False), ("resubmit", False), ("next", False), ("save", False),
+        ("submit a question", False), ("how to submit your papers", False), ("submit a bug report", False),
+        ("send feedback", False), ("submit your application now", False), ("please submit", False),
     ],
 )  # fmt: skip
-def test_the_words_of_a_press(words, counts):
+def test_the_whole_words_of_a_press(words, counts):
     assert bool(word_test().search(words)) is counts
 
 
@@ -526,16 +539,18 @@ def test_a_read_goes_through_boxes_and_skips_what_it_must():
     )  # it can hold a section
     assert "|| SECRET_QUESTION.test(question(box));" in code(WATCH)
     assert "const SECRET_QUESTION = /password/i;" in code(WATCH)
-    assert 'const unpicked = list[0].tagName === "SELECT" && !list[0].value;' in read
-    assert 'unpicked ? "" : cut(shownValue(' in read
-    assert "unpicked" not in code(PAGE)  # the fill's own read-back keeps what shownValue says
+    here = page_function("shownHere", WATCH)
+    assert 'if (list[0].tagName === "SELECT" && !list[0].value) return "";' in here
+    assert 'shownValue({ key, kind, value: "ticked" }, list)' in here
+    assert 'ownLabel(box).trim() || box.value || "ticked"' in here  # a ticked box with no words is still ticked
+    assert "cut(shownHere(key, list))" in read
+    assert "shownHere" not in code(PAGE)  # the fill's own read-back keeps what shownValue says
     assert "list.some(" in read  # one such box in a group is enough
-    assert read.index("continue") < read.index("shownValue")
-    assert 'cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list))' in read
+    assert read.index("continue") < read.index("shownHere")
     assert set(re.findall(r'"([\w-]+)"', re.search(r"^const SECRET_BOXES = .*$", code(WATCH), re.M)[0])) == {
         "current-password", "new-password", "one-time-code",
     }  # fmt: skip
-    assert code(WATCH).count("querySelector") == 1 and "innerText" not in code(WATCH)
+    assert code(WATCH).count("querySelector") == 2 and "innerText" not in code(WATCH)
 
 
 def test_one_watcher_at_a_time_and_only_on_the_page_it_landed_on():
@@ -578,7 +593,8 @@ def test_a_read_is_checked_before_it_is_sent():
 
 def test_what_a_read_keeps_of_how_it_went():
     read = function("sendRead")
-    assert 'answer.body.error === "no-ticket"' in read
+    assert "NO_FILL.has(answer.body.error)" in read
+    assert re.search(r'^const NO_FILL = new Set\(\["no-ticket", "no-key", "wrong-plugin"\]\);$', code(BACKGROUND), re.M)
     assert "{ ticket: record.ticket, state, values, left: [] }" in read
     assert "unsaved: true" in read and "unsaved: false" in read and "looks: true" in read and "{ kept: true }" in read
     assert read.index("await call(") < read.index("await recordOf(tabId);", read.index("await call("))
@@ -619,8 +635,7 @@ def test_leaving_never_wipes_a_ticket_the_tab_took_meanwhile():
     updated = listener("onUpdated")
     left = updated.index("await leftForm(tabId);")
     assert left < updated.index("const latest = await recordOf(tabId);") < updated.index("keep(tabId,")
-    assert "if (latest?.ticket === record.ticket) await keep(tabId," in updated
-    assert "keep(tabId, { address: latest.address, said: latest.said })" in updated
+    assert "if (latest?.ticket === record.ticket) await keep(tabId, noTicket(latest));" in updated
 
 
 # The thank-you sign
@@ -757,10 +772,37 @@ def test_the_guide_is_for_the_public(word):
     assert word not in guide()
 
 
+def test_the_guide_says_what_a_page_can_do():
+    text = guide()
+    assert "a script on the page can change them: read them before you fill" in text
+    assert "each answer waits for you to press Use" in text
+    assert "It looks sent. If the site took it, press I submitted it." in text
+    assert "a page can also make a click of yours count as that press" in text
+    assert "While it watches the form, it never reads a password box" in text
+    assert "Reload this page to see how it went" in text
+    assert "if its name differs" in text
+
+
+def test_a_press_s_words_go_wherever_a_ticket_goes():
+    assert "const { looks, ...rest } = said ?? {};" in code(BACKGROUND)
+    assert "return { address, said: rest };" in function("noTicket")
+    for found in (function("sendRead"), function("fill"), listener("onUpdated")):
+        assert "noTicket(" in found
+    assert not re.search(r"keep\(\w+(?:\.id)?, \{ address: \w+\.address, said: \w+\.said \}\)", code(BACKGROUND))
+
+
+@pytest.mark.parametrize("name", ["form", "done"])
+def test_a_save_after_a_call_looks_at_the_record_again(name):
+    found = function(name)
+    assert found.index('call("') < found.index("const latest = await recordOf(tabId);")
+    assert "if (latest?.ticket !== record.ticket) return" in found
+
+
 def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():
     popup = code(POPUP)
-    assert "It looks sent: press I submitted it in the dashboard." in popup
-    assert "The latest read of this form couldn't be saved: the record keeps the last good one." in popup
+    assert "It looks sent" not in popup and "You pressed Submit here: say what happened in the job's box." in popup
+    assert "The latest read of this form couldn't be saved." in popup and "last good one" not in popup
+    assert "Check the form before you press Submit yourself." in popup
     assert "said.looks" in popup and "said.unsaved" in popup
     assert "The site showed its thank-you page after your press of Submit, so this was recorded." in popup
     assert 'said.recorded ? words("recorded") : said.looks && words("looks-sent")' in popup

@@ -37,7 +37,8 @@ from test_web_plugin import (
 )
 
 from app import questionnaire
-from app.submit import MAX_FIELDS, Field, Form, ashby, fills, preview, wordings
+from app.config import Config
+from app.submit import MAX_FIELDS, Field, Form, ashby, fills, match, preview, wordings
 from app.submit import load as load_form
 from app.submit import save as save_form
 from app.web import actions, queries
@@ -54,12 +55,14 @@ READING = "Reading in the new tab… Reload this page when it&#39;s done."
 NOT_READ = "The form opened without reading it."
 SHOWS = "Reading shows the form to the plugin. Nothing of yours goes to the site."
 NOT_SEEN = (
-    "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form."
+    "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form. "
+    "These questions are what the page showed, and a script on the page can change them: read them before you fill."
 )
 SHOWN_NOT_SEEN = NOT_SEEN.replace("'", "&#39;")
 READ_STOP = {"go": False, "reason": "read"}
 UNEXPECTED = {"go": False, "reason": "unexpected-page"}
 STATUS = '<p id="fill-status"'
+LOOKS_SENT = "It looks sent. If the site took it, press I submitted it."
 
 
 @pytest.fixture
@@ -411,6 +414,7 @@ def test_a_read_press_wipes_a_read_of_the_form_kept_from_an_earlier_fill(
     owner, door, conn, data_dir, paired, person, limits
 ):
     job = filled_after_a_read(owner, door, conn, data_dir)
+    assert ok(report(door, held(door)[job].id, "gone"))  # a read kept at gone has no ticket for ENDED to wipe
     with conn:
         conn.execute("UPDATE fills SET values_read = '{}', checked_on = 'then'")
     read_press(owner, job)
@@ -445,3 +449,164 @@ def test_the_phone_says_it_once(phone_dashboard, conn, data_dir):
     fields = (Field("a", "Question", "text", False, "company"),)
     save_form(conn, job, Form(fields), "browser")
     assert phone.get(f"/jobs/{job}/form", headers=headers).text.count(form_part.ON_PHONE) == 1
+
+
+# A form the page wrote: nothing goes out by itself
+
+
+INVENTED = [
+    {"key": "phone", "label": "Favourite number", "kind": "text", "required": False},
+    {"key": "x1", "label": "Salary expectations", "kind": "text", "required": False},
+    {"key": "x2", "label": "GPA", "kind": "text", "required": False},
+    {"key": "x3", "label": "Are you authorized to work in the US", "kind": "text", "required": False},
+    {"key": "location", "label": "Tell me", "kind": "text", "required": False},
+]
+LETTER = {"key": "made-up-file", "label": "Cover letter", "kind": "file", "required": False}
+
+
+@pytest.fixture
+def full_answers(conn):
+    questionnaire.save(conn, questionnaire.check({
+        "contact": {"full_name": "Sam Lee Park", "email": "sam@example.com", "phone": "+1 555 0100", "city": "Tempe"},
+        "work": {"sponsorship_now": "no", "sponsorship_future": "no", "authorized_us": "yes"},
+        "salary": {"minimum": 90000, "currency": "USD", "per": "year"},
+        "education": {"gpa": "3.9", "highest_degree": "MS"},
+    }))  # fmt: skip
+
+
+def why_not(conn, data_dir, job):
+    limits_ = Config(data_dir=data_dir, fill_pause_minutes=0)
+    return fills.why_not(conn, queries.job(conn, job), preview.preview(conn, data_dir, job), limits_)
+
+
+def test_what_a_page_invents_gets_no_answer_without_your_decision(
+    owner, door, conn, data_dir, paired, full_answers, limits
+):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, *INVENTED])
+    found = lines(conn, data_dir, job)
+    assert not [box["key"] for box in INVENTED if found[box["key"]].status == "fill"]
+    assert preview.preview(conn, data_dir, job).open >= 1
+    assert why_not(conn, data_dir, job) == fills.ANSWER_FIRST and ">Open and fill</a>" not in box(owner, job)
+
+
+def test_a_key_of_a_known_box_under_other_words_is_a_suggestion(owner, door, conn, data_dir, paired, full_answers):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, INVENTED[0]])
+    line = lines(conn, data_dir, job)["phone"]
+    assert (line.status, line.value) == ("suggested", "+1 555 0100")
+
+
+def test_use_all_lets_them_go(owner, door, conn, data_dir, paired, full_answers, limits):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, INVENTED[0]])
+    seen = form_part._seen(form_part._usable(preview.preview(conn, data_dir, job)))
+    owner.post(f"/jobs/{job}/form/use-all", data={"seen": seen, "csrf_token": csrf(owner)})
+    assert lines(conn, data_dir, job)["phone"].status == "fill" and why_not(conn, data_dir, job) is None
+    press(door, conn, data_dir, job)
+    pack = send(door, call(door, START, ASHBY_FORM).json()["ticket"], [NAME, EMAIL, INVENTED[0]]).json()["pack"]
+    assert [line["key"] for line in pack] == ["_systemfield_name", "_systemfield_email", "phone"]
+
+
+def test_a_file_box_the_page_wrote_is_a_decision_and_gets_no_pdf(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    paper(conn, data_dir, job, "cover_letter")
+    read(owner, door, job, [NAME, RESUME, LETTER])
+    line = lines(conn, data_dir, job)["made-up-file"]
+    assert (line.status, line.decision, line.value) == ("decide", "choose_file", "")
+    assert why_not(conn, data_dir, job) == fills.ANSWER_FIRST
+
+
+def test_a_consent_the_page_wrote_is_a_decision():
+    field = Field("c", "I agree", "consent", False, "company")
+    line = preview.held_back(match.Line(field, "fill", match.TICKED, "Questionnaire"))
+    assert (line.status, line.decision, line.value) == ("decide", "consent", "")
+
+
+def test_the_site_s_own_boxes_still_fill(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, RESUME])
+    found = lines(conn, data_dir, job)
+    assert [line.status for line in found.values()] == ["fill", "fill", "fill"]
+    assert preview.preview(conn, data_dir, job).open == 0
+    assert ashby.OWN_KEYS == {"_systemfield_name", "_systemfield_email", "_systemfield_resume"}
+
+
+def test_your_own_answer_stays_a_fill(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [WHY])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[0], "Because of the robots")
+    line = lines(conn, data_dir, job)["a1b2"]
+    assert (line.status, line.value) == ("fill", "Because of the robots")
+
+
+def test_lines_the_writer_sees_are_not_changed(owner, door, conn, data_dir, paired, full_answers):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, INVENTED[0]])
+    form = load_form(conn, job)[0]
+    found = {line.field.key: line for line in preview.lines(conn, form, job)[0]}
+    assert found["phone"].status == "fill"
+
+
+def test_read_again_with_fewer_questions_says_how_many_went(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, WHY])
+    assert load_form(conn, job)[3] is None  # a first read says nothing
+    assert read(owner, door, job, [NAME, EMAIL]).json() == READ_STOP
+    assert "1 of this form's questions could not be read" in load_form(conn, job)[3]
+    assert "1 of this form&#39;s questions could not be read" in box(owner, job)
+
+
+@pytest.mark.parametrize("kept", [0, 1, 3])
+def test_a_read_with_under_half_the_saved_questions_keeps_the_saved_form(owner, door, conn, data_dir, paired, kept):
+    job = ashby_job(conn, data_dir)
+    boxes = [WHY | {"key": f"q{number}", "label": f"Question {number}"} for number in range(8)]
+    read(owner, door, job, boxes)
+    drawn = [*boxes[:kept], WHY | {"key": "new", "label": "A new question"}]
+    assert read(owner, door, job, drawn).json() == UNEXPECTED
+    assert saved_keys(conn, job) == [box_["key"] for box_ in boxes] and not held(door)
+
+
+def test_a_read_with_exactly_half_the_saved_questions_saves(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    boxes = [WHY | {"key": f"q{number}", "label": f"Question {number}"} for number in range(4)]
+    read(owner, door, job, boxes)
+    assert read(owner, door, job, boxes[:2]).json() == READ_STOP
+    assert saved_keys(conn, job) == ["q0", "q1"]
+
+
+def test_ashby_words_show_only_with_a_form_to_read(owner, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    with conn:
+        conn.execute("UPDATE jobs SET open_manually_only = 1 WHERE id = ?", (job,))
+    assert form_part.ASHBY not in box(owner, job)
+
+
+def test_a_read_press_drops_it_looks_sent(owner, door, conn, data_dir, paired, person, limits):
+    job = filled_after_a_read(owner, door, conn, data_dir)
+    ticket = held(door)[job].id
+    assert ok(report(door, ticket, "gone"))
+    with conn:
+        conn.execute("UPDATE fills SET clicked_on = 'then', state = 'sent'")
+    assert LOOKS_SENT in box(owner, job)
+    read_press(owner, job)
+    assert one(conn, "SELECT clicked_on FROM fills")[0] is None and LOOKS_SENT not in box(owner, job)
+
+
+def test_read_again_with_the_same_or_more_questions_says_nothing(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME])
+    read(owner, door, job, [NAME, EMAIL])
+    assert load_form(conn, job)[3] is None
+
+
+def test_a_form_the_app_read_itself_isn_t_held_back(conn, data_dir, person):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    save_form(conn, job, Form((Field("phone", "Favourite number", "text", False, "standard"),)), "api")
+    questionnaire.save(conn, questionnaire.check({"contact": {"phone": "+1 555 0100"}}))
+    assert lines(conn, data_dir, job)["phone"].status == "fill"
+
+
+def test_the_box_says_a_page_can_change_the_questions():
+    assert "a script on the page can change them: read them before you fill" in form_part.NOT_SEEN

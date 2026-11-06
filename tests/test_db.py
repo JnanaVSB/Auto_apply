@@ -989,7 +989,7 @@ def test_version_24_adds_two_columns_to_fills_and_changes_nothing_else(tmp_path,
             assert conn.execute("SELECT filled, files FROM fills").fetchall() == [("[]", "[]")]
 
 
-def test_version_25_adds_five_columns_and_changes_nothing_else(tmp_path, monkeypatch):
+def test_version_25_adds_six_columns_and_changes_nothing_else(tmp_path, monkeypatch):
     path = tmp_path / "upgraded"
     changed = ("fills", "submissions")
     with monkeypatch.context() as version_24:
@@ -1019,9 +1019,11 @@ def test_version_25_adds_five_columns_and_changes_nothing_else(tmp_path, monkeyp
             }
             fills = [row[1] for row in conn.execute("PRAGMA table_info(fills)")]
             submissions = [row[1] for row in conn.execute("PRAGMA table_info(submissions)")]
-            assert fills == [*old["fills"], "taken_on", "checked_on", "values_read", "clicked_on"]
+            assert fills == [*old["fills"], "taken_on", "checked_on", "values_read", "clicked_on", "pdfs"]
             assert submissions == [*old["submissions"], "checked_on"]
-            assert rows["fills"] == [(*before[1]["fills"][0], None, None, None, None)]  # an old row keeps all it had
+            assert rows["fills"] == [
+                (*before[1]["fills"][0], None, None, None, None, None)
+            ]  # an old row keeps all it had
             assert rows["submissions"] == [(*before[1]["submissions"][0], None)]
             with conn:
                 conn.execute("UPDATE fills SET values_read = '{}'")

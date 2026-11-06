@@ -13,6 +13,8 @@ const POPUP_PAGE = chrome.runtime.getURL("popup.html");
 const OPTIONS_PAGE = chrome.runtime.getURL("options.html");
 const READ_STATES = new Set(["reread", "clicked"]);
 const MODES = new Set(["fill", "read"]);
+// The fill has ended, or this browser was removed
+const NO_FILL = new Set(["no-ticket", "no-key", "wrong-plugin"]);
 // By tab, a press still on its way to the app, so that a tab leaving says so after it. This is only in memory: a worker
 // that restarted has none, and then a thank-you address can be missed, which records nothing.
 const pressing = new Map();
@@ -63,6 +65,12 @@ async function call(route, body, key) {
   } catch {
     return NO_DASHBOARD;
   }
+}
+
+// A tab's record once its ticket has gone. The press went with it: what came of it isn't known here.
+function noTicket({ address, said }) {
+  const { looks, ...rest } = said ?? {};
+  return { address, said: rest };
 }
 
 async function activeTab() {
@@ -123,6 +131,8 @@ async function form(message, sender) {
   if (!record?.ticket || !Array.isArray(message.fields)) return { stop: "known" };
   if (!(await onForm(tabId, record))) return { stop: "report" };
   const answer = await call("form", { ticket: record.ticket, fields: message.fields }, await storedKey());
+  const latest = await recordOf(tabId); // the tab can leave during the call, and an old copy would bring its ticket back
+  if (latest?.ticket !== record.ticket) return { stop: "known" };
   const { go, pack, reason, error } = answer.body;
   if (answer.status === 200 && go && pack.length > 0) {
     const slots = pack.filter((line) => line.kind === "file").map((line) => line.value.slot);
@@ -166,6 +176,8 @@ async function done(message, sender) {
   const { state, kind, values, left } = message;
   const body = { ticket: record.ticket, state, kind, values, left };
   const answer = await call("report", body, await storedKey());
+  const latest = await recordOf(tabId); // as in `form`
+  if (latest?.ticket !== record.ticket) return {};
   const unfilled = new Set(left.map((line) => line.key));
   const filled = new Set(values.map((line) => line.key).filter((key) => !unfilled.has(key))).size;
   const said = { state, kind, filled, left: unfilled.size };
@@ -205,8 +217,8 @@ async function sendRead(message, sender) {
   const answer = await call("report", { ticket: record.ticket, state, values, left: [] }, await storedKey());
   const latest = await recordOf(tabId); // the tab can leave during the call, and an old copy would bring its ticket back
   if (latest?.ticket !== record.ticket) return { stop: true };
-  if (answer.body.error === "no-ticket") {
-    await keep(tabId, { address: latest.address, said: latest.said });
+  if (NO_FILL.has(answer.body.error)) {
+    await keep(tabId, noTicket(latest));
     return { stop: true };
   }
   if (answer.status !== 200) {
@@ -246,11 +258,12 @@ async function leftForm(tabId) {
   if (record?.ticket) await call("report", { ticket: record.ticket, state: "gone", values: [], left: [] }, await storedKey());
 }
 
+// No call and no wait between the look and the save, and the page that sent this is still there: the tab hasn't left.
 async function moved(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
-  await flag(tabId, "!");
   await keep(tabId, { ...record, address: record?.address ?? sender.tab.url, said: { problem: "moved" } });
+  await flag(tabId, "!");
   return {};
 }
 
@@ -280,7 +293,7 @@ async function fill() {
     return { say: "not-ready", link: JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined };
   }
   if (answer.body.ok !== true) return { say: answer.body.error ?? "app-error" };
-  if (record?.ticket) await keep(tab.id, { address: record.address, said: record.said }); // the press ended that fill
+  if (record?.ticket) await keep(tab.id, noTicket(record)); // the press ended that fill
   try {
     const reply = await chrome.tabs.sendMessage(tab.id, { do: "begin" }, { frameId: 0 });
     return { say: reply?.moved ? "moved" : "filling" };
@@ -353,7 +366,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   if (atThanksPage(record, tab)) await saidThanks(tabId, record);
   await leftForm(tabId);
   const latest = await recordOf(tabId); // it may have landed on another form with a new ticket during that call
-  if (latest?.ticket === record.ticket) await keep(tabId, { address: latest.address, said: latest.said });
+  if (latest?.ticket === record.ticket) await keep(tabId, noTicket(latest));
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

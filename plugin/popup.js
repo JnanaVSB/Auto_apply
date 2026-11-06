@@ -25,8 +25,8 @@ const WORDS = new Map([
   ["bot-check", "The site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: the plugin stops wherever this check shows."],
   ["limit", "The site says you've reached its limit on applications."],
   ["cant-set", "The form wouldn't let the plugin set any box: fill it in yourself."],
-  ["looks-sent", "It looks sent: press I submitted it in the dashboard."],
-  ["unsaved", "The latest read of this form couldn't be saved: the record keeps the last good one."],
+  ["looks-sent", "You pressed Submit here: say what happened in the job's box."],
+  ["unsaved", "The latest read of this form couldn't be saved."],
   ["recorded", "The site showed its thank-you page after your press of Submit, so this was recorded."],
 ]);
 
@@ -41,7 +41,7 @@ const words = (kind) => WORDS.get(kind) ?? WORDS.get("app-error");
 const counted = (said) => `Filled ${said.filled}, left ${said.left} for you.`;
 
 function howItWent(said) {
-  if (said.state === "filled") return `${counted(said)} Check the form, then press Submit yourself.`;
+  if (said.state === "filled") return `${counted(said)} Check the form before you press Submit yourself.`;
   if (said.state === "stopped") return `${words(said.kind)} ${counted(said)}`;
   return said.problem ? words(said.problem) : "";
 }

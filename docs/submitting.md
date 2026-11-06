@@ -22,7 +22,7 @@ Submit yourself: the app never sends an application for you.
 - Nothing fills without your yes for this job: Open and fill in the job's box, or Fill in the plugin's popup.
 - It draws no button inside a job's page.
 - **Open the posting** only opens the posting. It never fills.
-- It never reads a password box, or a box whose question mentions a password.
+- While it watches the form, it never reads a password box, or a box whose question mentions a password.
 - Passwords, bot checks and the lines under **Left for you** stay yours.
 
 ## Install
@@ -58,8 +58,9 @@ This takes about ten minutes. Menus in Chrome change, so a name here may differ 
 ## Each job
 The plugin works in Chrome only, and only with the dashboard on its normal port, 8765.
 
-**Open and fill** is in the job's box, under **Fill the form**. It opens the form in a new tab and fills it. It shows
-once every decision is answered and a browser is connected. Words you may see in its place:
+**Open and fill** is in the job's box, under **Fill the form**. It opens the form in a new tab and fills it. Reload this
+page to see how it went: the box doesn't update by itself. It shows once every decision is answered and a browser is
+connected. Words you may see in its place:
 - **Answer the decisions above first:** some questions are still open.
 - **Connect a browser first:** finish "Install".
 - **Today's fills are used:** you've reached the day's limit. Wait for tomorrow, or raise the number.
@@ -82,16 +83,22 @@ days, so you can spot one you didn't start.
 - **The site says you've reached its limit:** try this job again later.
 - **The page didn't look like this job's form:** check the tab, then press Open and fill again.
 - **The form wouldn't let the plugin set any box:** fill it in yourself.
-- **This tab was reloaded:** a reload doesn't fill again, and the form may be empty. Press Fill to start over.
+- **This tab was reloaded,** which only the popup says: a reload doesn't fill again, and the form may be empty. Press
+  Fill to start over.
 
 **Ashby forms** have to be read first. Press **Read the form** in the job's box. A new tab opens, the plugin reads the
 questions, and nothing of yours goes to the site. This doesn't count as a fill. Then reload the job's page, answer what
 is open, and use Open and fill. The plugin can't read yes/no buttons, or questions that appear after an answer: do
 those yourself on the form.
 
+These questions are what the page showed, and a script on the page can change them: read them before you fill. So
+apart from your name, e-mail and resume, each answer waits for you to press Use, or Use all. If a later read finds fewer
+questions, the box says how many went.
+
 ## After you press Submit
-- **It looks sent: press I submitted it.** The plugin noticed your own press of the site's Submit. Nothing is recorded
-  yet, because the site may have refused the form. If it took it, press **I submitted it**.
+- **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of the site's Submit.
+  Nothing is recorded yet, because the site may have refused the form. A Submit with other words isn't noticed: **I
+  submitted it** works all the same. The popup says only that you pressed Submit, as it can't see the job's box.
 - **I submitted it** saves the record and moves the card to Applied. You choose the date.
 - **I didn't send it** ends the fill and wipes what the plugin read. Nothing is recorded and no card moves. It still
   counts towards the day's fills, because your answers did go to the page.
@@ -101,14 +108,16 @@ those yourself on the form.
 shown what its thank-you page looks like. Once on, the app records by itself if that page follows your own press of
 Submit within 2 minutes, while you are logged in.
 
-Be careful with this one. A wrong automatic record can't be erased: you can only mark it by moving the card back. And a
-page can fake a thank-you page after your real press.
+Be careful with this one. A wrong automatic record can't be erased: you can only mark it by moving the card back. A
+page can fake a thank-you page after your real press, and a page can also make a click of yours count as that press. So
+read the form and the site's own answer before you press **I submitted it**.
 
 ## What the record means
 - **What the form held when last checked** is what the form showed the plugin. It isn't proof of what the site received.
 - The plugin reads the form every 5 seconds or so, so a change in the last few seconds may be missed.
 - Only questions the app knew about are there. A new question you answered on the form isn't.
-- If a file box showed another file, the record says so. That file's name is never kept, as it may hold a person's name.
+- The record names the PDF the app handed out. It says the box showed another file only if its name differs. That other
+  name is never kept, as it may hold a person's name.
 - With no read to go on, the record is by hand: **What the app prepared (you applied by hand)**.
 
 ## One thing nobody can prevent

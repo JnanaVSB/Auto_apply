@@ -55,7 +55,7 @@ ON_BOARD = "INSERT INTO tracker VALUES (?, 'ready', NULL, NULL, 'then')"
 APPLIED = "INSERT INTO tracker VALUES (?, 'applied', NULL, '2026-10-17', 'then')"
 MARKER = "fake-answer-only-in-the-read"
 A_PERSON_S_FILE = "Fake-Person-Resume-2026.pdf"
-LOOKS_SENT = "It looks sent: press I submitted it."
+LOOKS_SENT = "It looks sent. If the site took it, press I submitted it."
 UNSENT_BUTTON = "/form/unsent"
 
 

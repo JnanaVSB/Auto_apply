@@ -49,7 +49,7 @@ HONEST = (
 )
 NOT_FILLED = "The form opened without filling."
 PRESS_FAILED = "That press couldn't be saved."
-FILLING = "Filling in the new tab…"
+FILLING = "Filling in the new tab… Reload this page to see how it went."
 OPEN_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 RECORD = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
@@ -76,7 +76,10 @@ WORDS = {
     ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
     ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
-    ("filled", None): "the plugin filled what it could. Check the form in the open tab, then press Submit yourself.",
+    (
+        "filled",
+        None,
+    ): "the plugin filled what it could. Check the form, then press Submit yourself. A reload empties it.",
     ("filled", "browser-removed"): "the plugin filled what it could, then its browser was removed",
     ("filled", "replaced"): "the plugin filled what it could, then a newer press ended the fill",
     ("filled", "submitted"): "the plugin filled what it could, then you pressed I submitted it",
@@ -175,6 +178,7 @@ def recent_part(page):
 def test_the_button_is_drawn_as_it_must_be(client, conn, paired):
     job = ready_job(conn)
     page = box(client, job)
+    assert "can&#39;t read yes/no buttons" not in page  # only for a form the page wrote
     assert button(job) in page and HONEST in page
     assert '<p id="fill-status" role="status"></p>' in page
     assert f'<a href="{LINK}" target="_blank" rel="noopener">Open the posting</a>' in page

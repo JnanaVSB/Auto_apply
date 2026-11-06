@@ -234,7 +234,7 @@ def test_a_file_slot_without_its_own_list_takes_any_file():
     ],
 )
 def test_a_page_without_a_question_is_refused(page):
-    with pytest.raises(FormError, match="Lever's page could not be read: try Read again later"):
+    with pytest.raises(FormError, match="Lever's page could not be read: try again later, or apply by hand"):
         lever.parse(page)
 
 

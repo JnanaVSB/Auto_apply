@@ -30,7 +30,8 @@ READERS = {"greenhouse": (greenhouse, "api"), "lever": (lever, "page")}  # site 
 READ_FROM = {"api": "Greenhouse's public job board", "page": "Lever's application page", "browser": "the browser"}
 ASHBY = "Ashby forms are read in the browser: press Read the form."
 NOT_SEEN = (
-    "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form."
+    "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form. "
+    "These questions are what the page showed, and a script on the page can change them: read them before you fill."
 )
 NO_RESUME = "The form is read once the resume is prepared"
 ALREADY = "Already reading this form"
@@ -52,7 +53,7 @@ CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 CHANGED_QUESTION = "This question changed: look at it again"
 SAME_DRAFT = "This is the Writer's draft unchanged: only your own changed words close it"
 ON_PHONE = "Filling happens on a computer. Your answers are saved here."
-FILLING = "Filling in the new tab…"
+FILLING = "Filling in the new tab… Reload this page to see how it went."
 NOT_FILLED = "The form opened without filling."
 READING = "Reading in the new tab… Reload this page when it's done."
 NOT_READ = "The form opened without reading it."
@@ -331,7 +332,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         return page(
             request, "form.html", job_id=job_id, found=found, note=note, failed=failed,
             readable=site in READERS,
-            waiting=NO_RESUME if no_resume else None, elsewhere=ASHBY if site == "ashby" and not no_resume else None,
+            waiting=NO_RESUME if no_resume else None,
+            elsewhere=ASHBY if site == "ashby" and not no_resume and fills.form_address(job) else None,
             not_seen=NOT_SEEN if found and found.read_from == "browser" else None,
             read_on=found and _day(found.read_on), read_from=found and READ_FROM[found.read_from],
             shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],

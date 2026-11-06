@@ -22,7 +22,7 @@ from app.council import runs
 from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, preview, record, save
+from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, load, preview, record, save
 from app.submit.fill_words import (
     BROWSER_REMOVED,
     CHANGED_FILE,
@@ -65,10 +65,10 @@ ENDED = """UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'end
     values_read = iif(?1 = 'gone', values_read, NULL), checked_on = iif(?1 = 'gone', checked_on, NULL) WHERE id = ?2"""
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? WHERE id = ?"
-HANDED = "UPDATE fills SET files = ? WHERE id = ?"
+HANDED = "UPDATE fills SET files = ?, pdfs = ? WHERE id = ?"
 READ = "UPDATE fills SET values_read = ?, checked_on = ? WHERE id = ?"
 CLICKED = "UPDATE fills SET clicked_on = ? WHERE id = ?"
-WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL WHERE job_id = ?"
+WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL, clicked_on = NULL WHERE job_id = ?"
 ALL_WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL"
 # Only the job's newest row: a newer press that is still waiting is left alone
 UNSENT = """UPDATE fills SET stop_kind = ?, values_read = NULL, checked_on = NULL WHERE state IN ('sent', 'filled')
@@ -157,7 +157,7 @@ class Ticket:
     changes: list[dict] = field(default_factory=list)  # all the compare said, uncut, so a report's count stays true
     questions: dict[str, str] = field(default_factory=dict)  # each key in the pack, with the app's own saved label
     reported: bool = False  # the browser has said how it went: it says so once
-    files: dict[str, tuple[Path, str]] = field(default_factory=dict)  # each PDF the pack named, with its SHA-256 then
+    files: dict[str, tuple[Path, str, int]] = field(default_factory=dict)  # each PDF in the pack: SHA-256 and version
     handed: list[str] = field(default_factory=list)  # the slots given out: each goes once
     known: frozenset[str] = frozenset()  # the keys a read may keep as they are
     pdfs: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
@@ -268,24 +268,36 @@ class Tickets:
         labels = {line.field.key: line.field.label for line, _ in passed}
         ticket.questions = {answer["key"]: labels[answer["key"]] for answer in answers}
         slots = {answer["key"]: answer["value"]["slot"] for answer in answers if answer["kind"] == "file"}
-        ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots.values()}
+        ticket.files = {
+            slot: (
+                documents[slot][1],
+                record.sha256(documents[slot][1]),
+                runs.last_done(conn, ticket.job, slot)["version"],
+            )
+            for slot in slots.values()
+        }
         ticket.pdfs = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
 
     def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> bool:
         """Saves the fields a browser says the form shows as the job's form, and says if it did; either way that uses
         the ticket up, and BadForm if the list can't be read leaves it. Saved first: a busy database raises and uses
-        nothing up. Saved answers stay, by their keys."""
+        nothing up. Saved answers stay, by their keys, and questions that have gone are counted, so the box says so;
+        with under half the saved form's questions left, the saved form stays."""
         fields = ()
         if len(items) <= MAX_FIELDS:  # none of them is read otherwise
             try:
                 fields = SITES[ticket.site].form(compare.fields_from(items)).fields
             except ValueError:
                 raise BadForm from None
-        if fields:
-            save(conn, ticket.job, Form(fields), "browser")
+        saved = load(conn, ticket.job)
+        had = {field.key for field in saved[0].fields if field.kind != "hidden"} if saved else set()
+        still = had & {field.key for field in fields}
+        enough = bool(fields) and 2 * len(still) >= len(had)  # a page half drawn never replaces a good form
+        if enough:
+            save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
         del self.tickets[ticket.job]
-        return bool(fields)
+        return enough
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
         """Whether the job has its record, which ends the ticket: a busy database can save "I submitted it" and not end
@@ -329,8 +341,9 @@ class Tickets:
     def hand(self, conn: sqlcipher3.Connection, ticket: Ticket, slot: str) -> None:
         """Saves that this PDF goes out, before it does: a busy database raises and uses nothing up."""
         handed = [*ticket.handed, slot]
+        pdfs = {name: {"version": ticket.files[name][2], "sha256": ticket.files[name][1]} for name in handed}
         with conn:
-            conn.execute(HANDED, (_json(handed), ticket.fill))
+            conn.execute(HANDED, (_json(handed), _json(pdfs), ticket.fill))
         ticket.handed = handed
 
     def reread(self, conn: sqlcipher3.Connection, ticket: Ticket, values: dict, clicked: bool) -> None:
@@ -420,7 +433,7 @@ class Tickets:
 def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
     """The PDF the pack named, byte for byte, so a newer one can't slip in; None if it isn't a plain file in the job's
     own folder, is too big, isn't a PDF or has changed. A link can't lead out, as only real paths are compared."""
-    path, sha256 = ticket.files[slot]
+    path, sha256, _ = ticket.files[slot]
     folder = data_dir.resolve() / "documents" / str(ticket.job)
     try:
         real = path.resolve()

@@ -20,7 +20,7 @@ from app.tracker import STAGES
 SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files, checked_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
 LOAD = "SELECT submitted_on, saved_on, how, address, fields, files, checked_on FROM submissions WHERE job_id = ?"
-LAST_READ = "SELECT values_read, checked_on FROM fills WHERE job_id = ? ORDER BY id DESC LIMIT 1"
+LAST_READ = "SELECT values_read, checked_on, pdfs FROM fills WHERE job_id = ? ORDER BY id DESC LIMIT 1"
 WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL WHERE job_id = ?"
 NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
 BY_YOU, EMPTY_FROM, MISSING = "answered by you on the site", "left empty", "file was missing"
@@ -133,11 +133,12 @@ def submit(
         raise Refused(NO_CARD)
     held = conn.execute(LAST_READ, (job_id,)).fetchone()
     read, checked_on = (json.loads(held[0]), held[1]) if held and held[0] and lines is not None else (None, None)
+    handed = json.loads(held[2]) if held and held[2] else {}
     fields = _fields(lines, read) if lines is not None else [
         {"question": label, "value": text, "from": "Questionnaire"}
         for label, text in standard(questionnaire.load(conn)[0])
     ]  # fmt: skip
-    files = _files(conn, data_dir, job_id, _changed(conn, data_dir, job_id, lines, read) if read else set())
+    files = _files(conn, data_dir, job_id, handed, _changed(conn, data_dir, job_id, lines, read) if read else set())
     saved = (job_id, on.isoformat(), now(), "by hand" if read is None else "browser", job["apply_url"],
              json.dumps(fields, ensure_ascii=False), json.dumps(files, ensure_ascii=False), checked_on)  # fmt: skip
     try:
@@ -183,11 +184,13 @@ def _as_read(line: match.Line, prepared: str, read: dict) -> dict:
     if key not in read:
         return {"value": "", "from": NOT_READ}
     if line.field.kind == "file":
-        return {
+        verdicts = {
             fill_words.SAME_FILE: {},
             fill_words.CHANGED_FILE: {"value": ANOTHER_FILE, "from": AS_SHOWN},
             "": {"value": "", "from": NO_FILE_SHOWN},
-        }[read[key]]
+        }
+        said = read[key] if isinstance(read[key], str) else None  # a key can change to a file box after its read
+        return verdicts.get(said, {"value": "", "from": NOT_READ})
     texts = [read[key]] if isinstance(read[key], str) else read[key]
     if not any(text.strip() for text in texts):
         return {"value": "", "from": EMPTY_FROM}
@@ -210,15 +213,15 @@ def _changed(
     return {paths[line.value] for line, said in verdicts if said == fill_words.CHANGED_FILE and line.value in paths}
 
 
-def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int, changed: set[str]) -> list[dict]:
-    """The newest finished resume and cover letter, each with its SHA-256. A PDF gone from the folder is noted and
-    never stops the record."""
+def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int, handed: dict, changed: set[str]) -> list[dict]:
+    """The resume and cover letter the last fill handed out, else the newest finished ones, each with its SHA-256. A PDF
+    gone from the folder is noted and never stops the record."""
     found = []
     for kind, name in DOCUMENTS:
-        if (done := runs.last_done(conn, job_id, kind)) is None:
+        if (done := handed.get(kind) or runs.last_done(conn, job_id, kind)) is None:
             continue
         version = done["version"]
-        digest = sha256(pdf.tailored(data_dir, job_id, version, kind))
+        digest = done["sha256"] if kind in handed else sha256(pdf.tailored(data_dir, job_id, version, kind))
         found.append({"slot": kind, "label": f"{name} v{version}", "version": version, "sha256": digest,
                       "note": "" if digest else MISSING} | ({"changed": True} if kind in changed else {}))  # fmt: skip
     return found
