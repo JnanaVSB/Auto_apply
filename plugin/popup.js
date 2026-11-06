@@ -11,6 +11,7 @@ const WORDS = new Map([
   ["not-ready", "This job can't be filled yet: answer its open decisions, or see why on its page."],
   ["no-ticket", "No fill was waiting for this tab. If you pressed Open and fill, it may have gone to another tab or browser: check Settings → Browser plugin."],
   ["reload", "Reload this tab: the fill starts by itself."],
+  ["ended", "The fill ended before it finished: check this tab, and fill in the rest yourself."],
   ["reloaded", "This tab was reloaded, so the form may be empty: a reload doesn't fill again. Press Fill to start over."],
   ["filling", "Filling this tab…"],
   ["known", ""],

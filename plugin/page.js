@@ -13,6 +13,7 @@ const TICK_BOX = 'input[type="radio"], input[type="checkbox"]';
 const LIMIT = /application limit|limit on applications|maximum number of applications|too many applications/i;
 const INVISIBLE_CHECK = /size=invisible|checkbox-invisible/;
 const SEEN = { checkOpacity: true, checkVisibilityCSS: true };
+const DRAWN = { checkVisibilityCSS: true }; // a site can draw a drop-down over a see-through box
 
 let running = false;
 
@@ -27,6 +28,7 @@ const ownLabel = (box) => box.labels?.[0]?.textContent ?? "";
 const realOptions = (box) => [...box.options].filter((option) => option.value && option.text);
 const isGroup = (line, list) => ["single", "multi"].includes(line.kind) && list.every((box) => box.matches(TICK_BOX));
 const anchored = () => document.querySelector(BOARD.anchor);
+const rootOf = (anchor) => anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined);
 
 function only(items, textOf, label) {
   const wanted = tidy(label);
@@ -110,7 +112,7 @@ function boxes(root) {
   const found = new Map();
   for (const box of root.querySelectorAll("input, select, textarea")) {
     const key = box.name || box.id;
-    const shown = box.type === "file" || box.checkVisibility(SEEN);
+    const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? DRAWN : SEEN);
     if (key && shown && !SKIPPED.has(box.type)) found.set(key, [...(found.get(key) ?? []), box]);
   }
   return found;
@@ -285,12 +287,13 @@ async function fillLines(pack, address, root) {
 async function fillTheForm() {
   if (!(await ask({ do: "open" }))?.go) return undefined;
   const address = location.href;
-  const anchor = await anchorShown();
-  const root = anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined);
-  const early = stopHere(address, root ?? document.body) ?? (root ? undefined : noForm(anchor));
+  const shown = await anchorShown();
+  const early = stopHere(address, document.body) ?? (shown ? undefined : noForm(shown));
   if (early) return report("stopped", early);
-  await quiet();
-  const late = stopHere(address, root);
+  await quiet(); // the page may still swap its form, so the root is taken after this and kept from here on
+  const anchor = anchored();
+  const root = rootOf(anchor);
+  const late = stopHere(address, root ?? document.body) ?? (root ? undefined : noForm(anchor));
   if (late) return report("stopped", late);
   const fields = [...boxes(root)].map(([key, list]) => fieldOf(key, list));
   const reply = await ask({ do: "form", fields });

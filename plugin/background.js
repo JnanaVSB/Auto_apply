@@ -26,6 +26,12 @@ const keep = (tabId, record) => chrome.storage.session.set({ [recordName(tabId)]
 const flag = (tabId, text) => chrome.action.setBadgeText({ tabId, text });
 const inProgress = (record) => Boolean(record?.ticket) && !record.said?.state && !record.said?.problem;
 
+// After a reload the form may be empty, but a check or a limit shows again, so its own words stay.
+function afterReload(said) {
+  const word = said?.kind ?? said?.problem;
+  return { problem: ["bot-check", "limit"].includes(word) ? word : "reloaded" };
+}
+
 async function recordOf(tabId) {
   const name = recordName(tabId);
   return (await chrome.storage.session.get(name))[name];
@@ -73,7 +79,7 @@ async function open(message, sender) {
   const key = await storedKey();
   const here = record?.address === address;
   if (record?.ticket && here && record.answered) {
-    await keep(tabId, { ...record, said: { problem: "reloaded" } });
+    await keep(tabId, { ...record, said: afterReload(record.said) });
     return { go: false };
   }
   if (record?.ticket && here) {
@@ -83,7 +89,7 @@ async function open(message, sender) {
   if (record?.ticket) {
     await call("report", { ticket: record.ticket, state: "stopped", kind: "unexpected-page", values: [], left: [] }, key);
   }
-  const said = here && record.said?.state ? { problem: "reloaded" } : here ? record.said : undefined;
+  const said = here && record.said?.state ? afterReload(record.said) : here ? record.said : undefined;
   await keep(tabId, { address, said });
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
@@ -127,7 +133,10 @@ async function file(message, sender) {
   const answer = await call("file", { ticket: record.ticket, slot: message.slot }, await storedKey());
   const { name, data, error } = answer.body;
   if (answer.status === 200 && typeof name === "string" && typeof data === "string") return { name, data };
-  return error === "no-ticket" ? { stop: "app" } : { why: "no-file" };
+  if (error !== "no-ticket") return { why: "no-file" };
+  await flag(tabId, "!");
+  await keep(tabId, { address: record.address, said: { problem: "ended" } });
+  return { stop: "app" };
 }
 
 async function done(message, sender) {

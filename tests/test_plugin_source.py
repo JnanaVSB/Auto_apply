@@ -49,8 +49,9 @@ HONEST = (
 # Each is the whole rule in one line, so a slip that keeps the rule's words elsewhere still shows here
 LINES_THAT_HOLD_A_RULE = (
     (BACKGROUND, "const here = record?.address === address;"),
+    (BACKGROUND, "if (record?.ticket && here && record.answered) {"),
     (BACKGROUND, "await keep(tabId, { ...record, said: {} });\n    return { go: true };"),
-    (BACKGROUND, 'said: { problem: "reloaded" } });\n    return { go: false };'),
+    (BACKGROUND, "said: afterReload(record.said) });\n    return { go: false };"),
     (
         BACKGROUND,
         "if (sender.frameId === 0 && sender.tab?.url && FORM_ORIGINS.has(sender.origin)) return PAGE.get(message?.do);",
@@ -269,7 +270,16 @@ def test_a_slot_is_one_the_pack_named():
 def test_a_said_belongs_to_an_address():
     records = re.findall(r"\bkeep\(tab\.?[iI]d, (\{[^\n]*)", code(BACKGROUND))
     assert records and [record for record in records if "address" not in record and "...record" not in record] == []
-    assert '{ problem: "reloaded" }' in function("open") and "said?.state" in code(BACKGROUND)
+    assert function("open").count("afterReload(record.said)") == 2 and "record.said?.state" in function("open")
+    assert 'word) ? word : "reloaded"' in function("afterReload")
+
+
+def test_a_ticket_the_app_has_lost_ends_the_fill_with_its_own_words():
+    file = function("file")
+    assert (
+        file.index('await flag(tabId, "!");') < file.index('said: { problem: "ended" }') < file.index('{ stop: "app" }')
+    )
+    assert "The fill ended before it finished: check this tab, and fill in the rest yourself." in code(POPUP)
 
 
 def test_a_running_fill_is_never_pressed_over():
@@ -361,9 +371,9 @@ def test_only_a_group_of_choices_may_share_a_key():
 
 def test_the_form_is_found_once_and_only_a_formless_board_reads_the_whole_page():
     assert code(PAGE).count("querySelector(BOARD.anchor)") == 1
-    assert 'anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined)' in page_function(
-        "fillTheForm"
-    )
+    assert 'anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined)' in code(PAGE)
+    fill = page_function("fillTheForm")
+    assert fill.index("await quiet();") < fill.index("const root = rootOf(anchor);")
     assert [name for name in files("boards/*.js") if "formless: true" in code(name)] == ["boards/ashby.js"]
     assert "boxes(root)" in page_function("fillTheForm") and "function boxes(root)" in page_function("boxes")
     assert 'anchor: "#application-form input[name=email]"' in code("boards/lever.js")
@@ -371,7 +381,8 @@ def test_the_form_is_found_once_and_only_a_formless_board_reads_the_whole_page()
 
 def test_a_box_that_isn_t_showing_is_not_read():
     boxes = page_function("boxes")
-    assert 'const shown = box.type === "file" || box.checkVisibility(SEEN);' in boxes
+    assert 'const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? DRAWN : SEEN);' in boxes
+    assert "const DRAWN = { checkVisibilityCSS: true };" in code(PAGE)
     assert "if (key && shown && !SKIPPED.has(box.type))" in boxes
     assert "const SEEN = { checkOpacity: true, checkVisibilityCSS: true };" in code(PAGE)
 

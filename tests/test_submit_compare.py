@@ -13,7 +13,7 @@ from app.submit import Choice, Field, Form, ashby, compare, greenhouse, lever, m
 # What the browser says the form shows
 
 
-GONE, NEW = "not showing on the form", "new on the form"
+GONE, NEW = "the plugin didn't see this on the form", "new on the form"
 WORDS, KIND, REQUIRED = "the question's words changed", "the kind of box changed", "whether it's required changed"
 CHOICES, CHOICES_UNCHECKED = "its choices changed", "its choices weren't checked"
 FILE_UNCHECKED, UNCHECKED = "the app only checked that it's a file box", "wasn't checked"

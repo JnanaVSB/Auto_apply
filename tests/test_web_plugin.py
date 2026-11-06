@@ -907,7 +907,7 @@ def test_no_field_matching_stops_the_fill(door, conn, data_dir, paired, fields):
     ticket = running(door, conn, data_dir)
     assert send(door, ticket, fields).json() == STOP
     assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page")]
-    assert {"question": "First Name", "what": "not showing on the form"} in changes(conn)
+    assert {"question": "First Name", "what": "the plugin didn't see this on the form"} in changes(conn)
     assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
 
 
