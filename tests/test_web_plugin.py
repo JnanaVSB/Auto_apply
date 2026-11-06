@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 from contextlib import ExitStack
 from dataclasses import replace
@@ -1645,6 +1646,16 @@ def test_a_file_over_10_mb_is_never_read(door, conn, data_dir, paired, monkeypat
         file.truncate(11 * 2**20)
     read, reader = [], Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda path: read.append(path.name) or reader(path))
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert target.name not in read
+
+
+def test_a_named_pipe_is_no_file_and_is_never_read(door, conn, data_dir, paired, monkeypatch):
+    _, ticket, target = packed(door, conn, data_dir)
+    target.unlink()
+    os.mkfifo(target)
+    read = []  # a read of a pipe would wait for ever, so this notes it and reads nothing: a slip fails, never hangs
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read.append(path.name) or b"")
     assert refused(fetch(door, ticket), 404, "no-file")
     assert target.name not in read
 

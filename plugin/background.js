@@ -1,5 +1,6 @@
 // The background part: the only part with the key, the ticket and the dashboard's address. It logs nothing.
 const DASHBOARD = "http://127.0.0.1:8765";
+const PROTOCOL = 1;
 const TRIES = 6;
 const WAIT_MS = 500;
 const KEY_SHAPE = /^[A-Za-z0-9_-]{32,128}$/;
@@ -32,6 +33,12 @@ function afterReload(said) {
   return { problem: ["bot-check", "limit"].includes(word) ? word : "reloaded" };
 }
 
+function saidHere(record, here) {
+  if (!here) return undefined;
+  if (record.said?.state) return afterReload(record.said);
+  return record.said;
+}
+
 async function recordOf(tabId) {
   const name = recordName(tabId);
   return (await chrome.storage.session.get(name))[name];
@@ -45,7 +52,7 @@ async function call(route, body, key) {
       redirect: "error",
       cache: "no-store",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, protocol: 1 }),
+      body: JSON.stringify({ ...body, protocol: PROTOCOL }),
     });
     return { status: answer.status, body: await answer.json() };
   } catch {
@@ -83,13 +90,14 @@ async function open(message, sender) {
     return { go: false };
   }
   if (record?.ticket && here) {
+    // `said: {}` is what inProgress reads: the fill is running again
     await keep(tabId, { ...record, said: {} });
     return { go: true };
   }
   if (record?.ticket) {
     await call("report", { ticket: record.ticket, state: "stopped", kind: "unexpected-page", values: [], left: [] }, key);
   }
-  const said = here && record.said?.state ? afterReload(record.said) : here ? record.said : undefined;
+  const said = saidHere(record, here);
   await keep(tabId, { address, said });
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
@@ -105,8 +113,8 @@ async function open(message, sender) {
 async function form(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
-  if (!record?.ticket || !Array.isArray(message.fields)) return { stop: "app" };
-  if (!(await onForm(tabId, record))) return { stop: "page" };
+  if (!record?.ticket || !Array.isArray(message.fields)) return { stop: "known" };
+  if (!(await onForm(tabId, record))) return { stop: "report" };
   const answer = await call("form", { ticket: record.ticket, fields: message.fields }, await storedKey());
   const { go, pack, reason, error } = answer.body;
   if (answer.status === 200 && go && pack.length > 0) {
@@ -114,7 +122,7 @@ async function form(message, sender) {
     await keep(tabId, { ...record, answered: true, slots });
     return { pack };
   }
-  if (answer.status === 400 || answer.status === 413) return { stop: "page" }; // it reports this, so the row isn't left open
+  if (answer.status === 400 || answer.status === 413) return { stop: "report" }; // it reports this, so the row isn't left open
   await flag(tabId, "!");
   if (error === "not-logged-in" || answer.status === 0 || answer.status >= 500) {
     await keep(tabId, { ...record, said: { problem: error ?? "app-error" } });
@@ -122,21 +130,21 @@ async function form(message, sender) {
   }
   const problem = answer.status === 200 ? (reason ?? "nothing-to-fill") : (error ?? "app-error");
   await keep(tabId, { address: record.address, said: { problem } });
-  return { stop: "app" };
+  return { stop: "known" };
 }
 
 async function file(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
   if (!record?.ticket || !record.slots.includes(message.slot)) return { why: "no-file" };
-  if (!(await onForm(tabId, record))) return { stop: "page" };
+  if (!(await onForm(tabId, record))) return { stop: "report" };
   const answer = await call("file", { ticket: record.ticket, slot: message.slot }, await storedKey());
   const { name, data, error } = answer.body;
   if (answer.status === 200 && typeof name === "string" && typeof data === "string") return { name, data };
   if (error !== "no-ticket") return { why: "no-file" };
   await flag(tabId, "!");
   await keep(tabId, { address: record.address, said: { problem: "ended" } });
-  return { stop: "app" };
+  return { stop: "known" };
 }
 
 async function done(message, sender) {
@@ -198,7 +206,7 @@ async function pair(message) {
     return { say: "storage" };
   }
   const answer = await call("hello", { version: MANIFEST.version }, key);
-  if (answer.status !== 200 || answer.body.app !== "auto_apply" || answer.body.protocol !== 1) {
+  if (answer.status !== 200 || answer.body.app !== "auto_apply" || answer.body.protocol !== PROTOCOL) {
     return { say: answer.body.error ?? "app-error" };
   }
   try {

@@ -19,7 +19,7 @@ const WORDS = new Map([
   ["app-error", "Something went wrong. Try again."],
   ["unexpected-page", "This page didn't look like the job's form, so the fill stopped: check the tab."],
   ["nothing-to-fill", "None of your answers could go on this form."],
-  ["bot-check", "The site wants to check you are a person: finish it in the open tab, then fill in the rest yourself: the plugin stops wherever this check shows."],
+  ["bot-check", "The site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: the plugin stops wherever this check shows."],
   ["limit", "The site says you've reached its limit on applications."],
   ["cant-set", "The form wouldn't let the plugin set any box: fill it in yourself."],
 ]);

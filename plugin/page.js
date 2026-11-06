@@ -13,7 +13,7 @@ const TICK_BOX = 'input[type="radio"], input[type="checkbox"]';
 const LIMIT = /application limit|limit on applications|maximum number of applications|too many applications/i;
 const INVISIBLE_CHECK = /size=invisible|checkbox-invisible/;
 const SEEN = { checkOpacity: true, checkVisibilityCSS: true };
-const DRAWN = { checkVisibilityCSS: true }; // a site can draw a drop-down over a see-through box
+const CSS_ONLY = { checkVisibilityCSS: true }; // a site can draw a drop-down over a see-through box
 
 let running = false;
 
@@ -103,16 +103,15 @@ function stopHere(address, root) {
 async function anchorShown() {
   const ends = Date.now() + ANCHOR_MS;
   while (Date.now() < ends && !anchored() && !botCheck()) await wait(LOOK_MS);
-  return anchored();
 }
 
-const noForm = (anchor) => (!anchor && LIMIT.test(document.body.innerText) ? "limit" : "unexpected-page");
+const whyNoForm = (anchor) => (!anchor && LIMIT.test(document.body.innerText) ? "limit" : "unexpected-page");
 
 function boxes(root) {
   const found = new Map();
   for (const box of root.querySelectorAll("input, select, textarea")) {
     const key = box.name || box.id;
-    const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? DRAWN : SEEN);
+    const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? CSS_ONLY : SEEN);
     if (key && shown && !SKIPPED.has(box.type)) found.set(key, [...(found.get(key) ?? []), box]);
   }
   return found;
@@ -169,7 +168,7 @@ function tick(box) {
 function setText(box, value) {
   if (!box.matches(TEXT_BOX)) return "cant-set";
   const text = box.tagName === "TEXTAREA" ? value.replace(/\r\n/g, "\n") : value.replace(/\r\n|\r|\n/g, " ");
-  Object.getOwnPropertyDescriptor(Object.getPrototypeOf(box), "value").set.call(box, text);
+  box.value = text; // a page's own value tracking lives in its world, not this one, so `input` reaches it as a change
   raise(box);
   return undefined;
 }
@@ -272,7 +271,7 @@ async function fillLines(pack, address, root) {
     const stop = stopHere(address, root);
     if (stop) return stopAt(stop, lines.slice(at), done, left, root);
     const result = await setOne(line, root);
-    if (result.stop === "page") return stopAt("unexpected-page", lines.slice(at), done, left, root);
+    if (result.stop === "report") return stopAt("unexpected-page", lines.slice(at), done, left, root);
     if (result.stop) return undefined;
     if (result.why) left.push({ key: line.key, why: result.why });
     else done.push({ line, name: result.name });
@@ -287,18 +286,16 @@ async function fillLines(pack, address, root) {
 async function fillTheForm() {
   if (!(await ask({ do: "open" }))?.go) return undefined;
   const address = location.href;
-  const shown = await anchorShown();
-  const early = stopHere(address, document.body) ?? (shown ? undefined : noForm(shown));
-  if (early) return report("stopped", early);
+  await anchorShown();
   await quiet(); // the page may still swap its form, so the root is taken after this and kept from here on
   const anchor = anchored();
   const root = rootOf(anchor);
-  const late = stopHere(address, root ?? document.body) ?? (root ? undefined : noForm(anchor));
-  if (late) return report("stopped", late);
+  const stop = stopHere(address, root ?? document.body) ?? (root ? undefined : whyNoForm(anchor));
+  if (stop) return report("stopped", stop);
   const fields = [...boxes(root)].map(([key, list]) => fieldOf(key, list));
   const reply = await ask({ do: "form", fields });
   if (reply?.pack) return fillLines(reply.pack, address, root);
-  return reply?.stop === "page" ? report("stopped", "unexpected-page") : undefined;
+  return reply?.stop === "report" ? report("stopped", "unexpected-page") : undefined;
 }
 
 async function run() {

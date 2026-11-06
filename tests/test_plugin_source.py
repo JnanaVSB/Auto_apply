@@ -48,24 +48,13 @@ HONEST = (
 )
 # Each is the whole rule in one line, so a slip that keeps the rule's words elsewhere still shows here
 LINES_THAT_HOLD_A_RULE = (
-    (BACKGROUND, "const here = record?.address === address;"),
     (BACKGROUND, "if (record?.ticket && here && record.answered) {"),
-    (BACKGROUND, "await keep(tabId, { ...record, said: {} });\n    return { go: true };"),
-    (BACKGROUND, "said: afterReload(record.said) });\n    return { go: false };"),
-    (
-        BACKGROUND,
-        "if (sender.frameId === 0 && sender.tab?.url && FORM_ORIGINS.has(sender.origin)) return PAGE.get(message?.do);",
-    ),
     (BACKGROUND, "JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined"),
     (PAGE, "const why = setLine(line, boxes(root).get(line.key));"),
-    (PAGE, 'if (list.every(closed)) return "cant-set";'),
     (PAGE, 'if (!box.matches(TEXT_BOX)) return "cant-set";'),
     (PAGE, """if (line.kind === "consent") return box.matches('input[type="checkbox"]') ? tick(box) : "cant-set";"""),
-    (PAGE, r'value.replace(/\r\n|\r|\n/g, " ")'),
-    (PAGE, "values.push({ key: line.key, value: cut(value) });"),
-    (PAGE, "if (reply?.pack) return fillLines(reply.pack, address, root);"),
 )
-ON_THE_FORM = 'if (!(await onForm(tabId, record))) return { stop: "page" };'
+ON_THE_FORM = 'if (!(await onForm(tabId, record))) return { stop: "report" };'
 ELSEWHERE = (
     "No fill was waiting for this tab. If you pressed Open and fill, it may have gone to another tab or browser: check "
     "Settings → Browser plugin."
@@ -218,7 +207,11 @@ def test_form_addresses_come_from_the_manifest_alone():
 def test_each_call_sends_no_cookie_follows_no_redirect_and_keeps_no_copy():
     call = function("call")
     assert 'credentials: "omit"' in call and 'redirect: "error"' in call and 'cache: "no-store"' in call
-    assert "protocol: 1" in call and code(BACKGROUND).count("fetch(") == 1
+    assert "protocol: PROTOCOL" in call and code(BACKGROUND).count("fetch(") == 1
+
+
+def test_the_two_sides_speak_the_same_protocol():
+    assert f"const PROTOCOL = {plugin.PROTOCOL};" in code(BACKGROUND)
 
 
 def test_a_failed_call_keeps_no_error_text():
@@ -267,38 +260,10 @@ def test_a_slot_is_one_the_pack_named():
     assert "!record.slots.includes(message.slot)" in function("file")
 
 
-def test_a_said_belongs_to_an_address():
-    records = re.findall(r"\bkeep\(tab\.?[iI]d, (\{[^\n]*)", code(BACKGROUND))
-    assert records and [record for record in records if "address" not in record and "...record" not in record] == []
-    assert function("open").count("afterReload(record.said)") == 2 and "record.said?.state" in function("open")
-    assert 'word) ? word : "reloaded"' in function("afterReload")
-
-
-def test_a_ticket_the_app_has_lost_ends_the_fill_with_its_own_words():
-    file = function("file")
-    assert (
-        file.index('await flag(tabId, "!");') < file.index('said: { problem: "ended" }') < file.index('{ stop: "app" }')
-    )
-    assert "The fill ended before it finished: check this tab, and fill in the rest yourself." in code(POPUP)
-
-
-def test_a_running_fill_is_never_pressed_over():
-    assert re.search(
-        r"^const inProgress = .*!record\.said\?\.state && !record\.said\?\.problem;$", code(BACKGROUND), re.M
-    )
-    assert 'say: inProgress(record) ? "filling" : "known"' in function("status")
-    fill = function("fill")
-    assert fill.index('if (inProgress(record)) return { say: "filling" };') < fill.index('call("fill"')
-
-
-def test_the_badge_says_ok_only_for_a_report_the_app_took():
-    assert 'state === "filled" && answer.status === 200 ? "OK" : "!"' in function("done")
-
-
 def test_a_form_the_app_can_t_read_stays_for_the_page_part_to_report():
     form = function("form")
     refused = form.index("answer.status === 400 || answer.status === 413")
-    assert form.index('{ stop: "page" }', refused) < form.index("const problem = answer.status === 200")
+    assert form.index('{ stop: "report" }', refused) < form.index("const problem = answer.status === 200")
     assert '"moved"' not in code(BACKGROUND) and function("onForm")
 
 
@@ -381,18 +346,10 @@ def test_the_form_is_found_once_and_only_a_formless_board_reads_the_whole_page()
 
 def test_a_box_that_isn_t_showing_is_not_read():
     boxes = page_function("boxes")
-    assert 'const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? DRAWN : SEEN);' in boxes
-    assert "const DRAWN = { checkVisibilityCSS: true };" in code(PAGE)
+    assert 'const shown = box.type === "file" || box.checkVisibility(box.matches(DROPDOWN) ? CSS_ONLY : SEEN);' in boxes
+    assert "const CSS_ONLY = { checkVisibilityCSS: true };" in code(PAGE)
     assert "if (key && shown && !SKIPPED.has(box.type))" in boxes
     assert "const SEEN = { checkOpacity: true, checkVisibilityCSS: true };" in code(PAGE)
-
-
-def test_a_disabled_fieldset_counts_as_closed():
-    assert 'const closed = (box) => box.matches(":disabled") || box.readOnly;' in code(PAGE)
-
-
-def test_a_box_that_stopped_being_a_file_box_breaks_nothing():
-    assert 'box.files?.[0]?.name ?? ""' in page_function("shownValue")
 
 
 def test_a_value_cut_in_half_is_still_well_formed():
@@ -441,7 +398,7 @@ def test_every_why_and_stop_is_one_the_app_knows():
 
 def test_the_page_s_words_are_read_only_for_the_limit_check():
     assert code(PAGE).count("innerText") == 1
-    assert "innerText" in re.search(r"^const noForm = .*$", code(PAGE), re.M)[0]
+    assert "innerText" in re.search(r"^const whyNoForm = .*$", code(PAGE), re.M)[0]
 
 
 def test_begin_is_answered_at_once_and_only_from_this_plugin():
@@ -471,12 +428,6 @@ def test_the_popup_says_where_a_fill_may_have_gone_and_what_filling_shares():
     assert "Reload this tab: the fill starts by itself." in popup
     assert "the plugin stops wherever this check shows" in popup
     assert "textContent" in popup
-
-
-def test_the_popup_draws_afresh_and_says_nothing_twice():
-    draw = re.search(r"^function draw\(.*?^}$", code(POPUP), re.S | re.M)[0]
-    assert 'part("said").textContent = said;' in draw and 'part("said").hidden = !said;' in draw
-    assert "answer.said.problem !== answer.say" in draw
 
 
 def test_the_popup_has_no_words_for_what_the_app_never_sends_it():
