@@ -19,7 +19,8 @@ const isControl = (node) =>
   node.getAttribute?.("role") === "button";
 const wordsOf = (control) => tidy([control.textContent, control.value, control.getAttribute("aria-label")].join(" "));
 
-const isSecret = (box) => SECRET_BOXES.has(box.autocomplete) || SECRET_QUESTION.test(question(box));
+const isSecret = (box) =>
+  box.autocomplete.split(/\s+/).some((word) => SECRET_BOXES.has(word)) || SECRET_QUESTION.test(question(box));
 
 // A custom drop-down's text box doesn't hold the pick, so "empty" would be false. A select on its placeholder is empty.
 function readForm(root) {

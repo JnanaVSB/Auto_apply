@@ -13,6 +13,9 @@ const POPUP_PAGE = chrome.runtime.getURL("popup.html");
 const OPTIONS_PAGE = chrome.runtime.getURL("options.html");
 const READ_STATES = new Set(["reread", "clicked"]);
 const MODES = new Set(["fill", "read"]);
+// By tab, a press still on its way to the app, so that a tab leaving says so after it. This is only in memory: a worker
+// that restarted has none, and then a thank-you address can be missed, which records nothing.
+const pressing = new Map();
 
 function originOf(address) {
   try {
@@ -180,7 +183,18 @@ async function watch(message, sender) {
   return { on, thanks };
 }
 
-async function read(message, sender) {
+function read(message, sender) {
+  const going = sendRead(message, sender);
+  if (message.state !== "clicked") return going;
+  const tabId = sender.tab.id;
+  const ended = going.catch(() => {}).finally(() => {
+    if (pressing.get(tabId) === ended) pressing.delete(tabId);
+  });
+  pressing.set(tabId, ended);
+  return going;
+}
+
+async function sendRead(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
   const { state, values } = message;
@@ -324,6 +338,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await pressing.get(tabId);
   await leftForm(tabId);
   await chrome.storage.session.remove(recordName(tabId));
 });
@@ -332,6 +347,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 // is what tells: `tab.url` is then empty.
 chrome.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   if (!change.url && !change.status) return;
+  await pressing.get(tabId);
   const record = await recordOf(tabId);
   if (!record?.ticket || tab.url === record.address) return;
   if (atThanksPage(record, tab)) await saidThanks(tabId, record);

@@ -521,10 +521,10 @@ def test_the_words_of_a_press(words, counts):
 def test_a_read_goes_through_boxes_and_skips_what_it_must():
     read = page_function("readForm", WATCH)
     assert "boxes(root)" in read and "isSecret(box) || box.matches(DROPDOWN)" in read
-    assert (
-        "const isSecret = (box) => SECRET_BOXES.has(box.autocomplete) || SECRET_QUESTION.test(question(box));"
-        in code(WATCH)
-    )
+    assert "box.autocomplete.split(/\\s+/).some((word) => SECRET_BOXES.has(word))" in code(
+        WATCH
+    )  # it can hold a section
+    assert "|| SECRET_QUESTION.test(question(box));" in code(WATCH)
     assert "const SECRET_QUESTION = /password/i;" in code(WATCH)
     assert 'const unpicked = list[0].tagName === "SELECT" && !list[0].value;' in read
     assert 'unpicked ? "" : cut(shownValue(' in read
@@ -565,7 +565,7 @@ def test_the_background_starts_a_watcher_only_for_a_fill_that_is_out():
 
 
 def test_a_read_is_checked_before_it_is_sent():
-    read = function("read")
+    read = function("sendRead")
     first = read.index("call(")
     for check in ("!record?.ticket", 'READ_STATES.has(state)', "Array.isArray(values)", "sender.url === record.address",
                   "await onForm(tabId, record)"):  # fmt: skip
@@ -577,11 +577,26 @@ def test_a_read_is_checked_before_it_is_sent():
 
 
 def test_what_a_read_keeps_of_how_it_went():
-    read = function("read")
+    read = function("sendRead")
     assert 'answer.body.error === "no-ticket"' in read
     assert "{ ticket: record.ticket, state, values, left: [] }" in read
     assert "unsaved: true" in read and "unsaved: false" in read and "looks: true" in read and "{ kept: true }" in read
     assert read.index("await call(") < read.index("await recordOf(tabId);", read.index("await call("))
+
+
+def test_a_press_on_its_way_is_held_from_before_anything_is_awaited():
+    read = function("read")
+    assert "await" not in read and "async" not in read
+    assert read.index("sendRead(message, sender)") < read.index("pressing.set(tabId, ended);")
+    assert 'if (message.state !== "clicked") return going;' in read  # a reread holds nothing up
+    assert "going.catch(() => {}).finally(" in read  # a failed press can't stop `gone`
+    assert "if (pressing.get(tabId) === ended) pressing.delete(tabId);" in read
+
+
+@pytest.mark.parametrize(("event", "after"), [("onRemoved", "leftForm(tabId)"), ("onUpdated", "recordOf(tabId)")])
+def test_a_leaving_tab_waits_for_a_press_on_its_way_first(event, after):
+    body = listener(event)
+    assert body.index("await pressing.get(tabId);") < body.index(after)
 
 
 def test_a_tab_that_left_says_gone_and_nothing_else():
@@ -643,7 +658,7 @@ def test_a_sign_is_said_with_nothing_read_and_believed_only_if_recorded():
 
 
 def test_a_press_is_timed_only_when_the_app_took_it():
-    read = function("read")
+    read = function("sendRead")
     assert 'state === "clicked" ? { clickedAt: Date.now() } : {}' in read
     assert read.index("if (answer.status !== 200)") < read.index("clickedAt")
 
