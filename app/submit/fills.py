@@ -79,12 +79,13 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
         "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
         "it in yourself in the open tab."
     ),
-    ("filled", None): "the plugin filled the form. Check it in the open tab, then press Submit yourself.",
-    ("filled", BROWSER_REMOVED): "the plugin filled the form, then its browser was removed",
-    ("filled", REPLACED): "the plugin filled the form, then a newer press ended the fill",
-    ("filled", SUBMITTED): "the plugin filled the form, then you pressed I submitted it",
+    ("filled", None): "the plugin filled what it could. Check the form in the open tab, then press Submit yourself.",
+    ("filled", BROWSER_REMOVED): "the plugin filled what it could, then its browser was removed",
+    ("filled", REPLACED): "the plugin filled what it could, then a newer press ended the fill",
+    ("filled", SUBMITTED): "the plugin filled what it could, then you pressed I submitted it",
     ("stopped", BOT_CHECK): (
-        "stopped: the site wants to check you are a person. Finish it in the open tab, then press Open and fill again."
+        "stopped: the site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: "
+        "the plugin stops wherever this check shows."
     ),
     ("stopped", LIMIT): (
         "stopped: the site says you've reached its limit on applications, so nothing was filled. Try this job again "

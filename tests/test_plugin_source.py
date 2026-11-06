@@ -46,6 +46,25 @@ HONEST = (
     "Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this "
     "browser can read them too."
 )
+# Each is the whole rule in one line, so a slip that keeps the rule's words elsewhere still shows here
+LINES_THAT_HOLD_A_RULE = (
+    (BACKGROUND, "const here = record?.address === address;"),
+    (BACKGROUND, "await keep(tabId, { ...record, said: {} });\n    return { go: true };"),
+    (BACKGROUND, 'said: { problem: "reloaded" } });\n    return { go: false };'),
+    (
+        BACKGROUND,
+        "if (sender.frameId === 0 && sender.tab?.url && FORM_ORIGINS.has(sender.origin)) return PAGE.get(message?.do);",
+    ),
+    (BACKGROUND, "JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined"),
+    (PAGE, "const why = setLine(line, boxes(root).get(line.key));"),
+    (PAGE, 'if (list.every(closed)) return "cant-set";'),
+    (PAGE, 'if (!box.matches(TEXT_BOX)) return "cant-set";'),
+    (PAGE, """if (line.kind === "consent") return box.matches('input[type="checkbox"]') ? tick(box) : "cant-set";"""),
+    (PAGE, r'value.replace(/\r\n|\r|\n/g, " ")'),
+    (PAGE, "values.push({ key: line.key, value: cut(value) });"),
+    (PAGE, "if (reply?.pack) return fillLines(reply.pack, address, root);"),
+)
+ON_THE_FORM = 'if (!(await onForm(tabId, record))) return { stop: "page" };'
 ELSEWHERE = (
     "No fill was waiting for this tab. If you pressed Open and fill, it may have gone to another tab or browser: check "
     "Settings → Browser plugin."
@@ -236,15 +255,40 @@ def test_only_the_popup_s_press_reaches_the_fill_route():
 
 
 def test_the_tab_s_address_is_checked_again_before_the_form_and_a_pdf():
-    assert "chrome.tabs.get(tabId)" in function("onForm") and "tab.url === record.address" in function("onForm")
+    assert "chrome.tabs.get(tabId)" in function("onForm") and "  return tab.url === record.address;\n" in function(
+        "onForm"
+    )
     for name, route in (("form", 'call("form"'), ("file", 'call("file"')):
-        assert function(name).index("onForm(") < function(name).index(route)
+        assert function(name).index(ON_THE_FORM) < function(name).index(route)
+
+
+def test_a_slot_is_one_the_pack_named():
+    assert "!record.slots.includes(message.slot)" in function("file")
+
+
+def test_a_said_belongs_to_an_address():
+    records = re.findall(r"\bkeep\(tab\.?[iI]d, (\{[^\n]*)", code(BACKGROUND))
+    assert records and [record for record in records if "address" not in record and "...record" not in record] == []
+    assert '{ problem: "reloaded" }' in function("open") and "said?.state" in code(BACKGROUND)
+
+
+def test_a_running_fill_is_never_pressed_over():
+    assert re.search(
+        r"^const inProgress = .*!record\.said\?\.state && !record\.said\?\.problem;$", code(BACKGROUND), re.M
+    )
+    assert 'say: inProgress(record) ? "filling" : "known"' in function("status")
+    fill = function("fill")
+    assert fill.index('if (inProgress(record)) return { say: "filling" };') < fill.index('call("fill"')
+
+
+def test_the_badge_says_ok_only_for_a_report_the_app_took():
+    assert 'state === "filled" && answer.status === 200 ? "OK" : "!"' in function("done")
 
 
 def test_a_form_the_app_can_t_read_stays_for_the_page_part_to_report():
     form = function("form")
     refused = form.index("answer.status === 400 || answer.status === 413")
-    assert form.index('{ stop: "page" }', refused) < form.index("{ said: { problem: answer.status === 200")
+    assert form.index('{ stop: "page" }', refused) < form.index("const problem = answer.status === 200")
     assert '"moved"' not in code(BACKGROUND) and function("onForm")
 
 
@@ -284,6 +328,66 @@ def test_a_board_is_one_constant_with_an_anchor(site):
     assert code(f"boards/{site}.js").startswith("const BOARD = {") and "anchor:" in code(f"boards/{site}.js")
 
 
+def test_exactly_one_choice_is_picked_by_its_whole_words():
+    only = page_function("only")
+    assert "tidy(textOf(item)) === wanted" in only and "return found.length === 1 ? found[0] : undefined;" in only
+
+
+def test_a_stop_is_looked_for_before_each_line_and_after_the_last():
+    stop_here = page_function("stopHere")
+    assert 'if (location.href !== address || !root.isConnected) return "unexpected-page";' in stop_here
+    assert 'return botCheck() ? "bot-check" : undefined;' in stop_here
+    fill = page_function("fillLines")
+    loop = fill[fill.index("for (const [at, line]") : fill.index("await quiet();")]
+    assert loop.index("const stop = stopHere(address, root);") < loop.index("await setOne(line, root)")
+    assert "if (stop) return stopAt(stop, lines.slice(at), done, left, root);" in loop
+    after = fill[fill.index("await quiet();") :]
+    assert after.index("const late = stopHere(address, root);") < after.index("readBack(done, left, root)")
+    assert "if (late) return stopAt(late, [], done, left, root);" in after
+
+
+def test_a_line_counts_as_set_only_if_it_reads_back():
+    assert "if (list && same(name ?? line.value, value)) stuck += 1;" in page_function("readBack")
+
+
+def test_only_a_group_of_choices_may_share_a_key():
+    assert re.search(r"^const isGroup = .*\.every\(\(box\) => box\.matches\(TICK_BOX\)\);$", code(PAGE), re.M)
+    assert 'if (!list || (list.length > 1 && !isGroup(line, list))) return "no-box";' in page_function("setLine")
+    assert (
+        'if (list?.length !== 1 || !list[0].matches(\'input[type="file"]\')) return { why: "no-box" };'
+        in page_function("upload")
+    )
+
+
+def test_the_form_is_found_once_and_only_a_formless_board_reads_the_whole_page():
+    assert code(PAGE).count("querySelector(BOARD.anchor)") == 1
+    assert 'anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined)' in page_function(
+        "fillTheForm"
+    )
+    assert [name for name in files("boards/*.js") if "formless: true" in code(name)] == ["boards/ashby.js"]
+    assert "boxes(root)" in page_function("fillTheForm") and "function boxes(root)" in page_function("boxes")
+    assert 'anchor: "#application-form input[name=email]"' in code("boards/lever.js")
+
+
+def test_a_box_that_isn_t_showing_is_not_read():
+    boxes = page_function("boxes")
+    assert 'const shown = box.type === "file" || box.checkVisibility(SEEN);' in boxes
+    assert "if (key && shown && !SKIPPED.has(box.type))" in boxes
+    assert "const SEEN = { checkOpacity: true, checkVisibilityCSS: true };" in code(PAGE)
+
+
+def test_a_disabled_fieldset_counts_as_closed():
+    assert 'const closed = (box) => box.matches(":disabled") || box.readOnly;' in code(PAGE)
+
+
+def test_a_box_that_stopped_being_a_file_box_breaks_nothing():
+    assert 'box.files?.[0]?.name ?? ""' in page_function("shownValue")
+
+
+def test_a_value_cut_in_half_is_still_well_formed():
+    assert ".slice(0, MAX_VALUE).toWellFormed()" in code(PAGE)
+
+
 def test_the_click_is_inside_tick_after_its_check():
     tick = page_function("tick")
     assert tick.index("box.matches(TICK_BOX) && !box.checked") < tick.index(".click(")
@@ -296,7 +400,7 @@ def test_only_raise_makes_an_event():
     assert '"input", { bubbles: true }' in raise_ and '"change", { bubbles: true }' in raise_
 
 
-def test_a_password_box_and_the_other_skipped_sorts_are_never_read():
+def test_the_skip_list_names_password_and_the_other_sorts():
     skipped = re.search(r"^const SKIPPED = new Set\(\[(.*?)\]\);$", code(PAGE), re.M)[1]
     assert set(re.findall(r'"(\w+)"', skipped)) == {"hidden", "password", "submit", "button", "reset", "image"}
 
@@ -329,9 +433,15 @@ def test_the_page_s_words_are_read_only_for_the_limit_check():
     assert "innerText" in re.search(r"^const noForm = .*$", code(PAGE), re.M)[0]
 
 
-def test_begin_is_answered_at_once():
+def test_begin_is_answered_at_once_and_only_from_this_plugin():
     listener = code(PAGE).partition("onMessage.addListener(")[2]
     assert "async" not in listener.partition("\n")[0] and "reply({});" in listener
+    assert 'if (sender.id === chrome.runtime.id && message?.do === "begin") run();' in listener
+
+
+@pytest.mark.parametrize(("name", "line"), LINES_THAT_HOLD_A_RULE)
+def test_a_line_that_holds_a_rule_is_still_there(name, line):
+    assert line in code(name)
 
 
 # The popup and the options page
@@ -340,6 +450,15 @@ def test_begin_is_answered_at_once():
 def test_the_popup_says_where_a_fill_may_have_gone_and_what_filling_shares():
     popup = code(POPUP)
     assert ELSEWHERE in popup and HONEST in popup
+    assert (
+        "This tab was reloaded, so the form may be empty: a reload doesn't fill again. Press Fill to start over."
+        in popup
+    )
+    assert (
+        "Log in to the dashboard first. If a fill was waiting here, reload this tab afterwards and it goes on." in popup
+    )
+    assert "Reload this tab: the fill starts by itself." in popup
+    assert "the plugin stops wherever this check shows" in popup
     assert "textContent" in popup
 
 
@@ -354,7 +473,7 @@ def test_the_popup_has_no_words_for_what_the_app_never_sends_it():
     assert "This page isn't the form of one of your jobs." in code(POPUP)
 
 
-def test_the_options_page_never_says_nothing_is_kept_when_an_old_key_may_be():
+def test_the_options_page_s_failure_words_say_nothing_new_was_kept():
     assert "nothing was kept" not in code(OPTIONS) and code(OPTIONS).count("nothing new was kept") == 2
 
 

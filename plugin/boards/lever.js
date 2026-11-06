@@ -1,5 +1,5 @@
 const BOARD = {
-  anchor: "input[name=email]",
+  anchor: "#application-form input[name=email]",
   question: ".application-question",
   label: ".application-label",
   parse: "/parseResume",

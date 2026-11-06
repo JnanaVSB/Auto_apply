@@ -24,6 +24,7 @@ const storedKey = async () => (await chrome.storage.local.get("key")).key;
 const recordName = (tabId) => `tab:${tabId}`;
 const keep = (tabId, record) => chrome.storage.session.set({ [recordName(tabId)]: record });
 const flag = (tabId, text) => chrome.action.setBadgeText({ tabId, text });
+const inProgress = (record) => Boolean(record?.ticket) && !record.said?.state && !record.said?.problem;
 
 async function recordOf(tabId) {
   const name = recordName(tabId);
@@ -70,11 +71,20 @@ async function open(message, sender) {
   const address = sender.tab.url;
   const record = await recordOf(tabId);
   const key = await storedKey();
-  if (record?.ticket && record.address === address) return { go: !record.answered };
+  const here = record?.address === address;
+  if (record?.ticket && here && record.answered) {
+    await keep(tabId, { ...record, said: { problem: "reloaded" } });
+    return { go: false };
+  }
+  if (record?.ticket && here) {
+    await keep(tabId, { ...record, said: {} });
+    return { go: true };
+  }
   if (record?.ticket) {
     await call("report", { ticket: record.ticket, state: "stopped", kind: "unexpected-page", values: [], left: [] }, key);
-    await keep(tabId, { said: record.said });
   }
+  const said = here && record.said?.state ? { problem: "reloaded" } : here ? record.said : undefined;
+  await keep(tabId, { address, said });
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
   if (answer.status === 200 && answer.body.mode === "fill" && typeof answer.body.ticket === "string") {
@@ -82,7 +92,7 @@ async function open(message, sender) {
     return { go: true };
   }
   const problem = answer.body.error ?? "app-error";
-  await keep(tabId, { said: problem === "no-ticket" && record?.said ? record.said : { problem } });
+  await keep(tabId, { address, said: problem === "no-ticket" && said ? said : { problem } });
   return { go: false };
 }
 
@@ -104,7 +114,8 @@ async function form(message, sender) {
     await keep(tabId, { ...record, said: { problem: error ?? "app-error" } });
     return { stop: "wait" };
   }
-  await keep(tabId, { said: { problem: answer.status === 200 ? (reason ?? "nothing-to-fill") : (error ?? "app-error") } });
+  const problem = answer.status === 200 ? (reason ?? "nothing-to-fill") : (error ?? "app-error");
+  await keep(tabId, { address: record.address, said: { problem } });
   return { stop: "app" };
 }
 
@@ -129,8 +140,9 @@ async function done(message, sender) {
   const unfilled = new Set(left.map((line) => line.key));
   const filled = new Set(values.map((line) => line.key).filter((key) => !unfilled.has(key))).size;
   const said = { state, kind, filled, left: unfilled.size };
-  await flag(tabId, state === "filled" ? "OK" : "!");
-  await keep(tabId, state === "stopped" && answer.status === 200 ? { said } : { ...record, said });
+  await flag(tabId, state === "filled" && answer.status === 200 ? "OK" : "!");
+  const ended = state === "stopped" && answer.status === 200;
+  await keep(tabId, ended ? { address: record.address, said } : { ...record, said });
   return {};
 }
 
@@ -139,11 +151,12 @@ async function status() {
   const key = await storedKey();
   if (!key) return { say: "not-connected" };
   if (!FORM_ORIGINS.has(originOf(tab?.url))) return { say: "no-form" };
-  const said = (await recordOf(tab.id))?.said;
+  const record = await recordOf(tab.id);
+  const said = record?.said;
   const answer = await call("known", { address: tab.url }, key);
   if (answer.status !== 200) return { say: answer.body.error ?? "app-error", said };
   if (!answer.body.job) return { say: "no-job", said };
-  return { say: "known", title: answer.body.title, company: answer.body.company, said };
+  return { say: inProgress(record) ? "filling" : "known", title: answer.body.title, company: answer.body.company, said };
 }
 
 async function fill() {
@@ -151,13 +164,14 @@ async function fill() {
   const key = await storedKey();
   if (!key) return { say: "not-connected" };
   if (!FORM_ORIGINS.has(originOf(tab?.url))) return { say: "no-form" };
+  const record = await recordOf(tab.id);
+  if (inProgress(record)) return { say: "filling" };
   const answer = await call("fill", { address: tab.url }, key);
   if (answer.status === 409 && answer.body.error === "not-ready") {
     return { say: "not-ready", link: JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined };
   }
   if (answer.body.ok !== true) return { say: answer.body.error ?? "app-error" };
-  const record = await recordOf(tab.id);
-  if (record?.ticket) await keep(tab.id, { said: record.said }); // the press ended that fill, so a new ticket waits
+  if (record?.ticket) await keep(tab.id, { address: record.address, said: record.said }); // the press ended that fill
   try {
     await chrome.tabs.sendMessage(tab.id, { do: "begin" }, { frameId: 0 });
     return { say: "filling" };

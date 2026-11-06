@@ -76,12 +76,13 @@ WORDS = {
     ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
     ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
-    ("filled", None): "the plugin filled the form. Check it in the open tab, then press Submit yourself.",
-    ("filled", "browser-removed"): "the plugin filled the form, then its browser was removed",
-    ("filled", "replaced"): "the plugin filled the form, then a newer press ended the fill",
-    ("filled", "submitted"): "the plugin filled the form, then you pressed I submitted it",
+    ("filled", None): "the plugin filled what it could. Check the form in the open tab, then press Submit yourself.",
+    ("filled", "browser-removed"): "the plugin filled what it could, then its browser was removed",
+    ("filled", "replaced"): "the plugin filled what it could, then a newer press ended the fill",
+    ("filled", "submitted"): "the plugin filled what it could, then you pressed I submitted it",
     ("stopped", "bot-check"): (
-        "stopped: the site wants to check you are a person. Finish it in the open tab, then press Open and fill again."
+        "stopped: the site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: "
+        "the plugin stops wherever this check shows."
     ),
     ("stopped", "limit"): (
         "stopped: the site says you've reached its limit on applications, so nothing was filled. Try this job again "

@@ -21,10 +21,12 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const tidy = (text) => text.replace(CONTROL, "").split(/[\s\x85]+/).filter(Boolean).join(" ").toLowerCase();
 const tidied = (value) => [value].flat().map(tidy).sort();
 const same = (one, other) => JSON.stringify(tidied(one)) === JSON.stringify(tidied(other));
-const cut = (value) => (Array.isArray(value) ? value.map(cut) : value.slice(0, MAX_VALUE));
-const closed = (box) => box.disabled || box.readOnly;
+const cut = (value) => (Array.isArray(value) ? value.map(cut) : value.slice(0, MAX_VALUE).toWellFormed());
+const closed = (box) => box.matches(":disabled") || box.readOnly;
 const ownLabel = (box) => box.labels?.[0]?.textContent ?? "";
 const realOptions = (box) => [...box.options].filter((option) => option.value && option.text);
+const isGroup = (line, list) => ["single", "multi"].includes(line.kind) && list.every((box) => box.matches(TICK_BOX));
+const anchored = () => document.querySelector(BOARD.anchor);
 
 function only(items, textOf, label) {
   const wanted = tidy(label);
@@ -91,25 +93,24 @@ function botCheck() {
   return [...document.querySelectorAll("iframe")].some(isCheckFrame) || codes.some((box) => box.checkVisibility(SEEN));
 }
 
-function stopHere(address) {
-  if (location.href !== address) return "unexpected-page";
+function stopHere(address, root) {
+  if (location.href !== address || !root.isConnected) return "unexpected-page";
   return botCheck() ? "bot-check" : undefined;
 }
 
 async function anchorShown() {
   const ends = Date.now() + ANCHOR_MS;
-  while (Date.now() < ends && !document.querySelector(BOARD.anchor) && !botCheck()) await wait(LOOK_MS);
-  return document.querySelector(BOARD.anchor);
+  while (Date.now() < ends && !anchored() && !botCheck()) await wait(LOOK_MS);
+  return anchored();
 }
 
-const noForm = () => (LIMIT.test(document.body.innerText) ? "limit" : "unexpected-page");
+const noForm = (anchor) => (!anchor && LIMIT.test(document.body.innerText) ? "limit" : "unexpected-page");
 
-function boxes() {
-  const root = document.querySelector(BOARD.anchor)?.closest("form") ?? document.body;
+function boxes(root) {
   const found = new Map();
   for (const box of root.querySelectorAll("input, select, textarea")) {
     const key = box.name || box.id;
-    const shown = box.type === "file" || box.checkVisibility({ checkVisibilityCSS: true });
+    const shown = box.type === "file" || box.checkVisibility(SEEN);
     if (key && shown && !SKIPPED.has(box.type)) found.set(key, [...(found.get(key) ?? []), box]);
   }
   return found;
@@ -188,7 +189,7 @@ function setTicks(list, labels) {
 }
 
 function setLine(line, list) {
-  if (!list) return "no-box";
+  if (!list || (list.length > 1 && !isGroup(line, list))) return "no-box";
   const [box] = list;
   if (box.matches(DROPDOWN)) return "custom";
   if (line.kind === "location") return "place";
@@ -201,10 +202,11 @@ function setLine(line, list) {
   return box.matches(sort) ? setTicks(list, [line.value].flat()) : "cant-set";
 }
 
-async function upload(line) {
-  const box = boxes().get(line.key)?.[0];
-  if (!box?.matches('input[type="file"]')) return { why: "no-box" };
-  if (box.disabled) return { why: "cant-set" };
+async function upload(line, root) {
+  const list = boxes(root).get(line.key);
+  if (list?.length !== 1 || !list[0].matches('input[type="file"]')) return { why: "no-box" };
+  const [box] = list;
+  if (closed(box)) return { why: "cant-set" };
   const reply = await ask({ do: "file", slot: line.value.slot });
   if (reply?.stop) return reply;
   if (!reply?.name) return { why: "no-file" };
@@ -219,10 +221,10 @@ async function upload(line) {
   return { name: reply.name };
 }
 
-async function setOne(line) {
+async function setOne(line, root) {
   try {
-    if (line.kind === "file") return await upload(line);
-    const why = setLine(line, boxes().get(line.key));
+    if (line.kind === "file") return await upload(line, root);
+    const why = setLine(line, boxes(root).get(line.key));
     return why ? { why } : {};
   } catch {
     return { why: "cant-set" };
@@ -231,7 +233,7 @@ async function setOne(line) {
 
 function shownValue(line, list) {
   const [box] = list;
-  if (line.kind === "file") return box.files[0]?.name ?? "";
+  if (line.kind === "file") return box.files?.[0]?.name ?? "";
   if (line.kind === "consent") return box.checked ? line.value : "";
   if (box.matches(TEXT_BOX)) return box.value;
   const picked = box.tagName === "SELECT"
@@ -240,8 +242,8 @@ function shownValue(line, list) {
   return line.kind === "multi" ? picked : (picked[0] ?? "");
 }
 
-function readBack(done, left) {
-  const found = boxes();
+function readBack(done, left, root) {
+  const found = boxes(root);
   const values = [];
   let stuck = 0;
   for (const { line, name } of done) {
@@ -254,27 +256,29 @@ function readBack(done, left) {
   return { values, stuck };
 }
 
-function stopAt(kind, waiting, done, left) {
-  const { values } = readBack(done, left);
+function stopAt(kind, waiting, done, left, root) {
+  const { values } = readBack(done, left, root);
   const rest = waiting.map((line) => ({ key: line.key, why: "not-reached" }));
   return report("stopped", kind, values, [...left, ...rest]);
 }
 
-async function fillLines(pack, address) {
+async function fillLines(pack, address, root) {
   const lines = [...pack.filter((line) => line.kind === "file"), ...pack.filter((line) => line.kind !== "file")];
   const done = [];
   const left = [];
   for (const [at, line] of lines.entries()) {
-    const stop = stopHere(address);
-    if (stop) return stopAt(stop, lines.slice(at), done, left);
-    const result = await setOne(line);
-    if (result.stop === "page") return stopAt("unexpected-page", lines.slice(at), done, left);
+    const stop = stopHere(address, root);
+    if (stop) return stopAt(stop, lines.slice(at), done, left, root);
+    const result = await setOne(line, root);
+    if (result.stop === "page") return stopAt("unexpected-page", lines.slice(at), done, left, root);
     if (result.stop) return undefined;
     if (result.why) left.push({ key: line.key, why: result.why });
     else done.push({ line, name: result.name });
   }
   await quiet();
-  const { values, stuck } = readBack(done, left);
+  const late = stopHere(address, root);
+  if (late) return stopAt(late, [], done, left, root);
+  const { values, stuck } = readBack(done, left, root);
   return stuck > 0 ? report("filled", undefined, values, left) : report("stopped", "cant-set", values, left);
 }
 
@@ -282,14 +286,15 @@ async function fillTheForm() {
   if (!(await ask({ do: "open" }))?.go) return undefined;
   const address = location.href;
   const anchor = await anchorShown();
-  const early = stopHere(address) ?? (anchor ? undefined : noForm());
+  const root = anchor?.closest("form") ?? (anchor && BOARD.formless ? document.body : undefined);
+  const early = stopHere(address, root ?? document.body) ?? (root ? undefined : noForm(anchor));
   if (early) return report("stopped", early);
   await quiet();
-  const late = stopHere(address);
+  const late = stopHere(address, root);
   if (late) return report("stopped", late);
-  const fields = [...boxes()].map(([key, list]) => fieldOf(key, list));
+  const fields = [...boxes(root)].map(([key, list]) => fieldOf(key, list));
   const reply = await ask({ do: "form", fields });
-  if (reply?.pack) return fillLines(reply.pack, address);
+  if (reply?.pack) return fillLines(reply.pack, address, root);
   return reply?.stop === "page" ? report("stopped", "unexpected-page") : undefined;
 }
 
