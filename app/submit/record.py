@@ -1,6 +1,7 @@
 """What you applied with (Phase 7): the copy panel's lines, and "I submitted it", which records what you did on the
 site. The app never submits anything. A record is saved once, with the card's move to Applied, and is never changed;
-a record made by hand holds what the app prepared, not what the site received. Nothing here contacts any site."""
+a record made by hand holds what the app prepared, and one with the plugin's last read what the form showed: neither is
+what the site received. Nothing here contacts any site."""
 
 import hashlib
 import json
@@ -13,14 +14,19 @@ from app import questionnaire, tracker
 from app.collect import now
 from app.council import runs
 from app.documents import pdf
-from app.submit import match
+from app.submit import fill_words, match
 from app.tracker import STAGES
 
-SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
-    VALUES (?, ?, ?, 'by hand', ?, ?, ?)"""
-LOAD = "SELECT submitted_on, saved_on, how, address, fields, files FROM submissions WHERE job_id = ?"
+SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files, checked_on)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+LOAD = "SELECT submitted_on, saved_on, how, address, fields, files, checked_on FROM submissions WHERE job_id = ?"
+LAST_READ = "SELECT values_read, checked_on FROM fills WHERE job_id = ? ORDER BY id DESC LIMIT 1"
+WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL WHERE job_id = ?"
 NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
 BY_YOU, EMPTY_FROM, MISSING = "answered by you on the site", "left empty", "file was missing"
+NOT_READ, AS_SHOWN = "the plugin couldn't read this box", "as the form showed it"
+ANOTHER_FILE, NO_FILE_SHOWN = "the box showed another file", "its box showed no file when last checked"
+MAX_VALUE = 20_000  # one answer as the form shows it
 ALREADY = "Already recorded on {}"
 NO_VALUE = {
     "decide": BY_YOU,
@@ -30,8 +36,15 @@ NO_VALUE = {
     "empty": EMPTY_FROM,
 }  # -> its "from"
 DOCUMENTS = ((runs.KIND, "Resume"), (runs.LETTER, "Cover letter"))
-HEADING = {"browser": "What was sent", "by hand": "What the app prepared (you applied by hand)"}  # a record's `how`
+HEADING = {  # a record's `how`
+    "browser": "What the form held when last checked ({})",
+    "by hand": "What the app prepared (you applied by hand)",
+}
 MAY_DIFFER = "The site may hold different answers if you changed them there."
+CAUTION = (
+    "This is what the form showed the plugin, not proof of what the site received. Only questions the app knew about "
+    "are here."
+)
 MOVED_BACK = "Your card was moved back on {}, after this record."
 NO_COPY = "the app had no copy of this file when this was recorded: it can't show which PDF you sent"
 
@@ -85,9 +98,19 @@ def recorded(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
     row = conn.execute(LOAD, (job_id,)).fetchone()
     if row is None:
         return None
-    submitted_on, saved_on, how, address, fields, files = row
+    submitted_on, saved_on, how, address, fields, files, checked_on = row
     return {"submitted_on": submitted_on, "saved_on": saved_on, "how": how, "address": address,
-            "fields": json.loads(fields), "files": json.loads(files)}  # fmt: skip
+            "fields": json.loads(fields), "files": json.loads(files), "checked_on": checked_on}  # fmt: skip
+
+
+def heading(found: dict) -> str:
+    """A record's heading, with when the form was last read if it holds a read."""
+    return HEADING[found["how"]].format(fill_words.moment(found["checked_on"]))
+
+
+def caution(found: dict) -> str:
+    """What a record can't promise, under its heading."""
+    return CAUTION if found["how"] == "browser" else MAY_DIFFER
 
 
 def submit(
@@ -95,8 +118,10 @@ def submit(
 ) -> str | None:
     """Record that you applied on `on`, and move the card from Ready to Applied, all or nothing; `lines` is the read
     form's preview (None: no form was read, so your standard answers are kept). Open decisions never stop it: they are
-    kept as answered by you on the site. A card already past Ready (Gmail saw the confirmation first) stays where it
-    is, never moved backwards, and that is said in the answer. Raises Refused with nothing saved."""
+    kept as answered by you on the site. If the job's newest fill holds a read and a form was read, the record is that
+    read; every read of the job goes in the same save, whichever it was. A card already past Ready (Gmail saw the
+    confirmation first) stays where it is, never moved backwards, and that is said in the answer. Raises Refused with
+    nothing saved."""
     job_id = job["id"]
     if found := recorded(conn, job_id):
         raise Refused(ALREADY.format(found["submitted_on"]))
@@ -106,15 +131,19 @@ def submit(
     past_ready = stage not in (None, "ready")  # Gmail first, or Add an application: maybe with no resume version at all
     if not past_ready and (not tracker.on_board(conn, job_id) or runs.last_done(conn, job_id) is None):
         raise Refused(NO_CARD)
-    fields = _fields(lines) if lines is not None else [
+    held = conn.execute(LAST_READ, (job_id,)).fetchone()
+    read, checked_on = (json.loads(held[0]), held[1]) if held and held[0] and lines is not None else (None, None)
+    fields = _fields(lines, read) if lines is not None else [
         {"question": label, "value": text, "from": "Questionnaire"}
         for label, text in standard(questionnaire.load(conn)[0])
     ]  # fmt: skip
-    saved = (job_id, on.isoformat(), now(), job["apply_url"], json.dumps(fields, ensure_ascii=False),
-             json.dumps(_files(conn, data_dir, job_id), ensure_ascii=False))  # fmt: skip
+    files = _files(conn, data_dir, job_id, _changed(conn, data_dir, job_id, lines, read) if read else set())
+    saved = (job_id, on.isoformat(), now(), "by hand" if read is None else "browser", job["apply_url"],
+             json.dumps(fields, ensure_ascii=False), json.dumps(files, ensure_ascii=False), checked_on)  # fmt: skip
     try:
         with conn:
             conn.execute(SAVE, saved)
+            conn.execute(WIPED, (job_id,))
             if not past_ready and not tracker.moved(conn, job_id, "ready", "applied", on):
                 raise _Moved
     except sqlcipher3.IntegrityError:  # a second dashboard saved its record after the check above
@@ -134,18 +163,54 @@ def moved_back(conn: sqlcipher3.Connection, job_id: int, found: dict) -> str | N
     return next((move["moved_on"] for move in later if move["moved_on"] >= found["saved_on"]), None)
 
 
-def _fields(lines: tuple[match.Line, ...]) -> list[dict]:
-    """Each question as the app prepared it. What you do yourself on the site is never guessed at: no value."""
-    return [
-        {"question": line.field.label, "value": "" if line.status in NO_VALUE else shown(line),
-         "from": NO_VALUE.get(line.status, line.source),
-         "note": line.note}
-        for line in lines
-        if line.status != "hidden"
-    ]  # fmt: skip
+def _fields(lines: tuple[match.Line, ...], read: dict | None = None) -> list[dict]:
+    """Each question as the app prepared it, or with a read as the form last showed it. What you do yourself on the site
+    is never guessed at: no value."""
+    fields = []
+    for line in lines:
+        if line.status != "hidden":
+            field = {"question": line.field.label, "value": "" if line.status in NO_VALUE else shown(line),
+                     "from": NO_VALUE.get(line.status, line.source),
+                     "note": line.note}  # fmt: skip
+            fields.append(field if read is None else field | _as_read(line, field["value"], read))
+    return fields
 
 
-def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> list[dict]:
+def _as_read(line: match.Line, prepared: str, read: dict) -> dict:
+    """What the read changes in a line's row: nothing if it shows what the app prepared. A file goes by its verdict, as
+    a read never holds another file's name."""
+    key = line.field.key
+    if key not in read:
+        return {"value": "", "from": NOT_READ}
+    if line.field.kind == "file":
+        return {
+            fill_words.SAME_FILE: {},
+            fill_words.CHANGED_FILE: {"value": ANOTHER_FILE, "from": AS_SHOWN},
+            "": {"value": "", "from": NO_FILE_SHOWN},
+        }[read[key]]
+    texts = [read[key]] if isinstance(read[key], str) else read[key]
+    if not any(text.strip() for text in texts):
+        return {"value": "", "from": EMPTY_FROM}
+    showing = ", ".join(texts)
+    if _plain(showing) == _plain(prepared):
+        return {}
+    return {"value": showing[:MAX_VALUE], "from": AS_SHOWN}
+
+
+def _plain(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _changed(
+    conn: sqlcipher3.Connection, data_dir: Path, job_id: int, lines: tuple[match.Line, ...], read: dict
+) -> set[str]:
+    """The slots whose file line reads as changed."""
+    paths = {str(found[1]): slot for slot, found in documents(conn, data_dir, job_id).items() if found}
+    verdicts = ((line, read.get(line.field.key)) for line in lines if line.field.kind == "file")
+    return {paths[line.value] for line, said in verdicts if said == fill_words.CHANGED_FILE and line.value in paths}
+
+
+def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int, changed: set[str]) -> list[dict]:
     """The newest finished resume and cover letter, each with its SHA-256. A PDF gone from the folder is noted and
     never stops the record."""
     found = []
@@ -155,7 +220,7 @@ def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> list[dic
         version = done["version"]
         digest = sha256(pdf.tailored(data_dir, job_id, version, kind))
         found.append({"slot": kind, "label": f"{name} v{version}", "version": version, "sha256": digest,
-                      "note": "" if digest else MISSING})  # fmt: skip
+                      "note": "" if digest else MISSING} | ({"changed": True} if kind in changed else {}))  # fmt: skip
     return found
 
 

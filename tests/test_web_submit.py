@@ -740,12 +740,14 @@ def test_a_by_hand_record_says_so_above_its_answers(client, conn, job):
     assert '<p class="muted">The site may hold different answers if you changed them there.</p>' in text
 
 
-def test_a_browser_record_says_what_was_sent_and_nothing_about_the_site_differing(client, conn, job):
+def test_a_browser_record_says_what_the_form_held_and_nothing_about_the_site_differing(client, conn, job):
     with conn:
-        conn.execute("INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) VALUES (?, "
-                     "'2026-11-04', 'then', 'browser', 'https://example.com/apply', '[]', '[]')", (job,))  # fmt: skip
+        conn.execute("INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files, "
+                     "checked_on) VALUES (?, '2026-11-04', 'then', 'browser', 'https://example.com/apply', '[]', '[]', "
+                     "'2026-11-04T15:00:00+00:00')", (job,))  # fmt: skip
     text = client.get(f"/jobs/{job}/form").text
-    assert "<h3>What was sent</h3>" in text and "Applied 2026-11-04" in text
+    assert "<h3>What the form held when last checked (" in text and "Applied 2026-11-04" in text
+    assert f'<p class="muted">{record.CAUTION}</p>' in text
     assert "What the app prepared" not in text and "may hold different" not in text
 
 
@@ -759,7 +761,7 @@ def test_a_records_sentences_live_in_one_place_only():
     template = (Path(form_part.__file__).parent / "templates" / "form.html").read_text(encoding="utf-8")
     for words in ("What was sent", "What the app prepared", "may hold different", "moved back on", "after this record"):
         assert words not in template
-    for sentence in (*record.HEADING.values(), record.MAY_DIFFER, *record.MOVED_BACK.split("{}")):
+    for sentence in (*record.HEADING.values(), record.MAY_DIFFER, record.CAUTION, *record.MOVED_BACK.split("{}")):
         assert sentence not in template
 
 

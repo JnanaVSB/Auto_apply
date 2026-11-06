@@ -41,9 +41,9 @@ def history(conn: sqlcipher3.Connection, job_id: int, recorded: dict | None) -> 
 def filled_answers(job: dict, recorded: dict, moved_back: str | None, files: dict[str, str]) -> tuple[str, list]:
     """The frozen record as a paper. `moved_back` is a local date; `files` says of each slot's copy in the export
     folder whether it is the "same" as recorded, "different" or "gone"."""
-    title = record.HEADING[recorded["how"]]
+    title = record.heading(recorded)
     opening = [job["company"], job["title"], f"Applied {recorded['submitted_on']}", recorded["address"]]
-    opening += [] if recorded["how"] == "browser" else [record.MAY_DIFFER]
+    opening += [record.caution(recorded)]
     opening += [record.MOVED_BACK.format(moved_back)] if moved_back else []
     answers = [(row["question"], _answer(row)) for row in recorded["fields"]]
     return title, [("", "\n".join(opening)), *answers, ("Files", _files(recorded["files"], files))]
@@ -69,7 +69,8 @@ def council_notes(conn: sqlcipher3.Connection, job_id: int, versions: list[tuple
 
 def file_notes(row: dict, state: str | None) -> list[str]:
     """What is true of a recorded file now, in words: for the paper and the run's problem lines alike."""
-    notes = [record.NO_COPY] if row["note"] else [GONE] if state == "gone" else []
+    notes = [record.ANOTHER_FILE] if row.get("changed") else []
+    notes += [record.NO_COPY] if row["note"] else [GONE] if state == "gone" else []
     return notes + [NOT_RECORDED] if state == "different" else notes
 
 

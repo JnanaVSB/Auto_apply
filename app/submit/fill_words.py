@@ -91,6 +91,14 @@ LEFT = {  # why the plugin left a line, as the job's box says it
 }
 
 
+def moment(stamp: str | None) -> str | None:
+    """A saved time as the box says it, on the laptop's own clock; None without one."""
+    if stamp is None:
+        return None
+    local = datetime.fromisoformat(stamp).astimezone()
+    return f"{local.day} {local:%b %H:%M}"
+
+
 def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
     """The job's newest fill, in plain words; None before its first."""
     row = conn.execute(LATEST, (job_id,)).fetchone()
@@ -120,17 +128,10 @@ def _plain(row: tuple) -> dict:
     started_on, toolbar, browser, state, stop_kind, changes, filled, files, taken_on, checked_on, clicked_on = row
     closed = stop_kind == NOT_SENT
     return {
-        "when": _moment(started_on), "taken": _moment(taken_on), "read_at": _moment(checked_on),
+        "when": moment(started_on), "taken": moment(taken_on), "read_at": moment(checked_on),
         "looks_sent": clicked_on is not None and not closed, "out": state in ("sent", "filled") and not closed,
         "toolbar": toolbar, "browser": browser,
         "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
         "filled": json.loads(filled or "[]"),
         "files": ", ".join(slot.replace("_", " ") for slot in json.loads(files or "[]")),
     }  # fmt: skip
-
-
-def _moment(stamp: str | None) -> str | None:
-    if stamp is None:
-        return None
-    moment = datetime.fromisoformat(stamp).astimezone()  # the laptop's own clock
-    return f"{moment.day} {moment:%b %H:%M}"
