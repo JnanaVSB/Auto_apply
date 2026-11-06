@@ -13,12 +13,12 @@
 <table>
   <thead><tr><th>Browser</th><th>Added</th><th>Last hello</th><th>Plugin version</th><th></th></tr></thead>
   <tbody>
-    {% for id, browser, added_on, last_used, version in browsers %}
+    {% for id, browser, added_on, last_used, version, plugin in browsers %}
     <tr>
       <td>{{ browser }}</td>
       <td>{{ added_on[:10] }}</td>
       {% if last_used %}<td>{{ last_used[:10] }}</td><td>{{ version }}</td>
-      {% else %}<td colspan="2">No plugin has connected yet</td>{% endif %}
+      {% else %}<td colspan="2">{{ "Connected, no hello yet" if plugin else "No plugin has connected yet" }}</td>{% endif %}
       <td>
         <form method="post" action="/settings/plugin/remove" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">

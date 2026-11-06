@@ -9,6 +9,7 @@ from contextlib import ExitStack
 import httpx
 import pytest
 import sqlcipher3
+from fastapi import Request
 from fastapi.testclient import TestClient
 from helpers import ADDRESS, add_job, csrf, log_in, one
 from starlette.exceptions import HTTPException
@@ -27,13 +28,31 @@ OTHER_PLUGIN = "chrome-extension://" + "p" * 32
 JOB_PAGE = "http://127.0.0.1:8767"
 GOOD = {"protocol": 1, "version": "1.2.3"}
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
+BAD_ORIGINS = (
+    None,
+    "",
+    "null",
+    JOB_PAGE,
+    "https://jobs.example",
+    PLUGIN + "/",
+    PLUGIN + "\n",
+    PLUGIN + "a",
+    "chrome-extension://" + "a" * 31,
+    "chrome-extension://" + "a" * 33,
+    "chrome-extension://" + "q" * 32,
+    "chrome-extension://" + "A" * 32,
+    "moz-extension://" + "a" * 32,
+)
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
 IDENTITY = {"Tailscale-User-Login": "person@example.com"}
 SERVE_MARKS = {"X-Forwarded-For": "100.64.0.1", "X-Forwarded-Host": HOST, "X-Forwarded-Proto": "https"}
 FUNNEL = {"Tailscale-Funnel-Request": "?1"}
 SHOWN_KEY = re.compile(r'<code id="key">([\w-]+)</code>')
-NAME_TAKEN = "That name is already in the list. Choose another, or remove the old one first."
+NAME_TAKEN = (
+    "That name is already in the list. Choose another, or remove the old one first. If you didn't copy its key, remove "
+    "it and add it again."
+)
 BAD_NAME = "Not added: type a name of 1 to 40 characters, with no control characters."
 WRONG_PLUGIN_HINT = "If a plugin is refused as the wrong one, remove this browser and add it again."
 LOG_OUT_ALL_HINT = "This also removes every paired browser: each one will need a new key."
@@ -61,7 +80,8 @@ def count(conn):
 
 
 def sent(key=KEY, origin=PLUGIN):
-    return {"Authorization": f"Bearer {key}", "Origin": origin}
+    """The key, and the Origin unless it is None, for the browser sending none."""
+    return {"Authorization": f"Bearer {key}"} | ({} if origin is None else {"Origin": origin})
 
 
 def refused(response, status, kind):
@@ -178,26 +198,44 @@ def test_every_method_needs_the_key(door, conn, method, path):
 @pytest.mark.parametrize("method", METHODS)
 def test_every_method_needs_the_pinned_plugin(door, conn, method):
     pair(conn, plugin=PLUGIN)
-    for origin in (
-        None,
-        "null",
-        JOB_PAGE,
-        "https://jobs.example",
-        OTHER_PLUGIN,
-        PLUGIN + "/",
-        PLUGIN + "\n",
-        "chrome-extension://" + "a" * 31,
-        "chrome-extension://" + "a" * 33,
-        "chrome-extension://" + "q" * 32,
-        "chrome-extension://" + "A" * 32,
-        "moz-extension://" + "a" * 32,
-    ):
-        headers = {"Authorization": f"Bearer {KEY}"} | ({"Origin": origin} if origin else {})
-        response = door.request(method, HELLO, headers=headers)
+    for origin in (*BAD_ORIGINS, OTHER_PLUGIN):
+        response = door.request(method, HELLO, headers=sent(origin=origin))
         assert response.status_code == 403
         if method != "HEAD":
             assert response.json() == {"error": "wrong-plugin"}
     assert row(conn) == (PLUGIN, None, None)
+
+
+@pytest.mark.parametrize("method", METHODS)
+def test_a_bad_origin_never_pins_a_new_browser(door, conn, method):
+    """On a browser with no pin the shape check alone decides: nothing else stands behind it."""
+    pair(conn)
+    for origin in BAD_ORIGINS:
+        response = door.request(method, HELLO, headers=sent(origin=origin))
+        assert response.status_code == 403
+        if method != "HEAD":
+            assert response.json() == {"error": "wrong-plugin"}
+    assert row(conn) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status"), [("GET", "/plugin/nothing", 404), ("GET", HELLO, 405), ("OPTIONS", HELLO, 405)]
+)
+def test_a_first_call_pins_on_any_path_and_method(door, conn, method, path, status):
+    pair(conn)
+    assert refused(door.request(method, path, headers=sent()), status, "bad-request")
+    assert row(conn) == (PLUGIN, None, None)
+
+
+def test_the_door_leaves_no_session_for_a_route_to_find(door, conn):
+    pair(conn, plugin=PLUGIN)
+
+    @door.app.get("/plugin/session-probe")
+    async def probe(request: Request):
+        return {"session": request.state.session}
+
+    response = door.get("/plugin/session-probe", headers=sent())
+    assert (response.status_code, response.json()) == (200, {"session": None})
 
 
 def test_a_stolen_key_from_a_web_page_never_gets_pinned(door, conn):
@@ -291,8 +329,10 @@ def test_a_valid_key_with_no_cookie_opens_nothing_outside_the_door(door, conn):
         response = door.get(path, headers=sent(), follow_redirects=False)
         assert (response.status_code, response.headers["location"]) == (303, "/login")
     for path in (SETTINGS, REMOVE, LOG_OUT_ALL):
-        response = door.post(path, data={"name": "Sneaked in", "id": "1"}, headers=sent(), follow_redirects=False)
-        assert response.status_code in (303, 403)
+        response = door.post(
+            path, data={"name": "Sneaked in", "id": "1"}, headers=sent(origin=None), follow_redirects=False
+        )
+        assert (response.status_code, response.headers["location"]) == (303, "/login")
     assert one(conn, "SELECT name FROM paired_browsers") == ("Laptop Chrome",)
 
 
@@ -327,6 +367,15 @@ def test_no_body_is_read_before_the_door_has_decided(door, conn):
 
 
 # /plugin/hello
+
+
+@pytest.mark.parametrize(
+    "body", [GOOD | {"version": "bad"}, GOOD | {"protocol": 2}, {"version": "1.2.3"}, ["not an object"]]
+)
+def test_a_refused_first_hello_pins_but_saves_no_version_and_no_time(door, conn, body):
+    pair(conn)
+    assert door.post(HELLO, json=body, headers=sent()).status_code == 400
+    assert row(conn) == (PLUGIN, None, None)
 
 
 def test_a_repeated_hello_changes_only_the_time(door, conn, monkeypatch):
@@ -674,6 +723,15 @@ def test_the_list_shows_what_is_known_of_each_browser(owner, door, conn):
     assert "9.8.7" in text and "No plugin has connected yet" not in text
 
 
+def test_the_list_says_when_a_plugin_is_pinned_but_has_not_said_hello(owner, door, conn):
+    pair(conn)
+    door.post(HELLO, json=GOOD | {"version": "bad"}, headers=sent())
+    text = words(owner.get(SETTINGS))
+    assert "Connected, no hello yet" in text and "No plugin has connected yet" not in text
+    door.post(HELLO, json=GOOD, headers=sent())
+    assert "Connected, no hello yet" not in words(owner.get(SETTINGS))
+
+
 def test_the_phone_can_pair_a_browser_too(phone_dashboard, conn):
     _, phone = phone_dashboard
     response = phone.post("/login", data={"password": "fake dashboard words here"}, headers={"Origin": PHONE},
@@ -705,6 +763,17 @@ def test_remove_deletes_that_browser_only_and_its_key_stops_working(owner, door,
     assert one(conn, "SELECT id FROM jobs WHERE id = ?", job) == (job,)
     assert refused(door.post(HELLO, json=GOOD, headers=sent()), 401, "no-key")
     assert door.post(HELLO, json=GOOD, headers=sent("second-fake-key")).status_code == 200
+
+
+def test_a_new_browser_never_gets_a_removed_browsers_number(owner, conn):
+    add(owner, "First")
+    add(owner, "Second")
+    old_press = {"id": "2", "csrf_token": csrf(owner)}
+    owner.post(REMOVE, data=old_press)
+    add(owner, "Third")
+    assert conn.execute("SELECT id, name FROM paired_browsers ORDER BY id").fetchall() == [(1, "First"), (3, "Third")]
+    owner.post(REMOVE, data=old_press)  # a second tab, still showing the old list
+    assert count(conn) == 2
 
 
 @pytest.mark.parametrize("browser_id", ["1", "999", "not a number", ""])

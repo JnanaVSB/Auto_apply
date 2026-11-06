@@ -15,8 +15,11 @@ from app.web import plugin
 PAGE = "/settings/plugin"
 MAX_NAME = 40
 BAD_NAME = f"Not added: type a name of 1 to {MAX_NAME} characters, with no control characters."
-NAME_TAKEN = "That name is already in the list. Choose another, or remove the old one first."
-BROWSERS = "SELECT id, name, added_on, last_used, version FROM paired_browsers ORDER BY id"
+NAME_TAKEN = (
+    "That name is already in the list. Choose another, or remove the old one first. If you didn't copy its key, remove "
+    "it and add it again."
+)
+BROWSERS = "SELECT id, name, added_on, last_used, version, plugin FROM paired_browsers ORDER BY id"
 ADD = "INSERT INTO paired_browsers (name, key_hash, added_on) VALUES (?, ?, ?)"
 
 

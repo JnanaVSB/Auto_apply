@@ -912,7 +912,12 @@ def test_version_22_adds_paired_browsers_and_changes_nothing_else(tmp_path, monk
         with closing(db.connect(path)) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 22
             found, rows = _everything(conn)
-            assert [row for row in found if row[2] != "paired_browsers"] == before[0]
+            added = {row[1] for row in found if row[2] in ("paired_browsers", "sqlite_sequence")}
+            assert added == {
+                "paired_browsers", "sqlite_sequence",  # SQLite's own record for AUTOINCREMENT, the first such table
+                "sqlite_autoindex_paired_browsers_1", "sqlite_autoindex_paired_browsers_2",
+            }  # fmt: skip
+            assert [row for row in found if row[1] not in added] == before[0]
             assert {name: rows[name] for name in before[1]} == before[1] and len(rows) == len(before[1]) + 1
             assert conn.execute("SELECT count(*) FROM paired_browsers").fetchone()[0] == 0
             add = "INSERT INTO paired_browsers (name, key_hash, added_on) VALUES (?, ?, 'then')"
