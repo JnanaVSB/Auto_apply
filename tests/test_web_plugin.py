@@ -1,7 +1,6 @@
 """The browser plugin's door: pairing a browser, and who may come in on /plugin/. Fake keys and made-up plugins only."""
 
 import hashlib
-import html
 import logging
 import re
 from contextlib import ExitStack
@@ -13,6 +12,7 @@ from fastapi import Request
 from fastapi.testclient import TestClient
 from helpers import ADDRESS, add_job, csrf, log_in, one
 from starlette.exceptions import HTTPException
+from test_web_phone import FORWARDED, FUNNEL, HOST, IDENTITY, ORIGIN, PHONE, phone_login, words
 
 from app import collect, config
 from app.fetch import Fetcher
@@ -45,19 +45,12 @@ BAD_ORIGINS = (
     "http://" + "a" * 32,
     "x" + PLUGIN,
 )
-PHONE = "https://laptop.tail0000.ts.net"
-HOST = "laptop.tail0000.ts.net"
-IDENTITY = {"Tailscale-User-Login": "person@example.com"}
-SERVE_MARKS = {"X-Forwarded-For": "100.64.0.1", "X-Forwarded-Host": HOST, "X-Forwarded-Proto": "https"}
-FUNNEL = {"Tailscale-Funnel-Request": "?1"}
 SHOWN_KEY = re.compile(r'<code id="key" class="address">([\w-]+)</code>')
-NAME_TAKEN = (
-    "That name is already in the list. Choose another, or remove the old one first. If you didn't copy its key, remove "
-    "it and add it again."
-)
-BAD_NAME = "Not added: type a name of 1 to 40 characters, with no control characters."
-WRONG_PLUGIN_HINT = "If a plugin is refused as the wrong one, remove this browser and add it again."
-LOG_OUT_ALL_HINT = "This also removes every paired browser: each one will need a new key."
+NAME_TAKEN = "That name is already in the list. Choose another. If you didn't copy its key, remove it and add it again."
+BAD_NAME = "Not added: type a name of 1 to 40 characters, with no tabs or line breaks."
+WRONG_PLUGIN_HINT = "If the plugin says it was refused, remove that browser here and add it again."
+LOG_OUT_ALL_HINT = "This also removes every browser in Settings → Browser plugin: each one will need a new key."
+NOT_FINISHED = "A plugin is linked, but didn't finish connecting"
 BUSY = "The database is busy"
 
 
@@ -90,10 +83,6 @@ def refused(response, status, kind):
     return (response.status_code, response.json()) == (status, {"error": kind})
 
 
-def words(response):
-    return html.unescape(response.text)
-
-
 @pytest.fixture
 def door(client):
     """The same running dashboard with no login cookie, as the plugin calls it."""
@@ -117,7 +106,7 @@ def phone_dashboard(data_dir, clock, web, monkeypatch):
             data_dir, security.Logins(clock=clock), lambda: Fetcher(httpx.MockTransport(web)), phone_address=PHONE
         )
         laptop = running.enter_context(TestClient(app, base_url=ADDRESS))
-        phone = TestClient(app, base_url=f"http://{HOST}", headers={"Host": HOST} | IDENTITY | SERVE_MARKS)
+        phone = TestClient(app, base_url=f"http://{HOST}", headers={"Host": HOST} | IDENTITY | FORWARDED)
         phone.portal = laptop.portal
         yield laptop, phone
 
@@ -213,11 +202,13 @@ def test_a_bad_origin_never_pins_a_new_browser(door, conn, method):
     """On a browser with no pin the shape check alone decides: nothing else stands behind it."""
     pair(conn)
     for origin in BAD_ORIGINS:
-        response = door.request(method, HELLO, headers=sent(origin=origin))
+        response = door.request(method, HELLO, json=GOOD, headers=sent(origin=origin))
         assert response.status_code == 403
         if method != "HEAD":
             assert response.json() == {"error": "wrong-plugin"}
     assert row(conn) == (None, None, None)
+    assert door.post(HELLO, json=GOOD, headers=sent()).status_code == 200  # the real plugin still can be
+    assert row(conn)[0] == PLUGIN
 
 
 @pytest.mark.parametrize(
@@ -238,15 +229,6 @@ def test_the_door_leaves_no_session_for_a_route_to_find(door, conn):
 
     response = door.get("/plugin/session-probe", headers=sent())
     assert (response.status_code, response.json()) == (200, {"session": None})
-
-
-def test_a_stolen_key_from_a_web_page_never_gets_pinned(door, conn):
-    pair(conn)
-    for origin in (JOB_PAGE, "null", "https://jobs.example"):
-        assert refused(door.post(HELLO, json=GOOD, headers=sent(origin=origin)), 403, "wrong-plugin")
-    assert row(conn) == (None, None, None)
-    assert door.post(HELLO, json=GOOD, headers=sent()).status_code == 200  # the real plugin still can be
-    assert row(conn)[0] == PLUGIN
 
 
 def test_a_browser_stays_with_the_plugin_it_was_pinned_to(door, conn):
@@ -581,7 +563,6 @@ def test_a_crash_is_app_error_and_never_names_the_exception(door, conn, monkeypa
         (400, "Some page words about a job", "bad-request"),
         (403, "person@example.com", "bad-request"),
         (409, "no-such-kind", "bad-request"),
-        (413, "Too much data.", "too-big"),
         (500, "Something broke", "app-error"),
         (503, "Busy words", "app-error"),
         (403, "not-logged-in", "not-logged-in"),  # on the agreement's list
@@ -599,11 +580,11 @@ def test_a_refusals_words_are_passed_on_only_if_they_are_a_kind(door, conn, monk
         {"Host": "attacker.example"},
         {"Host": "evil.ts.net"},
         {"Host": "127.0.0.1:8765"} | IDENTITY,
-        {"Host": "127.0.0.1:8765"} | SERVE_MARKS,
+        {"Host": "127.0.0.1:8765"} | FORWARDED,
         {"Host": "127.0.0.1:8765"} | FUNNEL,
         {"Host": HOST},
         {"Host": HOST} | FUNNEL,
-        {"Host": HOST} | IDENTITY | SERVE_MARKS | FUNNEL,
+        {"Host": HOST} | IDENTITY | FORWARDED | FUNNEL,
     ],
 )
 def test_refused_addresses_stay_refused_even_with_the_key_and_answer_as_json(phone_dashboard, conn, headers):
@@ -729,19 +710,16 @@ def test_the_list_says_when_a_plugin_is_pinned_but_has_not_said_hello(owner, doo
     pair(conn)
     door.post(HELLO, json=GOOD | {"version": "bad"}, headers=sent())
     text = words(owner.get(SETTINGS))
-    assert "Connected, no hello yet" in text and "No plugin has connected yet" not in text
+    assert NOT_FINISHED in text and "No plugin has connected yet" not in text
     door.post(HELLO, json=GOOD, headers=sent())
-    assert "Connected, no hello yet" not in words(owner.get(SETTINGS))
+    assert NOT_FINISHED not in words(owner.get(SETTINGS))
 
 
 def test_the_phone_can_pair_a_browser_too(phone_dashboard, conn):
     _, phone = phone_dashboard
-    response = phone.post("/login", data={"password": "fake dashboard words here"}, headers={"Origin": PHONE},
-                          follow_redirects=False)  # fmt: skip
-    cookie = response.headers["set-cookie"].split(";")[0]
-    session = phone.app.state.logins.sessions[cookie.split("=")[1]]
-    headers = {"Origin": PHONE, "Cookie": cookie}
-    response = phone.post(SETTINGS, data={"name": "Phone added", "csrf_token": session.csrf}, headers=headers)
+    cookie, session = phone_login(phone)
+    data = {"name": "Phone added", "csrf_token": session.csrf}
+    response = phone.post(SETTINGS, data=data, headers=cookie | ORIGIN)
     assert (response.status_code, count(conn)) == (200, 1)
 
 

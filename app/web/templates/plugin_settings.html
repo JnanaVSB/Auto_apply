@@ -11,14 +11,14 @@
 <p>Each browser with the plugin gets its own key. The plugin fills job forms in that browser.</p>
 {% if browsers %}
 <table>
-  <thead><tr><th>Browser</th><th>Added</th><th>Last hello</th><th>Plugin version</th><th></th></tr></thead>
+  <thead><tr><th>Browser</th><th>Added</th><th>Last connected</th><th>Plugin version</th><th></th></tr></thead>
   <tbody>
     {% for id, browser, added_on, last_used, version, plugin in browsers %}
     <tr>
       <td>{{ browser }}</td>
       <td>{{ added_on[:10] }}</td>
       {% if last_used %}<td>{{ last_used[:10] }}</td><td>{{ version }}</td>
-      {% else %}<td colspan="2">{{ "Connected, no hello yet" if plugin else "No plugin has connected yet" }}</td>{% endif %}
+      {% else %}<td colspan="2">{{ "A plugin is linked, but didn't finish connecting" if plugin else "No plugin has connected yet" }}</td>{% endif %}
       <td>
         <form method="post" action="/settings/plugin/remove" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -30,7 +30,7 @@
     {% endfor %}
   </tbody>
 </table>
-<p class="hint">If a plugin is refused as the wrong one, remove this browser and add it again.</p>
+<p class="hint">If the plugin says it was refused, remove that browser here and add it again.</p>
 {% endif %}
 <h2>Add a browser</h2>
 <form method="post" action="/settings/plugin" class="stacked">

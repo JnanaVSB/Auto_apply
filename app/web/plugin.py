@@ -33,7 +33,7 @@ def key_hash(key: str) -> str:
 
 def refusal(status: int, message: str) -> JSONResponse:
     """A kind from the list, whatever the words were: an error here never holds page text."""
-    kind = message if message in KINDS else TOO_BIG if status == 413 else APP_ERROR if status >= 500 else BAD_REQUEST
+    kind = message if message in KINDS else APP_ERROR if status >= 500 else BAD_REQUEST
     return JSONResponse({"error": kind}, status)
 
 
@@ -43,20 +43,20 @@ def admit(request: Request) -> None:
     scheme, _, key = request.headers.get("authorization", "").partition(" ")
     sent = key_hash(key)  # hashed first, so odd characters can't crash the compare
     browsers = conn.execute("SELECT id, key_hash, plugin FROM paired_browsers").fetchall()
-    found = next((browser for browser in browsers if hmac.compare_digest(browser[1], sent)), None)
+    found = next((row for row in browsers if hmac.compare_digest(row[1], sent)), None)
     if scheme != "Bearer" or found is None:
         raise HTTPException(401, NO_KEY)
-    browser, _, pinned = found
+    browser_id, _, pinned = found
     origin = request.headers.get("origin", "")
     if not ORIGIN.fullmatch(origin):  # before pinning, so a web page with a stolen key never gets itself pinned
         raise HTTPException(403, WRONG_PLUGIN)
     if pinned is None:
         with conn:  # only if still free: of two first calls at once, one wins
-            conn.execute("UPDATE paired_browsers SET plugin = ? WHERE id = ? AND plugin IS NULL", (origin, browser))
-        pinned = conn.execute("SELECT plugin FROM paired_browsers WHERE id = ?", (browser,)).fetchone()[0]
+            conn.execute("UPDATE paired_browsers SET plugin = ? WHERE id = ? AND plugin IS NULL", (origin, browser_id))
+        pinned = conn.execute("SELECT plugin FROM paired_browsers WHERE id = ?", (browser_id,)).fetchone()[0]
     if pinned != origin:
         raise HTTPException(403, WRONG_PLUGIN)
-    request.state.browser = browser
+    request.state.browser_id = browser_id
 
 
 async def read_json(request: Request) -> dict:
@@ -91,6 +91,6 @@ def add_routes(app: FastAPI) -> None:
         with conn:  # only hello writes here, so later calls never wait on a busy database for this
             conn.execute(
                 "UPDATE paired_browsers SET version = ?, last_used = ? WHERE id = ?",
-                (version, collect.now(), request.state.browser),
+                (version, collect.now(), request.state.browser_id),
             )
         return JSONResponse({"app": "auto_apply", "protocol": PROTOCOL})
