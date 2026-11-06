@@ -4,6 +4,7 @@ import inspect
 import json
 import re
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -325,6 +326,14 @@ def test_a_repeat_press_on_an_unused_fill_neither_counts_nor_waits(conn, laptop,
     assert one(conn, ROW, first.fill)[1] == NOON
 
 
+def test_presses_on_a_ticket_nobody_took_leave_one_waiting_row(conn, laptop, at, tickets):
+    found = job(conn)
+    for _ in range(3):
+        assert tickets.make(conn, found, READY, LIMITS) is None
+    assert rows(conn) == 1
+    assert one(conn, ROW, only(tickets).fill)[4:] == ("waiting", None)
+
+
 def test_a_repeat_press_keeps_the_time_and_takes_in_a_toolbar_press(conn, laptop, at, tickets):
     found = job(conn)
     tickets.make(conn, found, READY, LIMITS)
@@ -518,12 +527,13 @@ def test_another_browser_s_tickets_stay(conn, laptop, at, tickets):
 
 
 def test_logging_out_all_devices_ends_every_ticket(conn, laptop, at, tickets):
-    made = three_fills(conn, tickets, laptop)
+    running, toolbar, button = three_fills(conn, tickets, laptop)
     with conn:
         tickets.end_all(conn)
     assert not tickets.tickets
-    for ticket in made:
+    for ticket in (running, toolbar):
         assert one(conn, ROW, ticket.fill)[4:] == ("ended", "browser-removed")
+    assert one(conn, ROW, button.fill)[4:] == ("ended", "logged-out")  # it never had a browser to remove
 
 
 def test_i_submitted_it_ends_that_job_s_ticket(conn, laptop, at, tickets):
@@ -839,12 +849,97 @@ def test_choices_in_another_order_or_capitals_pass():
 
 def test_the_pack_holds_the_label_as_drawn():
     boxes = FOUR_DRAWN | {
-        "sponsor": FOUR_DRAWN["sponsor"] | {"choices": offered("YES", "NO!")},
+        "sponsor": FOUR_DRAWN["sponsor"] | {"choices": offered("YES", "NO")},
         "teams": FOUR_DRAWN["teams"] | {"choices": offered("robotics", "search")},
     }
     passed, _ = compared(lines_of(FOUR, FOUR_VALUES), list(boxes.values()))
     values = {item["key"]: item["value"] for item in fills.pack(passed, {})}
-    assert (values["sponsor"], values["teams"]) == ("NO!", ["search"])
+    assert (values["sponsor"], values["teams"]) == ("NO", ["search"])
+
+
+@pytest.mark.parametrize(
+    ("text", "as_spelled"),
+    [
+        ("Phone", "phone"),
+        ("  Phone  ", "phone"),
+        ("Your\xa0 phone\n number", "your phone number"),
+        ("Phone*", "phone*"),
+        ("Phone?", "phone?"),
+        ("<1 year", "<1 year"),
+        ("C++", "c++"),
+        ("", ""),
+    ],
+)
+def test_only_case_and_spacing_are_ignored(text, as_spelled):
+    assert fills.spelled(text) == as_spelled
+
+
+@pytest.mark.parametrize(
+    ("text", "as_read"),
+    [
+        ("Phone", "phone"),
+        ("Phone*", "phone"),
+        ("Phone *", "phone"),
+        ("Resume/CV ✱", "resume/cv"),
+        (" Phone*  ", "phone"),
+        ("Phone**", "phone*"),
+        ("Phone* ✱", "phone*"),
+        ("*Phone", "*phone"),
+        ("Phone?", "phone?"),
+        ("", ""),
+        ("*", ""),
+    ],
+)
+def test_a_question_also_loses_one_required_mark_at_the_end(text, as_read):
+    assert fills._question(text) == as_read
+
+
+@pytest.mark.parametrize(
+    ("saved", "shown"),
+    [
+        ("Phone", "Phone*"),
+        ("Resume/CV", "Resume/CV ✱"),
+        ("Phone", "Phone "),
+        ("Your phone", "Your\xa0phone"),
+        ("Need sponsorship?", "Need sponsorship?*"),
+        ("(Optional) Pronouns", "(Optional) Pronouns"),
+    ],
+)
+def test_a_question_s_case_spacing_and_required_mark_don_t_count(saved, shown):
+    form = Form((Field("phone", saved, "text", True, "standard"),))
+    passed, changes = compared(lines_of(form, {"phone": "Fake"}), [box("phone", shown, required=True)])
+    assert keys(passed) == ["phone"] and changes == []
+
+
+@pytest.mark.parametrize(
+    ("saved", "shown"), [("Phone", "Phone?"), ("Phone", "Phone**"), ("<1 year", ">1 year"), ("Pay in $", "Pay in €")]
+)
+def test_a_question_s_symbols_count(saved, shown):
+    form = Form((Field("phone", saved, "text", True, "standard"),))
+    passed, changes = compared(lines_of(form, {"phone": "Fake"}), [box("phone", shown, required=True)])
+    assert passed == [] and said(changes) == {saved: "the question's words changed"}
+
+
+def test_choices_are_counted_so_one_gone_is_a_change():
+    form = Form((Field("level", "Level", "single", True, "company", choices=(Choice("A", "1"), Choice("a", "2"))),))
+    drawn_once = [box("level", "Level", "single", True, choices=offered("A"))]
+    passed, changes = compared(lines_of(form, {"level": ("1",)}), drawn_once)
+    assert passed == [] and said(changes) == {"Level": CHOICES}
+
+
+def test_a_choice_that_can_t_be_told_apart_passes_and_stays_out_of_the_pack():
+    form = Form((Field("level", "Level", "single", True, "company", choices=(Choice("A", "1"), Choice("a", "2"))),))
+    drawn_twice = [box("level", "Level", "single", True, choices=offered("A", "a"))]
+    passed, changes = compared(lines_of(form, {"level": ("1",)}), drawn_twice)
+    assert keys(passed) == ["level"] and said(changes) == {"Level": fills.ALIKE}
+    assert fills.pack(passed, {}) == []
+
+
+@pytest.mark.parametrize("status", ["decide", "left", "empty"])
+def test_alike_choices_are_only_said_for_a_line_that_would_be_filled(status):
+    form = Form((Field("level", "Level", "single", True, "company", choices=(Choice("A", "1"), Choice("a", "2"))),))
+    line = replace(lines_of(form, {"level": ("1",)})[0], status=status)
+    assert compared((line,), [box("level", "Level", "single", True, choices=offered("A", "a"))])[1] == []
 
 
 def test_no_drawn_choices_is_a_change_on_lever_and_ashby():
@@ -1011,11 +1106,23 @@ def test_at_most_100_changes_and_then_how_many_more(extra, more):
 # Who may read `changes`
 
 
-def test_only_these_files_name_the_fills_table_and_fills_py_logs_nothing():
+def files_holding(pattern):
     root = Path(fills.__file__).parents[1]
-    naming = re.compile(r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+fills\b")
-    found = {str(path.relative_to(root)) for path in root.rglob("*.py") if naming.search(path.read_text("utf-8"))}
+    return {str(path.relative_to(root)) for path in root.rglob("*.py") if pattern.search(path.read_text("utf-8"))}
+
+
+def test_only_these_files_name_the_fills_table():
+    found = files_holding(re.compile(r"\b(?:FROM|INTO|UPDATE|JOIN|TABLE)\s+fills\b"))
     allowed = {"db.py", "submit/fills.py", "web/plugin.py", "web/plugin_settings.py", "web/submit.py"}
     assert "submit/fills.py" in found and found <= allowed
-    source = Path(fills.__file__).read_text("utf-8")
-    assert not re.search(r"\bprint\(|\blogging\b|\blogger\b", source)
+
+
+def test_only_the_box_and_settings_read_a_fill_back():
+    found = files_holding(re.compile(r"\bfills\.(?:latest|recent)\b|\bfrom app\.submit\.fills import\b"))
+    assert found == {"web/plugin_settings.py", "web/submit.py"}
+
+
+def test_nothing_that_holds_a_fill_s_changes_logs():
+    holding = {"submit/fills.py", "web/plugin.py", "web/plugin_settings.py", "web/submit.py"}
+    logs = files_holding(re.compile(r"\bprint\(|\blogging\b|\blogger\b"))
+    assert not logs & holding

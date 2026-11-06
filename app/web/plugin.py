@@ -175,6 +175,10 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         ticket = tickets.running(ticket_id, request.state.browser_id)
         if ticket is None or ticket.answered:
             raise HTTPException(404, NO_TICKET)
+        if record.recorded(conn, ticket.job):  # a busy database can save "I submitted it" and not end its fill
+            with conn:
+                tickets.end_job(conn, ticket.job)
+            raise HTTPException(404, NO_TICKET)
         items = body.get("fields")
         if not isinstance(items, list):
             raise HTTPException(400, BAD_REQUEST)
@@ -191,7 +195,8 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
             tickets.answered(conn, ticket, changes, "unexpected-page")
             return JSONResponse(STOP)
         answers = fills.pack(passed, record.documents(conn, data_dir, ticket.job))
-        tickets.answered(conn, ticket, changes)  # the trail first: if this can't be saved, nothing goes out
+        # the trail first: if this can't be saved, nothing goes out
+        tickets.answered(conn, ticket, changes, None if answers else "nothing-to-fill")
         return JSONResponse({"go": True, "pack": answers})
 
 

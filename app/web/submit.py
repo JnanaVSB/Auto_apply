@@ -51,6 +51,7 @@ SAME_DRAFT = "This is the Writer's draft unchanged: only your own changed words 
 ON_PHONE = "Filling happens on a computer. Your answers are saved here."
 FILLING = "Filling in the new tab…"
 NOT_FILLED = "The form opened without filling."
+PRESS_FAILED = "That press couldn't be saved."
 
 
 class _Refused(Exception):  # noqa: N818 (shown as it is)
@@ -269,9 +270,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         except ConfigError as error:
             reason = str(error)
         except sqlcipher3.OperationalError as error:
-            if "locked" not in str(error):
-                raise
-            reason = actions.BUSY
+            reason = actions.BUSY if "locked" in str(error) else PRESS_FAILED
         return FILLING if reason is None else f"{reason} {NOT_FILLED}".strip()
 
     @app.get("/jobs/{job_id:int}/form/writing")

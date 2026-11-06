@@ -890,7 +890,7 @@ def test_a_line_no_longer_to_fill_stays_out_but_still_matches(door, conn, data_d
     ticket = running(door, conn, data_dir, job)
     preview.keep(conn, job, FIRST_NAME, match.IN_WINDOW)
     assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": []}
-    assert fill_rows(conn)[0][2] == "sent"
+    assert fill_rows(conn)[0][2:] == ("stopped", "nothing-to-fill")  # it matched: not an unexpected page
 
 
 @pytest.mark.parametrize("fields", [[], [{"key": "other", "label": "Other", "kind": "text", "required": False}]])
@@ -1026,7 +1026,7 @@ def test_a_new_press_ends_a_fill_that_has_had_its_answers(door, conn, data_dir, 
     job = ready_job(conn)
     assert send(door, running(door, conn, data_dir, job), [NAME_BOX]).status_code == 200
     press(door, conn, data_dir, job)
-    assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "replaced"), (0, None, "waiting", None)]
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", "replaced"), (0, None, "waiting", None)]
 
 
 def test_the_answers_set_no_cookie_and_open_no_cors(owner, door, conn, data_dir, paired):
@@ -1384,7 +1384,8 @@ def test_remove_ends_that_browser_s_fills_and_leaves_the_rest(owner, door, conn,
 def test_log_out_all_ends_every_fill(owner, door, conn, data_dir, limits):
     _, _, addresses = two_browsers_with_fills(owner, door, conn, data_dir)
     owner.post(LOG_OUT_ALL, data={"csrf_token": csrf(owner)}, follow_redirects=False)
-    assert [row_[2:] for row_ in fill_rows(conn)] == [("ended", "browser-removed")] * 4
+    ended = [row_[2:] for row_ in fill_rows(conn)]
+    assert ended == [("ended", "browser-removed")] * 3 + [("ended", "logged-out")]
     assert not held(door)
     assert refused(call(door, START, addresses[3]), 401, "no-key")
     assert refused(call(door, FILL, addresses[3]), 401, "no-key")

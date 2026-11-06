@@ -7,11 +7,14 @@ import json
 from datetime import date
 
 import pytest
+import sqlcipher3
 from helpers import add_job, csrf, log_in, one
 from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
+    FIRST_NAME,
     FORM_ADDRESS,
     LINK,
+    LOG_OUT_ALL,
     NAME_BOX,
     NAME_PACK,
     PLUGIN,
@@ -19,6 +22,7 @@ from test_web_plugin import (
     SETTINGS,
     START,
     call,
+    changes,
     door,  # noqa: F401
     fill_rows,
     held,
@@ -31,7 +35,7 @@ from test_web_plugin import (
 )
 
 from app import config, submit
-from app.submit import Field, Form, fills
+from app.submit import Choice, Field, Form, fills, match, preview
 from app.web import actions
 from app.web import submit as form_part
 
@@ -43,6 +47,7 @@ HONEST = (
     "browser can read them too."
 )
 NOT_FILLED = "The form opened without filling."
+PRESS_FAILED = "That press couldn't be saved."
 FILLING = "Filling in the new tab…"
 OPEN_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
@@ -59,10 +64,17 @@ WORDS = {
         "fill again."
     ),
     ("stopped", "too-many-fields"): "stopped: the page had more boxes than a form has, so nothing was filled.",
+    ("stopped", "nothing-to-fill"): "nothing went to the browser: none of your answers could go on this form.",
     ("ended", "browser-removed"): "ended when its browser was removed",
     ("ended", "replaced"): "ended by a newer press",
     ("ended", "submitted"): "ended when you pressed I submitted it",
+    ("ended", "logged-out"): "ended when you logged out all devices",
+    ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
+    ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
+    ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
 }
+ALIKE = "your answer can't be told from another choice"
+CHOICES_CHANGED = "its choices changed"
 
 
 @pytest.fixture
@@ -271,6 +283,18 @@ def test_a_busy_database_says_so_and_leaves_no_ticket(client, conn, paired):
     assert fill_rows(conn) == [] and not held(client)
 
 
+def test_a_press_that_can_t_be_saved_says_so_and_never_the_error(client, conn, paired, monkeypatch):
+    def full(*_):
+        raise sqlcipher3.OperationalError("database or disk is full")
+
+    job = ready_job(conn)
+    monkeypatch.setattr(client.app.state.tickets, "make", full)
+    response = press(client, job)
+    assert response.status_code == 200
+    assert html.unescape(response.text).strip() == html.unescape(status(f"{PRESS_FAILED} {NOT_FILLED}"))
+    assert "disk" not in response.text
+
+
 def test_settings_that_can_t_be_read_refuse_a_press(client, conn, paired, tmp_path):
     job = ready_job(conn)
     (tmp_path / "config.yaml").unlink()
@@ -368,6 +392,217 @@ def test_a_refused_i_submitted_it_ends_nothing(client, door, conn, paired):
     data = {"on": "not a date", "csrf_token": csrf(client)}
     client.post(f"/jobs/{job}/form/submitted", data=data)
     assert fill_rows(conn) == [(0, None, "waiting", None)] and held(client)
+
+
+def test_answers_never_go_out_for_a_job_recorded_while_the_database_was_busy(client, door, conn, paired, monkeypatch):
+    def busy(*_):
+        raise sqlcipher3.OperationalError("database is locked")
+
+    job = ready_job(conn)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    press(client, job)
+    ticket = call(door, START).json()["ticket"]
+    tickets, data = client.app.state.tickets, {"on": date.today().isoformat(), "csrf_token": csrf(client)}
+    with monkeypatch.context() as moment:
+        moment.setattr(tickets, "end_job", busy)
+        assert client.post(f"/jobs/{job}/form/submitted", data=data).status_code == 503
+    assert one(conn, "SELECT count(*) FROM submissions")[0] == 1 and held(client)
+    assert "Already recorded" in client.post(f"/jobs/{job}/form/submitted", data=data).text
+    assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+    assert not held(client) and fill_rows(conn) == [(0, "Laptop Chrome", "ended", "submitted")]
+
+
+# What the trail keeps once a fill ends
+
+
+def ended_by_remove(client, job, browser):
+    client.post(REMOVE, data={"id": str(browser), "csrf_token": csrf(client)})
+
+
+def ended_by_a_new_press(client, job, browser):
+    press(client, job)
+
+
+def ended_by_i_submitted_it(client, job, browser):
+    client.post(f"/jobs/{job}/form/submitted", data={"on": date.today().isoformat(), "csrf_token": csrf(client)})
+
+
+ENDINGS = [
+    (ended_by_remove, "browser-removed"),
+    (ended_by_a_new_press, "replaced"),
+    (ended_by_i_submitted_it, "submitted"),
+]
+
+
+def fill_then(client, door, conn, end, browser, answered):
+    """A fill this browser has started, with or without its answers, ended by `end`; what Settings then says."""
+    job = ready_job(conn)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    press(client, job)
+    ticket = call(door, START).json()["ticket"]
+    if answered:
+        assert send(door, ticket, [NAME_BOX]).json()["go"]
+    end(client, job, browser)
+    return recent_part(client.get(SETTINGS).text)
+
+
+@pytest.mark.parametrize(("end", "stop"), ENDINGS)
+def test_a_fill_that_sent_your_answers_still_says_so_once_it_ends(client, door, conn, paired, end, stop):
+    part = fill_then(client, door, conn, end, paired, answered=True)
+    assert fill_rows(conn)[0] == (0, "Laptop Chrome", "sent", stop)
+    assert WORDS["sent", stop] in part
+
+
+@pytest.mark.parametrize(("end", "stop"), ENDINGS)
+def test_a_fill_that_sent_nothing_never_says_it_did(client, door, conn, paired, end, stop):
+    part = fill_then(client, door, conn, end, paired, answered=False)
+    assert fill_rows(conn)[0] == (0, "Laptop Chrome", "ended", stop)
+    assert WORDS["ended", stop] in part and "your answers went" not in part
+
+
+def test_log_out_all_blames_a_browser_only_for_a_fill_that_had_one(client, door, conn, paired):
+    took = ready_job(conn)
+    nobody = ready_job(conn, "https://jobs.lever.co/acme/1", "Nobody took it")
+    press(client, took)
+    assert call(door, START).status_code == 200
+    press(client, nobody)
+    client.post(LOG_OUT_ALL, data={"csrf_token": csrf(client)}, follow_redirects=False)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "browser-removed"), (0, None, "ended", "logged-out")]
+    assert fills.latest(conn, took)["what"] == WORDS["ended", "browser-removed"]
+    assert fills.latest(conn, nobody)["what"] == WORDS["ended", "logged-out"]
+    log_in(client)
+    assert WORDS["ended", "logged-out"] in box(client, nobody)
+
+
+# A choice goes out only if it is the one you picked
+
+
+def question(labels, kind="single"):
+    return Field(
+        "question_1", "Years of experience", kind, True, "company",
+        choices=tuple(Choice(label, f"v{number}") for number, label in enumerate(labels)),
+    )  # fmt: skip
+
+
+def choice_box(labels, kind="single"):
+    return {
+        "key": "question_1", "label": "Years of experience*", "kind": kind, "required": True,
+        "choices": [{"label": label, "value": label} for label in labels],
+    }  # fmt: skip
+
+
+def fill_choice(client, door, conn, labels, pick, drawn, kind="single"):
+    """A job asking your name and this question with `pick` as your answer, pressed and opened on a form drawing
+    `drawn` choices; what the browser was told."""
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    asked = question(labels, kind)
+    submit.save(conn, job, Form((FIRST_NAME, asked)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    preview.keep(conn, job, asked, pick)
+    assert FILLING in press(client, job).text
+    ticket = call(door, START).json()["ticket"]
+    return send(door, ticket, [NAME_BOX, choice_box(drawn, kind)]).json()
+
+
+def said_about_it(conn):
+    return [change["what"] for change in changes(conn) if change["question"] == "Years of experience"]
+
+
+@pytest.mark.parametrize(
+    ("labels", "pick", "kind", "goes_out"),
+    [
+        (["5", "5+"], "5", "single", "5"),
+        (["5+", "5"], "5+", "single", "5+"),
+        (["<1 year", "1 year", ">1 year"], "<1 year", "single", "<1 year"),
+        (["C", "C++", "C#"], "C++", "multi", ["C++"]),
+        (["A+", "A-"], "A+", "single", "A+"),
+    ],
+)
+def test_choices_that_differ_by_a_symbol_go_out_as_you_picked(client, door, conn, paired, labels, pick, kind, goes_out):
+    answer = fill_choice(client, door, conn, labels, pick, labels, kind)
+    assert answer == {"go": True, "pack": [NAME_PACK, {"key": "question_1", "kind": kind, "value": goes_out}]}
+    assert changes(conn) == []
+
+
+@pytest.mark.parametrize(
+    ("labels", "pick", "drawn"),
+    [(["5", "5+"], "5", ["5+"]), (["<1 year", "1-3"], "<1 year", [">1 year", "1-3"])],
+)
+def test_a_choice_changed_by_a_symbol_is_left_for_you(client, door, conn, paired, labels, pick, drawn):
+    assert fill_choice(client, door, conn, labels, pick, drawn) == {"go": True, "pack": [NAME_PACK]}
+    assert said_about_it(conn) == [CHOICES_CHANGED]
+
+
+def test_two_choices_alike_are_left_for_you(client, door, conn, paired):
+    assert fill_choice(client, door, conn, ["A", "a"], "A", ["A", "a"]) == {"go": True, "pack": [NAME_PACK]}
+    assert said_about_it(conn) == [ALIKE]
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", None)]
+
+
+def test_one_alike_choice_leaves_out_the_whole_multi(client, door, conn, paired):
+    labels = ["Python", "Go", "go"]
+    answer = fill_choice(client, door, conn, labels, "Python\nGo", labels, "multi")
+    assert answer == {"go": True, "pack": [NAME_PACK]}
+    assert said_about_it(conn) == [ALIKE]
+
+
+def test_alike_saved_choices_on_a_box_drawn_with_none_are_left_for_you(client, door, conn, paired):
+    assert fill_choice(client, door, conn, ["A", "a"], "A", []) == {"go": True, "pack": [NAME_PACK]}
+    assert ALIKE in said_about_it(conn)
+
+
+@pytest.mark.parametrize(
+    ("shown", "goes_out"),
+    [("YES, I DO", "YES, I DO"), ("Yes,\xa0I do", "Yes, I do")],  # every label's spacing is tidied
+)
+def test_a_choice_goes_out_as_it_is_drawn(client, door, conn, paired, shown, goes_out):
+    answer = fill_choice(client, door, conn, ["Yes, I do", "No"], "Yes, I do", [shown, "No"])
+    assert answer["pack"][1]["value"] == goes_out and changes(conn) == []
+
+
+def test_a_star_is_part_of_a_choice_so_5_is_not_5_star(client, door, conn, paired):
+    answer = fill_choice(client, door, conn, ["5*", "5"], "5", ["5*", "5"])
+    assert answer["pack"] == [NAME_PACK, {"key": "question_1", "kind": "single", "value": "5"}]
+    assert changes(conn) == []
+
+
+def test_a_star_added_to_a_choice_is_a_change(client, door, conn, paired):
+    assert fill_choice(client, door, conn, ["5", "5+"], "5", ["5*", "5+"]) == {"go": True, "pack": [NAME_PACK]}
+    assert said_about_it(conn) == [CHOICES_CHANGED]
+
+
+def only_alike(conn, job):
+    """A form whose one filled field can't be told from another choice; its box as drawn and what is said about it."""
+    asked = question(["A", "a"])
+    submit.save(conn, job, Form((asked,)), "api")
+    preview.keep(conn, job, asked, "A")
+    return choice_box(["A", "a"]), [{"question": "Years of experience", "what": ALIKE}]
+
+
+def only_in_the_window(conn, job):
+    """A form that matches, with nothing the app fills: you do its one question in the window."""
+    submit.save(conn, job, Form((FIRST_NAME,)), "api")
+    preview.keep(conn, job, FIRST_NAME, match.IN_WINDOW)
+    return NAME_BOX, []
+
+
+@pytest.mark.parametrize("setup", [only_alike, only_in_the_window])
+def test_a_form_with_nothing_of_yours_to_send_says_so_and_ends(client, door, conn, paired, setup):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    shown, said = setup(conn, job)
+    assert FILLING in press(client, job).text
+    ticket = call(door, START).json()["ticket"]
+    assert send(door, ticket, [shown]).json() == {"go": True, "pack": []}
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "nothing-to-fill")]
+    assert changes(conn) == said
+    assert WORDS["stopped", "nothing-to-fill"] in box(client, job)
+    assert refused(send(door, ticket, [shown]), 404, "no-ticket")
+    assert FILLING in press(client, job).text
+    assert fill_rows(conn)[1:] == [(0, None, "waiting", None)]
 
 
 # The box's line about the last fill
