@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Apply",
+  "version": "0.1.0",
+  "description": "Fills a job's form with your saved answers. You check it and press Submit yourself.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://job-boards.greenhouse.io/*",
+    "https://jobs.lever.co/*",
+    "https://jobs.ashbyhq.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Auto Apply" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "content_scripts": [
+    {
+      "matches": ["https://job-boards.greenhouse.io/embed/job_app*"],
+      "js": ["boards/greenhouse.js", "page.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://jobs.lever.co/*/apply*"],
+      "js": ["boards/lever.js", "page.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://jobs.ashbyhq.com/*/application*"],
+      "js": ["boards/ashby.js", "page.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
