@@ -15,7 +15,7 @@ from app.submit import ashby, fill_words, greenhouse, lever
 from app.web import plugin
 
 PLUGIN = Path(__file__).parents[1] / "plugin"
-BACKGROUND, PAGE, POPUP, OPTIONS = "background.js", "page.js", "popup.js", "options.js"
+BACKGROUND, PAGE, WATCH, POPUP, OPTIONS = "background.js", "page.js", "watch.js", "popup.js", "options.js"
 HOSTS = {
     "https://job-boards.greenhouse.io/*",
     "https://jobs.lever.co/*",
@@ -80,7 +80,7 @@ def files(*patterns):
 
 
 def page_side():
-    """Whatever runs on a job's page: page.js and the boards, once they exist."""
+    """Whatever runs on a job's page: page.js, watch.js and the boards, once they exist."""
     return [name for name in files("*.js") if name not in (BACKGROUND, POPUP, OPTIONS)]
 
 
@@ -135,7 +135,7 @@ def test_nothing_is_open_to_pages_or_other_plugins_and_no_id_is_fixed(manifest):
 def test_the_page_part_runs_only_on_form_pages_in_the_top_frame(manifest):
     scripts = manifest["content_scripts"]
     assert [script["matches"] for script in scripts] == [[pattern] for _, pattern in FORM_PAGES.values()]
-    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", PAGE] for site in FORM_PAGES]
+    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", WATCH, PAGE] for site in FORM_PAGES]
     for script in scripts:
         assert set(script) == {"matches", "js", "run_at"} and script["run_at"] == "document_idle"
 
@@ -219,7 +219,10 @@ def test_a_failed_call_keeps_no_error_text():
 
 
 def test_each_part_has_its_own_map_of_handlers():
-    assert handlers("PAGE") == {"open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved"}
+    assert handlers("PAGE") == {
+        "open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved", "watch": "watch",
+        "read": "read",
+    }  # fmt: skip
     assert handlers("POPUP") == {"status": "status", "fill": "fill"}
     assert handlers("OPTIONS") == {"pair": "pair", "paired": "paired"}
 
@@ -287,13 +290,13 @@ def test_no_reply_holds_the_ticket_or_the_key():
 # The page part
 
 
-def page_function(name):
-    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", code(PAGE), re.S | re.M)
+def page_function(name, file=PAGE):
+    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", code(file), re.S | re.M)
     assert found, name
     return found[0]
 
 
-@pytest.mark.parametrize("name", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
+@pytest.mark.parametrize("name", [PAGE, WATCH, *(f"boards/{site}.js" for site in FORM_PAGES)])
 def test_the_page_part_s_files_exist(name):
     assert (PLUGIN / name).is_file()
 
@@ -374,13 +377,15 @@ def test_the_skip_list_names_password_and_the_other_sorts():
 
 
 def test_no_message_from_the_page_carries_an_address():
-    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE))
-    assert len(messages) == 5 and code(PAGE).count("sendMessage(") == 1  # moved, open, form, file, done
+    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE) + code(WATCH))
+    assert len(messages) == 8  # moved, open, form, file, done, watch, and a read of each sort
+    assert code(PAGE).count("sendMessage(") == 1 and "sendMessage(" not in code(WATCH)
     assert [message for message in messages if re.search(r"address|location|href", message)] == []
 
 
 def test_the_page_part_never_looks_outside_its_own_frame():
-    assert [word for word in ("window.top", "parent.", "contentWindow", "contentDocument") if word in code(PAGE)] == []
+    words = ("window.top", "parent.", "contentWindow", "contentDocument")
+    assert [(name, word) for name in page_side() for word in words if word in code(name)] == []
 
 
 def test_tidy_takes_out_the_same_characters_as_the_app():
@@ -422,6 +427,182 @@ def test_a_line_that_holds_a_rule_is_still_there(name, line):
 
 
 # The popup and the options page
+
+
+# The watcher
+
+
+def top_level_names(name):
+    return set(re.findall(r"^(?:const|let|function|async function) (\w+)", code(name), re.M))
+
+
+def word_test():
+    found = re.search(r"^const SEND_WORDS = /(.*)/i;$", code(WATCH), re.M)
+    assert found
+    return re.compile(found[1], re.I)
+
+
+def listener(event):
+    """A chrome.tabs listener's whole body, which must start at the top level or a sleeping worker never hears it."""
+    found = re.search(rf"^chrome\.tabs\.{event}\.addListener\(.*?^\}}\);$", code(BACKGROUND), re.S | re.M)
+    assert found, event
+    return found[0]
+
+
+@pytest.mark.parametrize(
+    "word", [".click(", "dispatchEvent", "preventDefault", "stopPropagation", "stopImmediatePropagation", "submit("]
+)
+def test_the_watcher_can_t_press_block_or_delay_anything(word):
+    assert word not in code(WATCH)
+
+
+def test_the_watcher_says_so_at_its_top():
+    assert "presses, blocks and delays nothing" in (PLUGIN / WATCH).read_text("utf-8").splitlines()[1]
+
+
+def test_the_watcher_only_defines_things_as_it_loads_before_page_js():
+    lines = [line for line in code(WATCH).splitlines() if line and not line.startswith((" ", "}", ")"))]
+    assert lines and [line for line in lines if not re.match(r"(?:const|let|function|async function) ", line)] == []
+    assert "new Set(" in code(WATCH) and not re.search(r"^const \w+ = (?!\(|/|new Set\(|\d)", code(WATCH), re.M)
+
+
+@pytest.mark.parametrize("other", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
+def test_no_top_level_name_is_shared_with_another_page_file(other):
+    assert not top_level_names(WATCH) & top_level_names(other)  # they share one scope: a repeat would stop the file
+
+
+def test_page_js_starts_the_watcher_once_after_the_fill_and_it_can_t_report_a_stop():
+    run = page_function("run")
+    assert code(PAGE).count("watch()") == 1 and "await watch().catch(() => {});" in run
+    assert run.index("finally") < run.index("watch()")
+    assert run.splitlines()[-2] == "  await watch().catch(() => {});"
+
+
+def test_only_a_trusted_click_counts_and_that_is_looked_at_first():
+    assert [name for name in files("*.js") if "isTrusted" in code(name)] == [WATCH]
+    assert page_function("heard", WATCH).splitlines()[1] == "  if (!event.isTrusted) return;"
+
+
+def test_one_click_listener_in_the_capture_phase():
+    assert [name for name in page_side() if 'addEventListener("click"' in code(name)] == [WATCH]
+    assert code(WATCH).count('addEventListener("click"') == 1
+    assert 'document.addEventListener("click", heard, true);' in page_function("watch", WATCH)
+
+
+def test_a_press_is_read_at_once_and_a_lost_message_is_quiet():
+    heard = page_function("heard", WATCH)
+    assert "await" not in heard and "async" not in heard
+    assert 'ask({ do: "read", state: "clicked", values: readForm(formRoot) }).catch(() => {});' in heard
+
+
+def test_a_press_must_be_on_a_control_inside_the_form():
+    heard = page_function("heard", WATCH)
+    assert "event.composedPath().find(isControl)" in heard and "formRoot?.contains(control)" in heard
+    assert "SEND_WORDS.test(wordsOf(control))" in heard
+    assert "tidy([control.textContent, control.value" in code(WATCH)  # words over two lines are still one phrase
+    for tag in ("BUTTON", "INPUT", "A"):
+        assert f'"{tag}"' in code(WATCH)
+    assert 'getAttribute?.("role") === "button"' in code(WATCH) and '["submit", "button"]' in code(WATCH)
+
+
+@pytest.mark.parametrize(
+    ("words", "counts"),
+    [
+        ("Submit", True), ("Submit application", True), ("SUBMIT YOUR APPLICATION", True), ("Send application", True),
+        ("Send my application", True), ("Send", False), ("Application", False),
+        ("Subscribe", False), ("Resubmit", False), ("Next", False), ("Save", False),
+    ],
+)  # fmt: skip
+def test_the_words_of_a_press(words, counts):
+    assert bool(word_test().search(words)) is counts
+
+
+def test_a_read_goes_through_boxes_and_skips_what_it_must():
+    read = page_function("readForm", WATCH)
+    assert "boxes(root)" in read and "box.matches(DROPDOWN)" in read and "SECRET_BOXES.has(box.autocomplete)" in read
+    assert "list.some(" in read  # one such box in a group is enough
+    assert read.index("continue") < read.index("shownValue")
+    assert 'cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list))' in read
+    assert set(re.findall(r'"([\w-]+)"', re.search(r"^const SECRET_BOXES = .*$", code(WATCH), re.M)[0])) == {
+        "current-password", "new-password", "one-time-code",
+    }  # fmt: skip
+    assert "querySelector" not in code(WATCH) and "innerText" not in code(WATCH)
+
+
+def test_one_watcher_at_a_time_and_only_on_the_page_it_landed_on():
+    watch = page_function("watch", WATCH)
+    assert watch.index("lastKept = undefined;") < watch.index("if (watching) return;")
+    assert watch.index("if (watching) return;") < watch.index("watching = true;") < watch.index("await")
+    assert watch.index("location.href !== landedAt()") < watch.index('ask({ do: "watch" })')
+    assert 'ask({ do: "watch" }))?.on' in watch and "finally" in watch and "watching = false;" in watch
+    assert watch.index("await quiet();") < watch.index("formRoot = rootOf(anchored());")
+    assert "while (await look()) await wait(REREAD_MS);" in watch and "const REREAD_MS = 5000;" in code(WATCH)
+
+
+def test_a_look_stops_where_it_must_and_sends_only_what_changed():
+    look = page_function("look", WATCH)
+    assert look.splitlines()[1] == "  if (location.href !== landedAt()) return false;"
+    assert look.index("isConnected") < look.index("readForm(formRoot)")
+    assert "if (!formRoot) return true;" in look
+    assert look.index("=== lastKept") < look.index('ask({ do: "read", state: "reread", values })')
+    assert "if (reply?.stop) return false;" in look and "if (reply?.kept) lastKept = sent;" in look
+
+
+def test_the_background_starts_a_watcher_only_for_a_fill_that_is_out():
+    watch = function("watch")
+    assert "record?.ticket" in watch and "record.answered" in watch and "await onForm(tabId, record)" in watch
+    assert "call(" not in watch
+
+
+def test_a_read_is_checked_before_it_is_sent():
+    read = function("read")
+    first = read.index("call(")
+    for check in ("!record?.ticket", 'READ_STATES.has(state)', "Array.isArray(values)", "sender.url === record.address",
+                  "await onForm(tabId, record)"):  # fmt: skip
+        assert read.index(check) < first, check
+    assert read.count("{ stop: true }") == 4
+    assert "if (latest?.ticket !== record.ticket) return { stop: true };" in read
+    assert re.search(r'^const READ_STATES = new Set\(\["reread", "clicked"\]\);$', code(BACKGROUND), re.M)
+    assert 'state === "clicked" ? sender.url === record.address : await onForm(tabId, record)' in read
+
+
+def test_what_a_read_keeps_of_how_it_went():
+    read = function("read")
+    assert 'answer.body.error === "no-ticket"' in read
+    assert "{ ticket: record.ticket, state, values, left: [] }" in read
+    assert "unsaved: true" in read and "unsaved: false" in read and "looks: true" in read and "{ kept: true }" in read
+    assert read.index("await call(") < read.index("await recordOf(tabId);", read.index("await call("))
+
+
+def test_a_tab_that_left_says_gone_and_nothing_else():
+    assert '{ ticket: record.ticket, state: "gone", values: [], left: [] }' in function("leftForm")
+    assert "record?.ticket" in function("leftForm")
+
+
+def test_closing_the_tab_says_so_and_forgets_its_record():
+    removed = listener("onRemoved")
+    assert removed.index("leftForm(tabId)") < removed.index("chrome.storage.session.remove(recordName(tabId))")
+
+
+def test_leaving_the_address_says_so_and_a_reload_doesn_t():
+    updated = listener("onUpdated")
+    assert "if (!change.url && !change.status) return;" in updated
+    assert "if (!record?.ticket || tab.url === record.address) return;" in updated
+
+
+def test_leaving_never_wipes_a_ticket_the_tab_took_meanwhile():
+    updated = listener("onUpdated")
+    left = updated.index("await leftForm(tabId);")
+    assert left < updated.index("const latest = await recordOf(tabId);") < updated.index("keep(tabId,")
+    assert "if (latest?.ticket === record.ticket) await keep(tabId," in updated
+    assert "keep(tabId, { address: latest.address, said: latest.said })" in updated
+
+
+def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():
+    popup = code(POPUP)
+    assert "It looks sent: press I submitted it in the dashboard." in popup
+    assert "The latest read of this form couldn't be saved: the record keeps the last good one." in popup
+    assert "said.looks" in popup and "said.unsaved" in popup
 
 
 def test_the_popup_says_where_a_fill_may_have_gone_and_what_filling_shares():

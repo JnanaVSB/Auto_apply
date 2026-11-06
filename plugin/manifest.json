@@ -17,17 +17,17 @@
   "content_scripts": [
     {
       "matches": ["https://job-boards.greenhouse.io/embed/job_app*"],
-      "js": ["boards/greenhouse.js", "page.js"],
+      "js": ["boards/greenhouse.js", "watch.js", "page.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://jobs.lever.co/*/apply*"],
-      "js": ["boards/lever.js", "page.js"],
+      "js": ["boards/lever.js", "watch.js", "page.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["https://jobs.ashbyhq.com/*/application*"],
-      "js": ["boards/ashby.js", "page.js"],
+      "js": ["boards/ashby.js", "watch.js", "page.js"],
       "run_at": "document_idle"
     }
   ]
