@@ -104,7 +104,7 @@ Some things stay on the laptop:
 - **Connecting Gmail.** Google sends you back to the laptop's own address, so Connect is refused on the phone. Sync,
   Disconnect and the rest of Settings → Gmail work.
 - **Changing the phone address.** The phone shows it but can't change it.
-- **Filling a form in a browser window**, when the app has it, happens on the laptop.
+- **Filling a form with the browser plugin** happens on the laptop.
 
 On a phone, a long Tracker lane comes 100 cards at a time, and the "Which job" list on E-mails to check opens when you press
 it.

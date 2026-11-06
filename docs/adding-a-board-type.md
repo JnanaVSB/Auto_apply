@@ -95,6 +95,23 @@ Add at least:
 - an empty board means "no openings";
 - `api_url` gives the exact address.
 
+## A site's thank-you sign
+This part is for a site the browser plugin can fill, not for a new board. The plugin can record an application by itself
+once it knows how a site says thank you. Every site ships with this off.
+
+To switch a site on, set `thanks` on `DRAWN` in the site's own file in `app/submit/`:
+
+```python
+DRAWN = Drawn(thanks=Thanks(path="/thanks"))
+```
+
+- `path` is how the address ends after a real Submit, on the same host.
+- `selector` and `words` are for a thank-you shown on the same address: an element that holds those words.
+
+Take the sign only from a real application you saw yourself, never from a guess: a wrong sign can write a record that
+can't be erased. The test `test_every_site_ships_off` holds all three sites off, so switching one on means changing that
+test too.
+
 Run everything before asking for review:
 
 ```bash

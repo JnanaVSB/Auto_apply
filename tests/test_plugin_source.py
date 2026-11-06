@@ -520,7 +520,15 @@ def test_the_words_of_a_press(words, counts):
 
 def test_a_read_goes_through_boxes_and_skips_what_it_must():
     read = page_function("readForm", WATCH)
-    assert "boxes(root)" in read and "box.matches(DROPDOWN)" in read and "SECRET_BOXES.has(box.autocomplete)" in read
+    assert "boxes(root)" in read and "isSecret(box) || box.matches(DROPDOWN)" in read
+    assert (
+        "const isSecret = (box) => SECRET_BOXES.has(box.autocomplete) || SECRET_QUESTION.test(question(box));"
+        in code(WATCH)
+    )
+    assert "const SECRET_QUESTION = /password/i;" in code(WATCH)
+    assert 'const unpicked = list[0].tagName === "SELECT" && !list[0].value;' in read
+    assert 'unpicked ? "" : cut(shownValue(' in read
+    assert "unpicked" not in code(PAGE)  # the fill's own read-back keeps what shownValue says
     assert "list.some(" in read  # one such box in a group is enough
     assert read.index("continue") < read.index("shownValue")
     assert 'cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list))' in read
@@ -701,6 +709,37 @@ def test_the_popup_says_a_read_in_plain_words():
     assert 'record?.mode === "read" ? "reading" : "filling"' in function("status")
     assert "Reading this form…" in code(POPUP)
     assert "The form was read. Go back to the job's box and reload it." in code(POPUP)
+
+
+# The guide
+
+
+def guide():
+    return " ".join((PLUGIN.parent / "docs" / "submitting.md").read_text("utf-8").split())
+
+
+def test_the_guide_opens_with_what_to_read_before_a_first_fill():
+    text = guide()
+    opening, _, rest = text.partition("## Read this before your first fill")
+    first, _, _ = rest.partition("## ")
+    assert rest and "##" not in opening
+    for number, words in enumerate(
+        (
+            "Fill only jobs you would apply to",
+            "close other tabs on that same site",
+            "Load a copy of the plugin",
+            "a Chrome profile that holds only this plugin",
+            "The key sits unencrypted",
+            "Fixes don't arrive by themselves",
+        ),
+        start=1,
+    ):
+        assert f"{number}. **" in first and words in first
+
+
+@pytest.mark.parametrize("word", ["Fill in browser", ".claude", "Claude", " AI "])
+def test_the_guide_is_for_the_public(word):
+    assert word not in guide()
 
 
 def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():

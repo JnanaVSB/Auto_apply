@@ -316,6 +316,7 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 - The Laptop council sends nothing anywhere. A paid council sends the job ad and your resume and Profile text to
   Anthropic or OpenAI, with your name and contact details replaced by placeholders first; they are put back only
   on this computer, when the PDF is built.
+- The browser plugin fills a job's form and never presses Submit: read [docs/submitting.md](docs/submitting.md) first.
 - The app runs on your own computer. [docs/cloud-checklist.md](docs/cloud-checklist.md) lists what would have to be
   true before running it on a cloud computer; nothing in it is built.
 

@@ -3,6 +3,7 @@
 const REREAD_MS = 5000;
 const SEND_WORDS = /\bsubmit\b|\bsend\b.*\bapplication\b/i;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
+const SECRET_QUESTION = /password/i;
 const THANKS_LOOKS = 60;
 const THANKS_MS = 1000;
 
@@ -18,12 +19,16 @@ const isControl = (node) =>
   node.getAttribute?.("role") === "button";
 const wordsOf = (control) => tidy([control.textContent, control.value, control.getAttribute("aria-label")].join(" "));
 
-// A custom drop-down's text box doesn't hold the pick, so "empty" would be false.
+const isSecret = (box) => SECRET_BOXES.has(box.autocomplete) || SECRET_QUESTION.test(question(box));
+
+// A custom drop-down's text box doesn't hold the pick, so "empty" would be false. A select on its placeholder is empty.
 function readForm(root) {
   const values = [];
   for (const [key, list] of boxes(root)) {
-    if (list.some((box) => SECRET_BOXES.has(box.autocomplete) || box.matches(DROPDOWN))) continue;
-    values.push({ key, value: cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list)) });
+    if (list.some((box) => isSecret(box) || box.matches(DROPDOWN))) continue;
+    const unpicked = list[0].tagName === "SELECT" && !list[0].value;
+    const value = unpicked ? "" : cut(shownValue({ key, kind: kindOf(key, list[0]), value: "ticked" }, list));
+    values.push({ key, value });
   }
   return values;
 }
