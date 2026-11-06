@@ -40,11 +40,14 @@ class Choice:
         object.__setattr__(self, "label", _line(self.label, MAX_CHOICE))
 
 
+FIELD_KINDS = frozenset({"text", "long_text", "single", "multi", "file", "location", "consent", "hidden", "unknown"})
+
+
 @dataclass(frozen=True)
 class Field:
     key: str  # the site's own field name
     label: str  # the question, as the form words it
-    kind: str  # text, long_text, single, multi, file, location, consent, hidden or unknown
+    kind: str  # one of FIELD_KINDS
     required: bool
     part: str  # standard, company, location, eeo, demographic, privacy or education
     help: str = ""
@@ -77,13 +80,13 @@ class Form:
 
 @dataclass(frozen=True)
 class Drawn:
-    """What a site's form shows once a browser draws it, where that differs from what the app read."""
+    """What a site's form shows once a browser draws it, where that differs from what the app read. A file box's words
+    differ on every site, so that isn't here: it is checked by its key and kind alone."""
 
-    undrawn: frozenset[str]  # saved keys that may not be drawn
-    undrawn_starts: tuple[str, ...]  # the same, by how the key begins
-    unlisted: frozenset[str]  # drawn keys the read doesn't list
-    hidden_choices: bool  # a drop-down's choices are drawn only once it is opened
-    file_checks: tuple[str, ...]  # a file box is matched by its key, then checked only by these: its words differ
+    undrawn: frozenset[str] = frozenset()  # saved keys that may not be drawn
+    undrawn_starts: tuple[str, ...] = ()  # the same, by how the key begins
+    unlisted: frozenset[str] = frozenset()  # drawn keys the read doesn't list
+    hidden_choices: bool = False  # a drop-down's choices are drawn only once it is opened
 
 
 def fingerprint(form: Form) -> str:

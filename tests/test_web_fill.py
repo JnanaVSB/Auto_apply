@@ -63,7 +63,10 @@ WORDS = {
         "stopped: the page didn't look like this job's form, so nothing was filled. Check the tab, then press Open and "
         "fill again."
     ),
-    ("stopped", "too-many-fields"): "stopped: the page had more boxes than a form has, so nothing was filled.",
+    ("stopped", "too-many-fields"): (
+        "stopped: the page had more boxes than a form has, so nothing was filled. Check the tab, then press Open and "
+        "fill again."
+    ),
     ("stopped", "nothing-to-fill"): "nothing went to the browser: none of your answers could go on this form.",
     ("ended", "browser-removed"): "ended when its browser was removed",
     ("ended", "replaced"): "ended by a newer press",
@@ -73,7 +76,7 @@ WORDS = {
     ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
 }
-ALIKE = "your answer can't be told from another choice"
+ALIKE = "two choices look the same, so pick yours on the form"
 CHOICES_CHANGED = "its choices changed"
 
 

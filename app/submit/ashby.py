@@ -3,4 +3,4 @@
 from app.submit import Drawn
 
 FORM_PAGE = "https://jobs.ashbyhq.com/{}/{}/application"
-DRAWN = Drawn(frozenset(), (), frozenset(), hidden_choices=False, file_checks=("kind",))
+DRAWN = Drawn()

@@ -1,17 +1,13 @@
 """A fill (Phase 7): one press of Open and fill or the plugin's toolbar. Here are the form's address, the rules for a
-fill, the `fills` row that counts it (what the daily cap and the pause read), its ticket, the one-time pass a browser
-needs to start, and what goes out: the form as the browser shows it is compared field by field with the saved read, and
-only your own answers to what passed go in the pack. A value never comes from the page, except a choice's spelling,
-taken only once it has matched yours exactly, so the compare can only remove lines. Tickets live in memory: stopping the
-dashboard ends them all, and the rows stay."""
+fill, the `fills` row that counts it (what the daily cap and the pause read), its ticket and the one-time pass a browser
+needs to start. Tickets live in memory: stopping the dashboard ends them all, and the rows stay."""
 
 import json
 import math
 import secrets
 import time
-from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,30 +15,13 @@ import sqlcipher3
 
 from app.collect import now
 from app.config import Config
-from app.questionnaire import spelled
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import Choice, Drawn, Field, ashby, distinct, greenhouse, lever, match, record
-from app.submit.preview import Preview
+from app.submit import MAX_FIELDS, ashby, compare, greenhouse, lever, preview, record
 
 SITES = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
-MAX_KEY = 1_000  # characters
-MAX_CHANGES = 100
-KINDS = frozenset({"text", "long_text", "single", "multi", "file", "location", "consent", "hidden", "unknown"})
-GONE, ADDED, UNCHECKED = "no longer on the form", "new on the form", "wasn't checked"
-FILE_UNCHECKED = "its words and whether it's required weren't checked"
-CHOICES_UNCHECKED = "its choices weren't checked"
-ALIKE = "your answer can't be told from another choice"
-# Each check of a saved field against the drawn one with the same key, and what is said if it fails. Help, file types,
-# the form's part and choices' values aren't here: they aren't reliably drawn, and a value is the site's own code
-CHECKS = {
-    "label": (lambda saved, drawn: _question(saved.label) == _question(drawn.label), "the question's words changed"),
-    "kind": (lambda saved, drawn: saved.kind == drawn.kind, "the kind of box changed"),
-    "required": (lambda saved, drawn: saved.required == drawn.required, "whether it's required changed"),
-    "choices": (lambda saved, drawn: _choices(saved) == _choices(drawn), "its choices changed"),
-}
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 AT_LINK = "SELECT id, open_manually_only FROM jobs WHERE apply_url = ?"
@@ -57,29 +36,35 @@ NEW = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state
 # started_on stays, so the pause doesn't move; a later button press never hides that a toolbar pressed, or which browser
 REUSE = "UPDATE fills SET toolbar = max(toolbar, ?), browser = coalesce(?, browser) WHERE id = ?"
 STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
+# A row that had its answers stays `sent`, whatever ended it
 ENDED = "UPDATE fills SET state = iif(state = 'sent', 'sent', 'ended'), stop_kind = ? WHERE id = ?"
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes FROM fills WHERE job_id = ?
     ORDER BY id DESC LIMIT 1"""
 RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
     jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id ORDER BY fills.id DESC LIMIT ?"""
+UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
+BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
 HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
     ("waiting", None): "no browser has opened it yet",
     ("started", None): "opened in a browser",
     ("sent", None): "your answers went to the browser",
-    ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
-    ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
-    ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
-    ("stopped", "unexpected-page"): (
+    ("sent", BROWSER_REMOVED): "your answers went to the browser, then it was removed",
+    ("sent", REPLACED): "your answers went to the browser, then a newer press ended the fill",
+    ("sent", SUBMITTED): "your answers went to the browser, then you pressed I submitted it",
+    ("stopped", UNEXPECTED_PAGE): (
         "stopped: the page didn't look like this job's form, so nothing was filled. Check the tab, then press Open and "
         "fill again."
     ),
-    ("stopped", "too-many-fields"): "stopped: the page had more boxes than a form has, so nothing was filled.",
-    ("stopped", "nothing-to-fill"): "nothing went to the browser: none of your answers could go on this form.",
-    ("ended", "browser-removed"): "ended when its browser was removed",
-    ("ended", "replaced"): "ended by a newer press",
-    ("ended", "submitted"): "ended when you pressed I submitted it",
-    ("ended", "logged-out"): "ended when you logged out all devices",
+    ("stopped", TOO_MANY_FIELDS): (
+        "stopped: the page had more boxes than a form has, so nothing was filled. Check the tab, then press Open and "
+        "fill again."
+    ),
+    ("stopped", NOTHING_TO_FILL): "nothing went to the browser: none of your answers could go on this form.",
+    ("ended", BROWSER_REMOVED): "ended when its browser was removed",
+    ("ended", REPLACED): "ended by a newer press",
+    ("ended", SUBMITTED): "ended when you pressed I submitted it",
+    ("ended", LOGGED_OUT): "ended when you logged out all devices",
 }
 
 
@@ -109,7 +94,7 @@ def job_at(conn: sqlcipher3.Connection, address: str) -> int | None:
     return row[0]
 
 
-def why_not(conn: sqlcipher3.Connection, job: dict, found: Preview | None, limits: Config) -> str | None:
+def why_not(conn: sqlcipher3.Connection, job: dict, found: preview.Preview | None, limits: Config) -> str | None:
     """None if the job can be filled now, else why not: a plain sentence, or "" where the box shows no button and says
     nothing new. `found` is the job's preview. The box, the press and /plugin/fill all ask here."""
     if form_address(job) is None or found is None or record.recorded(conn, job["id"]):
@@ -136,56 +121,8 @@ def why_not(conn: sqlcipher3.Connection, job: dict, found: Preview | None, limit
     return None
 
 
-def drawn(items: list) -> tuple[Field, ...]:
-    """The fields a browser says the form shows, hostile until checked: anything wrong raises ValueError for the whole
-    list. Built as Fields, so their limits apply; hidden ones are dropped, and a repeated key keeps the first."""
-    fields = [_drawn_field(item) for item in items]
-    return distinct([found for found in fields if found.kind != "hidden"])[0]
-
-
-def compare(
-    lines: tuple[match.Line, ...], fields: tuple[Field, ...], board: Drawn
-) -> tuple[list[tuple[match.Line, Field]], list[dict]]:
-    """The lines whose saved field passed, each with its drawn field (given the saved choices if drawn without any),
-    and what to tell you about the rest: each difference as {"question", "what"}. Any saved field that fails is left for
-    you, that field alone."""
-    shown = {found.key: found for found in fields}
-    passed, changes = [], []
-    for line in lines:
-        saved = line.field
-        if saved.kind == "hidden":
-            continue
-        found = shown.get(saved.key)
-        if found is None:
-            undrawn = saved.key in board.undrawn or saved.key.startswith(board.undrawn_starts)
-            changes.append(_change(saved, UNCHECKED if undrawn else GONE))
-            continue
-        unseen = board.hidden_choices and found.kind in ("single", "multi") and not found.choices
-        as_seen = replace(found, choices=saved.choices) if unseen else found
-        names = board.file_checks if saved.kind == "file" else CHECKS
-        wrong = [CHECKS[name][1] for name in names if not CHECKS[name][0](saved, as_seen)]
-        changes += [_change(saved, what) for what in wrong]
-        if wrong:
-            continue
-        passed.append((line, as_seen))
-        if saved.kind == "file" or unseen:
-            changes.append(_change(saved, FILE_UNCHECKED if saved.kind == "file" else CHOICES_UNCHECKED))
-        if line.status == "fill" and saved.kind in ("single", "multi") and _labels(line, as_seen) is None:
-            changes.append(_change(saved, ALIKE))
-    saved_keys = {line.field.key for line in lines}
-    changes += [
-        _change(found, UNCHECKED if found.key in board.unlisted else ADDED)
-        for found in fields
-        if found.key not in saved_keys
-    ]
-    return passed, _at_most(changes)
-
-
-def pack(passed: list[tuple[match.Line, Field]], documents: dict[str, tuple[str, Path] | None]) -> list[dict]:
-    """What goes to the browser: only what passed and is yours to fill, and a PDF only by its slot, never its path.
-    `documents` is record.documents()."""
-    values = [(line.field, _value(line, found, documents)) for line, found in passed if line.status == "fill"]
-    return [{"key": saved.key, "kind": saved.kind, "value": value} for saved, value in values if value is not None]
+class BadForm(Exception):  # noqa: N818 (a refusal)
+    """The list a browser sent can't be read."""
 
 
 @dataclass
@@ -213,7 +150,7 @@ class Tickets:
         self,
         conn: sqlcipher3.Connection,
         job: dict,
-        found: Preview | None,
+        found: preview.Preview | None,
         limits: Config,
         browser_id: int | None = None,
         name: str | None = None,
@@ -228,7 +165,7 @@ class Tickets:
         toolbar, unused = browser_id is not None, _unused(conn, job["id"], moment)
         with conn:
             if old and old.taken:
-                conn.execute(ENDED, ("replaced", old.fill))
+                conn.execute(ENDED, (REPLACED, old.fill))
             if unused is None:
                 fill = conn.execute(NEW, (job["id"], address, moment, toolbar, name)).lastrowid
             else:
@@ -258,7 +195,36 @@ class Tickets:
                 return ticket
         return None
 
-    def answered(
+    def answer(self, conn: sqlcipher3.Connection, data_dir: Path, ticket: Ticket, items: list) -> list[dict] | None:
+        """What goes to the browser, from the fields it says the form shows; None for a stop, and an empty list when
+        the form matched with nothing to fill. Every ending is saved here. BadForm if the list can't be read."""
+        if len(items) > MAX_FIELDS:  # none of them is read
+            self.save_answer(conn, ticket, [], TOO_MANY_FIELDS)
+            return None
+        try:
+            fields = compare.fields_from(items)
+        except ValueError:
+            raise BadForm from None
+        found = preview.preview(conn, data_dir, ticket.job)
+        passed, changes = compare.compare(found.lines if found else (), fields, SITES[ticket.site].DRAWN)
+        if not passed:
+            self.save_answer(conn, ticket, changes, UNEXPECTED_PAGE)
+            return None
+        answers = compare.pack(passed, record.documents(conn, data_dir, ticket.job))
+        # the trail first: if this can't be saved, nothing goes out
+        self.save_answer(conn, ticket, changes, None if answers else NOTHING_TO_FILL)
+        return answers
+
+    def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
+        """Whether the job has its record, which ends the ticket: a busy database can save "I submitted it" and not end
+        its fill."""
+        if not record.recorded(conn, ticket.job):
+            return False
+        with conn:
+            self.end_job(conn, ticket.job)
+        return True
+
+    def save_answer(
         self, conn: sqlcipher3.Connection, ticket: Ticket, changes: list[dict], stop: str | None = None
     ) -> None:
         """Saves how the browser's answer ended, before it goes out: a busy database raises and uses nothing up. `stop`
@@ -272,25 +238,21 @@ class Tickets:
 
     def end_browser(self, conn: sqlcipher3.Connection, browser_id: int) -> None:
         """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser."""
-        self._end(conn, [ticket for ticket in self._live().values() if ticket.browser == browser_id], "browser-removed")
+        self._end(conn, [(ticket, BROWSER_REMOVED) for ticket in self._live().values() if ticket.browser == browser_id])
 
     def end_all(self, conn: sqlcipher3.Connection) -> None:
         """Every ticket, for "Log out all devices"; a button ticket nobody took never had a browser to remove."""
-        kinds = [
-            ("logged-out" if ticket.browser is None else "browser-removed", ticket.fill)
-            for ticket in self._live().values()
-        ]
-        conn.executemany(ENDED, kinds)
-        self.tickets.clear()
+        live = self._live().values()
+        self._end(conn, [(ticket, LOGGED_OUT if ticket.browser is None else BROWSER_REMOVED) for ticket in live])
 
     def end_job(self, conn: sqlcipher3.Connection, job_id: int) -> None:
         """The job's ticket, if it has one, at "I submitted it"."""
         ticket = self._live().get(job_id)
-        self._end(conn, [ticket] if ticket else [], "submitted")
+        self._end(conn, [(ticket, SUBMITTED)] if ticket else [])
 
-    def _end(self, conn: sqlcipher3.Connection, ended: list[Ticket], kind: str) -> None:
-        conn.executemany(ENDED, [(kind, ticket.fill) for ticket in ended])
-        for ticket in ended:
+    def _end(self, conn: sqlcipher3.Connection, ended: list[tuple[Ticket, str]]) -> None:
+        conn.executemany(ENDED, [(kind, ticket.fill) for ticket, kind in ended])
+        for ticket, _ in ended:
             del self.tickets[ticket.job]
 
     def _live(self) -> dict[int, Ticket]:
@@ -320,84 +282,6 @@ def _plain(row: tuple) -> dict:
         "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
         "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
     }  # fmt: skip
-
-
-def _drawn_field(item: object) -> Field:
-    if not isinstance(item, dict):
-        raise ValueError("not an object")
-    key, label, kind, required = (item.get(name) for name in ("key", "label", "kind", "required"))
-    choices, accept = item.get("choices", []), item.get("accept", [])
-    if not (isinstance(key, str) and 1 <= len(key) <= MAX_KEY and isinstance(label, str)):
-        raise ValueError("a bad key or label")
-    if not (isinstance(kind, str) and kind in KINDS and isinstance(required, bool)):
-        raise ValueError("a bad kind or required mark")
-    if not (isinstance(choices, list) and all(map(_is_choice, choices))):
-        raise ValueError("bad choices")
-    if not (isinstance(accept, list) and all(isinstance(text, str) for text in accept)):
-        raise ValueError("bad file types")
-    return Field(
-        key,
-        label,
-        kind,
-        required,
-        "drawn",
-        choices=tuple(Choice(c["label"], c["value"]) for c in choices),
-        accept=accept,
-    )
-
-
-def _is_choice(item: object) -> bool:
-    return isinstance(item, dict) and isinstance(item.get("label"), str) and isinstance(item.get("value"), str)
-
-
-def _question(text: str) -> str:
-    """A question's words as the compare reads them: required marks at the end don't count, where on a choice a star is
-    part of the choice."""
-    return spelled(text).rstrip(" *✱")
-
-
-def _choices(found: Field) -> Counter[str]:
-    return Counter(spelled(choice.label) for choice in found.choices)
-
-
-def _labels(line: match.Line, found: Field) -> list[str] | None:
-    """The chosen labels as drawn; None unless each one is exactly one drawn choice."""
-    labels = []
-    for value in line.value:
-        wanted = spelled(line.field.labels[value])
-        alike = [choice.label for choice in found.choices if spelled(choice.label) == wanted]
-        if len(alike) != 1:
-            return None
-        labels += alike
-    return labels
-
-
-def _change(found: Field, what: str) -> dict:
-    return {"question": found.label, "what": what}
-
-
-def _at_most(changes: list[dict]) -> list[dict]:
-    """The first MAX_CHANGES, then how many more, so the list never looks complete when it isn't."""
-    if len(changes) <= MAX_CHANGES:
-        return changes
-    return [*changes[:MAX_CHANGES], {"question": f"{len(changes) - MAX_CHANGES:,} more", "what": "not shown here"}]
-
-
-def _value(
-    line: match.Line, found: Field, documents: dict[str, tuple[str, Path] | None]
-) -> str | list[str] | dict[str, str] | None:
-    """The line's value as it goes out, None if it can't go; a choice by its label as drawn, and only one that can be
-    told from the others."""
-    saved = line.field
-    if saved.kind == "file":
-        slots = [slot for slot, document in documents.items() if document and str(document[1]) == line.value]
-        return {"slot": slots[0]} if slots else None
-    if saved.kind == "consent":
-        return match.TICKED if line.value == match.TICKED else None
-    if saved.kind not in ("single", "multi"):
-        return line.value
-    labels = _labels(line, found)
-    return labels[0] if labels and saved.kind == "single" else labels
 
 
 def _unused(conn: sqlcipher3.Connection, job_id: int, moment: str) -> int | None:

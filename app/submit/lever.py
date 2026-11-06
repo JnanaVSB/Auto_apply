@@ -10,7 +10,7 @@ from app.fetch import Fetcher, FetchError, Moved, NotFound
 from app.submit import BROKEN, Choice, Drawn, Field, Form, FormClosed, FormError, distinct
 
 FORM_PAGE = "https://jobs.lever.co/{}/{}/apply"
-DRAWN = Drawn(frozenset(), (), frozenset(), hidden_choices=False, file_checks=("kind",))
+DRAWN = Drawn()
 STANDARD = {  # Lever's own inputs, by name
     "name": "text", "email": "text", "phone": "text", "location": "location", "org": "text", "comments": "long_text",
     "resume": "file", "pronouns": "multi",

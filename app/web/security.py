@@ -102,7 +102,8 @@ class Logins:
 
     def live(self) -> bool:
         """Whether anyone is logged in now. It only looks, so the plugin can never keep a login alive."""
-        return not all(map(self._ended, list(self.sessions.values())))  # a copy: a login can land from its thread
+        # a copy: a login can land from its thread
+        return any(not self._ended(session) for session in list(self.sessions.values()))
 
     def _ended(self, session: Session) -> bool:
         now = self.clock()

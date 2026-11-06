@@ -1,5 +1,6 @@
-"""The browser plugin's door (/plugin/), kept apart from main.py: a key and a pinned plugin in place of a login. It
-reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages out."""
+"""The browser plugin's door (/plugin/) and its routes, kept apart from main.py: a key and a pinned plugin in place of a
+login. It reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages
+out."""
 
 import hashlib
 import hmac
@@ -14,7 +15,7 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import MAX_FIELDS, fills, preview, record
+from app.submit import fills, preview
 from app.web import queries
 
 PREFIX = "/plugin/"
@@ -28,11 +29,10 @@ ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 VERSION = re.compile(r"[0-9]+(\.[0-9]+){0,3}")  # as Chrome writes one; \d would also take other scripts' digits
 NO_KEY, WRONG_PLUGIN, OLD_PLUGIN = "no-key", "wrong-plugin", "old-plugin"
 TOO_BIG, BAD_REQUEST, APP_ERROR = "too-big", "bad-request", "app-error"
-# every refusal the plugin can get, from the agreement between the two; anything else is never passed on
-KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR}
 NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB = "no-ticket", "not-logged-in", "not-ready", "no-job"
-KINDS |= {NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
-STOP = {"go": False, "reason": "unexpected-page"}
+# every refusal the plugin can get, from the agreement between the two; anything else is never passed on
+KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
+STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
 
 
 def key_hash(key: str) -> str:
@@ -173,31 +173,16 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         ticket_id = _text(body, "ticket")
         conn, tickets = request.app.state.conn, request.app.state.tickets
         ticket = tickets.running(ticket_id, request.state.browser_id)
-        if ticket is None or ticket.answered:
-            raise HTTPException(404, NO_TICKET)
-        if record.recorded(conn, ticket.job):  # a busy database can save "I submitted it" and not end its fill
-            with conn:
-                tickets.end_job(conn, ticket.job)
+        if ticket is None or ticket.answered or tickets.closed_by_record(conn, ticket):
             raise HTTPException(404, NO_TICKET)
         items = body.get("fields")
         if not isinstance(items, list):
             raise HTTPException(400, BAD_REQUEST)
-        if len(items) > MAX_FIELDS:  # none of them is read
-            tickets.answered(conn, ticket, [], "too-many-fields")
-            return JSONResponse(STOP)
         try:
-            fields = fills.drawn(items)
-        except ValueError:
+            answers = tickets.answer(conn, data_dir, ticket, items)
+        except fills.BadForm:
             raise HTTPException(400, BAD_REQUEST) from None
-        found = preview.preview(conn, data_dir, ticket.job)
-        passed, changes = fills.compare(found.lines if found else (), fields, fills.SITES[ticket.site].DRAWN)
-        if not passed:
-            tickets.answered(conn, ticket, changes, "unexpected-page")
-            return JSONResponse(STOP)
-        answers = fills.pack(passed, record.documents(conn, data_dir, ticket.job))
-        # the trail first: if this can't be saved, nothing goes out
-        tickets.answered(conn, ticket, changes, None if answers else "nothing-to-fill")
-        return JSONResponse({"go": True, "pack": answers})
+        return JSONResponse(STOP if answers is None else {"go": True, "pack": answers})
 
 
 def _text(body: dict, name: str) -> str:

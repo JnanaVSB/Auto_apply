@@ -1013,6 +1013,16 @@ def test_no_label_or_value_reaches_the_logs(door, conn, data_dir, paired, caplog
     assert '"value": "Fake"' not in logged and "First Name" not in logged
 
 
+def test_a_broken_saved_read_is_not_taken_for_a_bad_list(door, conn, data_dir, paired, monkeypatch):
+    def broken(*_):
+        raise ValueError("fake")
+
+    ticket = running(door, conn, data_dir)
+    assert refused(send(door, ticket, [1]), 400, "bad-request")
+    monkeypatch.setattr(preview, "preview", broken)
+    assert refused(send(door, ticket, [NAME_BOX]), 500, "app-error")
+
+
 def test_a_browser_removed_in_the_middle_of_a_fill_gets_nothing(owner, door, conn, data_dir, paired):
     pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
     ticket = running(door, conn, data_dir)
