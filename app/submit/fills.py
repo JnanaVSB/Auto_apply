@@ -18,10 +18,11 @@ import sqlcipher3
 
 from app.collect import now
 from app.config import Config
+from app.council import runs
 from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import MAX_FIELDS, ashby, compare, greenhouse, lever, preview, record
+from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, preview, record, save
 from app.submit.fill_words import (
     BROWSER_REMOVED,
     CHANGED_FILE,
@@ -127,6 +128,17 @@ def why_not(conn: sqlcipher3.Connection, job: dict, found: preview.Preview | Non
     return None
 
 
+def why_not_read(conn: sqlcipher3.Connection, job: dict) -> str | None:
+    """None if the plugin can read the job's form now, else why not: a plain sentence, or "" where the box shows no
+    button and says nothing new. Only a form the app can't read itself is read this way."""
+    address = form_address(job)
+    if address is None or posting_of(address)[0] != "ashby" or record.recorded(conn, job["id"]):
+        return ""
+    if runs.last_done(conn, job["id"]) is None:
+        return ""
+    return None if conn.execute(CONNECTED).fetchone() else CONNECT_FIRST
+
+
 class BadForm(Exception):  # noqa: N818 (a refusal)
     """The list a browser sent can't be read."""
 
@@ -137,7 +149,7 @@ class Ticket:
     job: int
     address: str  # the exact address a browser must ask from
     site: str
-    fill: int  # its row in `fills`
+    fill: int | None  # its row in `fills`; a read has none, so the row updates match nothing
     browser: int | None  # the paired browser; None for a button press until one takes it
     ends: float
     taken: bool = False
@@ -151,6 +163,7 @@ class Ticket:
     pdfs: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
     read: dict = field(default_factory=dict)  # the read held on the row
     clicked: float | None = None  # when you last pressed the site's Submit
+    mode: str = "fill"  # or "read": the plugin reads the form and fills nothing
 
 
 @dataclass
@@ -190,6 +203,23 @@ class Tickets:
         self.tickets[job["id"]] = Ticket(
             secrets.token_urlsafe(32), job["id"], address, posting_of(job["apply_url"])[0], fill, browser_id,
             self.clock() + UNUSED_SECONDS,
+        )  # fmt: skip
+        return None
+
+    def make_read(self, conn: sqlcipher3.Connection, job: dict) -> str | None:
+        """A ticket to read the job's form. It has no row, so no cap, pause or trail, but it is a newer press all the
+        same: it ends a running fill and wipes the job's reads. Why not (see why_not_read) if refused, else None."""
+        reason = why_not_read(conn, job)
+        if reason is not None:
+            return reason
+        old, address = self._live().get(job["id"]), form_address(job)
+        with conn:
+            conn.execute(WIPED, (job["id"],))
+            if old and old.taken:
+                conn.execute(ENDED, (REPLACED, old.fill))
+        self.tickets[job["id"]] = Ticket(
+            secrets.token_urlsafe(32), job["id"], address, posting_of(address)[0], None, None,
+            self.clock() + UNUSED_SECONDS, mode="read",
         )  # fmt: skip
         return None
 
@@ -241,6 +271,21 @@ class Tickets:
         ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots.values()}
         ticket.pdfs = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
+
+    def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> bool:
+        """Saves the fields a browser says the form shows as the job's form, and says if it did; either way that uses
+        the ticket up, and BadForm if the list can't be read leaves it. Saved first: a busy database raises and uses
+        nothing up. Saved answers stay, by their keys."""
+        fields = ()
+        if len(items) <= MAX_FIELDS:  # none of them is read otherwise
+            try:
+                fields = SITES[ticket.site].form(compare.fields_from(items)).fields
+            except ValueError:
+                raise BadForm from None
+        if fields:
+            save(conn, ticket.job, Form(fields), "browser")
+        del self.tickets[ticket.job]
+        return bool(fields)
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
         """Whether the job has its record, which ends the ticket: a busy database can save "I submitted it" and not end

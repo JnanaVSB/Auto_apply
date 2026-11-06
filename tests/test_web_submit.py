@@ -120,7 +120,7 @@ def test_a_site_that_fails_says_why_and_nothing_is_saved(client, conn, data_dir,
 def test_other_sites_forms_are_never_downloaded(client, conn, data_dir, web, link, line):
     job = made_up_job(conn, data_dir, link)
     text = client.get(f"/jobs/{job}/form").text
-    assert line in text and "Read the form" not in text
+    assert line in text and f'action="/jobs/{job}/form/read"' not in text
     assert line in read(client, job).text and web.requests == []
 
 

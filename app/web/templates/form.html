@@ -22,6 +22,7 @@
   <h2>Application form</h2>
   {% if found and not record %}
   <p class="muted">Read {{ read_on }} from {{ read_from }}. Nothing is sent to the site from here.</p>
+  {% if not_seen %}<p class="muted">{{ not_seen }}</p>{% endif %}
   {% if found.problem %}<p class="error">{{ found.problem }}</p>{% endif %}
   {% elif elsewhere and not record %}
   <p class="muted">{{ elsewhere }}</p>
@@ -32,6 +33,13 @@
   {% if note %}<p class="muted" role="status">{{ note }}</p>{% endif %}
   {% if readable and not record %}
   {{ post("read", "Read again" if found else "Read the form") }}
+  {% endif %}
+  {% set fill_part = not record and (fill_address or fill_reason or last_fill) %}
+  {% if read_address and not record %}
+  <p><span hx-post="/jobs/{{ job_id }}/form/read-in-browser" hx-swap="none"><a href="{{ read_address }}" target="_blank" rel="noopener">{{ "Read again" if found else "Read the form" }}</a></span></p>
+  <p class="muted">Reading shows the form to the plugin. Nothing of yours goes to the site.</p>
+  {% if not fill_part %}<p id="fill-status" role="status"></p>{% endif %}
+  {% elif read_reason and read_reason != fill_reason and not record %}<p class="muted">{{ read_reason }}</p>
   {% endif %}
 
   {% if record %}
@@ -144,7 +152,7 @@
   {% if hidden %}<p class="muted">{{ hidden }} hidden box{{ "es" if hidden != 1 }}, never filled.</p>{% endif %}
   {% endif %}
 
-  {% if not record and (fill_address or fill_reason or last_fill) %}
+  {% if fill_part %}
   <h3>Fill the form</h3>
   {% if fill_address %}
   <p><span hx-post="/jobs/{{ job_id }}/form/fill" hx-swap="none"><a href="{{ fill_address }}" target="_blank" rel="noopener">Open and fill</a></span></p>

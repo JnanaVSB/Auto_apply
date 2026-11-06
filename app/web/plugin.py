@@ -20,6 +20,7 @@ from app import collect
 from app.config import ConfigError, load_config
 from app.submit import MAX_FIELDS, compare, fill_words, fills, preview
 from app.web import queries
+from app.web.submit import remember
 
 PREFIX = "/plugin/"
 HELLO = PREFIX + "hello"
@@ -150,7 +151,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
             raise HTTPException(404, NO_TICKET)
         sign = fills.SITES[ticket.site].DRAWN.thanks
         return JSONResponse(
-            {"ticket": ticket.id, "mode": "fill", "board": ticket.site, "thanks": sign and asdict(sign)}
+            {"ticket": ticket.id, "mode": ticket.mode, "board": ticket.site, "thanks": sign and asdict(sign)}
         )
 
     @app.post(PREFIX + "known")
@@ -193,6 +194,8 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         if not isinstance(items, list):
             raise HTTPException(400, BAD_REQUEST)
         try:
+            if ticket.mode == "read":
+                return _read(request, ticket, items, data_dir)
             answers = tickets.answer(conn, data_dir, ticket, items)
         except fills.BadForm:
             raise HTTPException(400, BAD_REQUEST) from None
@@ -274,6 +277,15 @@ def _is_value(value: object) -> bool:
 
 def _is_why(why: object) -> bool:
     return isinstance(why, str) and why in fill_words.LEFT
+
+
+def _read(request: Request, ticket: fills.Ticket, items: list, data_dir: Path) -> JSONResponse:
+    """A read ticket's form: nothing goes back, whatever your answers are."""
+    conn = request.app.state.conn
+    if not request.app.state.tickets.read_form(conn, ticket, items):
+        return JSONResponse(STOP)
+    remember(conn, data_dir, queries.job(conn, ticket.job))
+    return JSONResponse({"go": False, "reason": "read"})
 
 
 def _logged_in(request: Request) -> None:

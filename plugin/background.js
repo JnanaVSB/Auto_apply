@@ -12,6 +12,7 @@ const FORM_ORIGINS = new Set(MANIFEST.content_scripts.flatMap((script) => script
 const POPUP_PAGE = chrome.runtime.getURL("popup.html");
 const OPTIONS_PAGE = chrome.runtime.getURL("options.html");
 const READ_STATES = new Set(["reread", "clicked"]);
+const MODES = new Set(["fill", "read"]);
 
 function originOf(address) {
   try {
@@ -102,9 +103,10 @@ async function open(message, sender) {
   await keep(tabId, { address, said });
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
-  if (answer.status === 200 && answer.body.mode === "fill" && typeof answer.body.ticket === "string") {
+  if (answer.status === 200 && MODES.has(answer.body.mode) && typeof answer.body.ticket === "string") {
+    const { ticket, mode } = answer.body;
     const thanks = answer.body.thanks ?? null;
-    await keep(tabId, { ticket: answer.body.ticket, address, slots: [], answered: false, thanks, said: {} });
+    await keep(tabId, { ticket, mode, address, slots: [], answered: false, thanks, said: {} });
     return { go: true };
   }
   const problem = answer.body.error ?? "app-error";
@@ -123,6 +125,11 @@ async function form(message, sender) {
     const slots = pack.filter((line) => line.kind === "file").map((line) => line.value.slot);
     await keep(tabId, { ...record, answered: true, slots });
     return { pack };
+  }
+  if (answer.status === 200 && reason === "read") {
+    await flag(tabId, "OK");
+    await keep(tabId, { address: record.address, said: { problem: "read" } });
+    return { stop: "known" };
   }
   if (answer.status === 400 || answer.status === 413) return { stop: "report" }; // it reports this, so the row isn't left open
   await flag(tabId, "!");
@@ -243,7 +250,8 @@ async function status() {
   const answer = await call("known", { address: tab.url }, key);
   if (answer.status !== 200) return { say: answer.body.error ?? "app-error", said };
   if (!answer.body.job) return { say: "no-job", said };
-  return { say: inProgress(record) ? "filling" : "known", title: answer.body.title, company: answer.body.company, said };
+  const going = record?.mode === "read" ? "reading" : "filling";
+  return { say: inProgress(record) ? going : "known", title: answer.body.title, company: answer.body.company, said };
 }
 
 async function fill() {

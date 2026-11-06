@@ -676,6 +676,33 @@ def test_the_sign_is_read_by_the_page_s_own_tidy():
     assert "tidy(element.textContent).includes(tidy(thanksSign.words))" in code(WATCH)
 
 
+# Reading a form
+
+
+def test_a_ticket_may_only_be_for_a_fill_or_a_read():
+    assert re.search(r'^const MODES = new Set\(\["fill", "read"\]\);$', code(BACKGROUND), re.M)
+    assert 'MODES.has(answer.body.mode) && typeof answer.body.ticket === "string"' in function("open")
+    assert "{ ticket, mode, address, slots: [], answered: false, thanks, said: {} }" in function("open")
+
+
+def test_a_read_form_ends_the_ticket_here_and_sends_back_no_pack():
+    form = function("form")
+    assert form.index('reason === "read"') < form.index("answer.status === 400")
+    assert 'await keep(tabId, { address: record.address, said: { problem: "read" } });' in form
+    branch = form[form.index('reason === "read"') : form.index("answer.status === 400")]
+    assert 'flag(tabId, "OK")' in branch and 'return { stop: "known" };' in branch and "pack" not in branch
+
+
+def test_page_js_doesn_t_know_a_read_from_a_fill():
+    assert "mode" not in code(PAGE) and '"read"' not in page_function("fillTheForm")
+
+
+def test_the_popup_says_a_read_in_plain_words():
+    assert 'record?.mode === "read" ? "reading" : "filling"' in function("status")
+    assert "Reading this form…" in code(POPUP)
+    assert "The form was read. Go back to the job's box and reload it." in code(POPUP)
+
+
 def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():
     popup = code(POPUP)
     assert "It looks sent: press I submitted it in the dashboard." in popup
