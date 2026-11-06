@@ -151,6 +151,7 @@
   <p class="muted">Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this browser can read them too.</p>
   {% elif fill_reason %}<p class="muted">{{ fill_reason }}</p>{% endif %}
   <p id="fill-status" role="status"></p>
+  {% endif %}
   {% if last_fill %}
   <p class="muted">Last fill: {{ last_fill.when }}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}</p>
   {% if last_fill.changes %}
@@ -158,7 +159,6 @@
   <ul class="reasons">
     {% for change in last_fill.changes %}<li>{{ change.question }} <span class="muted">({{ change.what }})</span></li>{% endfor %}
   </ul>
-  {% endif %}
   {% endif %}
   {% endif %}
 

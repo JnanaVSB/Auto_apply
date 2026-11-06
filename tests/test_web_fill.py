@@ -4,7 +4,7 @@ jobs, browsers and forms. Nothing here opens a site."""
 
 import html
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import sqlcipher3
@@ -77,6 +77,8 @@ WORDS = {
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
 }
 ALIKE = "two choices look the same, so pick yours on the form"
+SIGN = '<p>{} in the last 7 days: check {} in <a href="/settings/plugin">Settings → Browser plugin</a></p>'
+ONE_FILL = SIGN.format("1 toolbar fill", "it")
 CHOICES_CHANGED = "its choices changed"
 
 
@@ -668,6 +670,53 @@ def test_a_form_with_nothing_of_yours_to_send_says_so_and_ends(client, door, con
     assert fill_rows(conn)[1:] == [(0, None, "waiting", None)]
 
 
+# The sign on the first page
+
+
+def days_ago(days):
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
+
+
+def toolbar_fills(conn, *ages, **values):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    for age in ages:
+        past_fill(conn, job, days_ago(age), **{"toolbar": 1} | values)
+
+
+def test_no_toolbar_fill_shows_no_sign(client, conn):
+    assert "in the last 7 days" not in client.get("/").text
+
+
+@pytest.mark.parametrize(
+    ("ages", "words", "them"), [((1,), "1 toolbar fill", "it"), ((1, 6), "2 toolbar fills", "them")]
+)
+def test_the_sign_counts_and_links_to_the_trail(client, conn, ages, words, them):
+    toolbar_fills(conn, *ages)
+    assert SIGN.format(words, them) in client.get("/").text
+
+
+def test_a_fill_8_days_old_is_not_counted(client, conn):
+    toolbar_fills(conn, 8, 1)
+    assert ONE_FILL in client.get("/").text
+
+
+def test_a_toolbar_fill_dated_in_the_future_still_shows(client, conn):
+    toolbar_fills(conn, -2)
+    assert ONE_FILL in client.get("/").text
+
+
+def test_a_button_fill_is_not_counted(client, conn):
+    toolbar_fills(conn, 1, toolbar=0)
+    assert "in the last 7 days" not in client.get("/").text
+
+
+@pytest.mark.parametrize(("state", "stop"), list(WORDS))
+def test_a_toolbar_fill_counts_whatever_became_of_it(client, conn, state, stop):
+    toolbar_fills(conn, 1, state=state, stop=stop)
+    assert ONE_FILL in client.get("/").text
+
+
 # The box's line about the last fill
 
 
@@ -694,6 +743,16 @@ def test_an_odd_row_never_breaks_a_page(client, conn, paired):
     past_fill(conn, job, state="a state from elsewhere", stop="an odd kind")
     assert "a state from elsewhere" in box(client, job)
     assert "a state from elsewhere" in recent_part(client.get(SETTINGS).text)
+
+
+def test_a_recorded_job_keeps_its_last_fill_and_what_to_check(client, conn, paired):
+    job = ready_job(conn)
+    past_fill(conn, job, changes='[{"question": "Why Acme?", "what": "its choices changed"}]')
+    with conn:
+        conn.execute(RECORD, (job, FORM_ADDRESS))
+    page = box(client, job)
+    assert "Last fill:" in page and "Check these on the form" in page and "Why Acme?" in page
+    assert "<h3>Fill the form</h3>" not in page and "form/fill" not in page and "fill-status" not in page
 
 
 def test_a_job_with_no_fill_has_no_line(client, conn, paired):
@@ -752,6 +811,21 @@ def test_at_most_20_recent_fills_show(client, conn, paired):
     for _ in range(25):
         past_fill(conn, job)
     assert recent_part(client.get(SETTINGS).text).count(f'<a href="/jobs/{job}">') == 20
+
+
+def test_settings_says_when_recent_fills_is_cut(client, conn, paired):
+    job = ready_job(conn)
+    for _ in range(25):
+        past_fill(conn, job)
+    assert '<p class="muted">The last 20 of 25.</p>' in recent_part(client.get(SETTINGS).text)
+
+
+def test_settings_says_nothing_when_every_fill_is_shown(client, conn, paired):
+    job = ready_job(conn)
+    for _ in range(20):
+        past_fill(conn, job)
+    part = recent_part(client.get(SETTINGS).text)
+    assert part.count("<tr>") == 21 and "The last" not in part
 
 
 def test_no_fills_means_no_table(client, conn, paired):

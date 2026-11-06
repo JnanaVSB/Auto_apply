@@ -13,6 +13,7 @@
 {% macro number(value) %}{{ "{:,}".format(value) }}{% endmacro %}
 {% block content %}
 <h1>{{ "Low score" if low else "Jobs" }}</h1>
+{% if toolbar_fills %}<p>{{ toolbar_fills }} toolbar fill{{ "s" if toolbar_fills != 1 }} in the last {{ sign_days }} days: check {{ "them" if toolbar_fills != 1 else "it" }} in <a href="/settings/plugin">Settings → Browser plugin</a></p>{% endif %}
 {% with back = view.address(page=page.number) %}{% include "view_switch.html" %}{% endwith %}
 {% if counts.open %}
 <p class="counts">{{ number(counts.open) }} open jobs:

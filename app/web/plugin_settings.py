@@ -58,5 +58,6 @@ def _view(
     conn = request.app.state.conn
     browsers, recent = conn.execute(BROWSERS).fetchall(), fills.recent(conn)
     return page(
-        request, "plugin_settings.html", status, browsers=browsers, recent=recent, problem=problem, key=key, added=added
-    )
+        request, "plugin_settings.html", status, browsers=browsers, recent=recent, all_fills=fills.total(conn),
+        problem=problem, key=key, added=added,
+    )  # fmt: skip

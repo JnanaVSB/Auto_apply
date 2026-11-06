@@ -38,6 +38,7 @@
 {% endif %}
 {% if recent %}
 <h2>Recent fills</h2>
+{% if all_fills > recent | length %}<p class="muted">The last {{ recent | length }} of {{ all_fills }}.</p>{% endif %}
 <table>
   <thead><tr><th>When</th><th>Job</th><th>Browser</th><th>How</th><th>What happened</th></tr></thead>
   <tbody>

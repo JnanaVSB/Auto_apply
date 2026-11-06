@@ -8,7 +8,7 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import sqlcipher3
@@ -22,6 +22,7 @@ from app.submit import MAX_FIELDS, ashby, compare, greenhouse, lever, preview, r
 SITES = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
+SIGN_DAYS = 7  # how far back the first page counts toolbar fills
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 AT_LINK = "SELECT id, open_manually_only FROM jobs WHERE apply_url = ?"
@@ -41,6 +42,8 @@ ENDED = "UPDATE fills SET state = iif(state = 'sent', 'sent', 'ended'), stop_kin
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes FROM fills WHERE job_id = ?
     ORDER BY id DESC LIMIT 1"""
+TOOLBAR_FILLS = "SELECT count(*) FROM fills WHERE toolbar = 1 AND started_on >= ?"
+ALL_FILLS = "SELECT count(*) FROM fills JOIN jobs ON jobs.id = fills.job_id"
 RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
     jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id ORDER BY fills.id DESC LIMIT ?"""
 UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
@@ -273,6 +276,17 @@ def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
     return [
         _plain(row[:6]) | {"job": row[6], "title": row[7], "company": row[8]} for row in conn.execute(RECENT, (limit,))
     ]
+
+
+def total(conn: sqlcipher3.Connection) -> int:
+    """How many fills `recent` could show."""
+    return conn.execute(ALL_FILLS).fetchone()[0]
+
+
+def toolbar_fills(conn: sqlcipher3.Connection) -> int:
+    """The toolbar fills of the last SIGN_DAYS, whatever became of them; one dated later by a moved clock counts."""
+    since = datetime.fromisoformat(now()) - timedelta(days=SIGN_DAYS)
+    return conn.execute(TOOLBAR_FILLS, (since.isoformat(timespec="seconds"),)).fetchone()[0]
 
 
 def _plain(row: tuple) -> dict:

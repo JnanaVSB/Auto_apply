@@ -788,8 +788,7 @@ def test_a_busy_database_makes_no_fill(owner, door, conn, limits):
 # /plugin/start
 
 
-def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir):
-    pair(conn, plugin=PLUGIN)
+def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir, paired):
     press(door, conn, data_dir, ready_job(conn))
     assert refused(call(door, START, FORM_ADDRESS + "&x=1"), 404, "no-ticket")
     response = call(door, START)
@@ -802,20 +801,17 @@ def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir)
     assert refused(call(door, START), 404, "no-ticket")  # a reload finds nothing
 
 
-def test_start_needs_no_login_and_no_ticket_is_no_ticket(door, conn):
-    pair(conn, plugin=PLUGIN)
+def test_start_with_no_ticket_is_no_ticket(door, paired):
     assert refused(call(door, START), 404, "no-ticket")
 
 
-def test_a_ticket_past_its_time_can_t_start(door, conn, data_dir, clock):
-    pair(conn, plugin=PLUGIN)
+def test_a_ticket_past_its_time_can_t_start(door, conn, data_dir, clock, paired):
     press(door, conn, data_dir, ready_job(conn))
     clock.now += fills.UNUSED_SECONDS + 1
     assert refused(call(door, START), 404, "no-ticket")
 
 
-def test_a_busy_database_gives_app_error_and_uses_no_ticket(door, conn, data_dir):
-    pair(conn, plugin=PLUGIN)
+def test_a_busy_database_gives_app_error_and_uses_no_ticket(door, conn, data_dir, paired):
     press(door, conn, data_dir, ready_job(conn))
     conn.execute("BEGIN IMMEDIATE")
     response = call(door, START)
@@ -843,7 +839,8 @@ def changes(conn):
 
 
 @pytest.fixture
-def paired(conn):
+def paired(owner, conn):
+    """A connected browser, with you logged in: a fill runs only under a live login."""
     return pair(conn, plugin=PLUGIN)
 
 
@@ -859,7 +856,7 @@ def test_what_was_left_out_is_kept_on_the_row(door, conn, data_dir, paired):
     ticket = running(door, conn, data_dir)
     extra = {"key": "question_1", "label": "Why Acme?", "kind": "long_text", "required": False}
     assert send(door, ticket, [NAME_BOX, extra]).json() == {"go": True, "pack": [NAME_PACK]}
-    assert changes(conn) == [{"question": "Why Acme?", "what": "new on the form"}]
+    assert changes(conn) == [{"question": 'The form shows "Why Acme?"', "what": "new on the form"}]
 
 
 def test_an_ashby_form_read_by_the_browser_fills_too(door, conn, data_dir, paired):
@@ -969,9 +966,10 @@ def test_a_ticket_not_yet_started_is_no_ticket(door, conn, data_dir, paired):
     assert refused(send(door, ticket.id, [NAME_BOX]), 404, "no-ticket")
 
 
-def test_a_ticket_past_its_time_is_no_ticket(door, conn, data_dir, clock, paired):
+def test_a_ticket_past_its_time_is_no_ticket(owner, door, conn, data_dir, clock, paired):
     ticket = running(door, conn, data_dir)
     clock.now += fills.RUNNING_SECONDS + 1
+    log_in(owner)  # the first login ran out long before
     assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
 
 
@@ -1023,6 +1021,61 @@ def test_a_broken_saved_read_is_not_taken_for_a_bad_list(door, conn, data_dir, p
     assert refused(send(door, ticket, [NAME_BOX]), 500, "app-error")
 
 
+def log_out(owner):
+    assert owner.post("/logout", data={"csrf_token": csrf(owner)}, follow_redirects=False).status_code == 303
+
+
+def test_with_no_live_login_a_press_can_t_be_taken_and_nothing_is_used_up(owner, door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    log_out(owner)
+    assert refused(call(door, START), 403, "not-logged-in")
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+    assert not next(iter(held(door).values())).taken
+    log_in(owner)
+    assert call(door, START).status_code == 200
+
+
+def test_with_no_live_login_a_taken_ticket_gets_no_answers_until_you_log_in(owner, door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    log_out(owner)
+    assert refused(send(door, ticket, [NAME_BOX]), 403, "not-logged-in")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
+    assert not next(iter(held(door).values())).answered
+    log_in(owner)
+    assert send(door, ticket, [NAME_BOX]).json() == {"go": True, "pack": [NAME_PACK]}
+
+
+@pytest.mark.parametrize("gone", [security.IDLE_SECONDS, security.MAX_SESSION_SECONDS])
+def test_a_timed_out_login_starts_nothing_and_gets_nothing(door, conn, clock, data_dir, paired, gone):
+    ticket = running(door, conn, data_dir)
+    press(door, conn, data_dir, ready_job(conn, "https://jobs.lever.co/acme/1", "Second"))
+    clock.now += gone + 1
+    assert refused(call(door, START, "https://jobs.lever.co/acme/1/apply"), 403, "not-logged-in")
+    assert refused(send(door, ticket, [NAME_BOX]), 403, "not-logged-in")
+
+
+def test_a_bad_body_is_still_answered_first_with_no_login(door, conn):
+    pair(conn, plugin=PLUGIN)
+    assert refused(door.post(START, content=b"{", headers=sent()), 400, "bad-request")
+    assert refused(door.post(FORM, content=b"{", headers=sent()), 400, "bad-request")
+
+
+@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+def test_a_key_with_no_login_gets_nothing_from_any_route(door, conn, limits, path):
+    pair(conn, plugin=PLUGIN)
+    ready_job(conn)
+    assert refused(call(door, path), 403, "not-logged-in")
+    assert refused(send(door, "any-ticket", [NAME_BOX]), 403, "not-logged-in")
+
+
+def test_starting_and_answering_keep_no_login_alive(owner, door, conn, clock, data_dir, paired):
+    (session,) = owner.app.state.logins.sessions.values()
+    seen = session.last_seen
+    clock.now += 60
+    assert send(door, running(door, conn, data_dir), [NAME_BOX]).status_code == 200
+    assert session.last_seen == seen
+
+
 def test_a_browser_removed_in_the_middle_of_a_fill_gets_nothing(owner, door, conn, data_dir, paired):
     pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
     ticket = running(door, conn, data_dir)
@@ -1065,10 +1118,10 @@ def test_the_kinds_with_a_job_or_an_answer_hold_no_words(owner, door, conn, limi
 
 
 @pytest.fixture
-def refusals(door, conn):
+def refusals(client, door, conn):
     """One answer of each kind the door can give."""
     pair(conn, plugin=PLUGIN)
-    return {
+    answers = {
         "no key": door.post(HELLO, json=GOOD),
         "wrong plugin": door.post(HELLO, json=GOOD, headers=sent(origin=OTHER_PLUGIN)),
         "not found": door.get("/plugin/nothing-here", headers=sent()),
@@ -1081,12 +1134,13 @@ def refusals(door, conn):
         "too big": door.post(HELLO, content=b"x" * (2**20 + 1), headers=sent()),
         "bad body": door.post(HELLO, content=b"{", headers=sent()),
         "old plugin": door.post(HELLO, json=GOOD | {"protocol": 2}, headers=sent()),
-        "no ticket": call(door, START),
         "not logged in": call(door, KNOWN),
         "not logged in to fill": call(door, FILL),
         "a stranger's Host": door.post(HELLO, json=GOOD, headers=sent() | {"Host": "attacker.example"}),
         "welcome": door.post(HELLO, json=GOOD, headers=sent()),
     }  # fmt: skip
+    log_in(client)
+    return answers | {"no ticket": call(door, START)}
 
 
 def test_the_kinds_of_refusal(refusals):
@@ -1400,8 +1454,10 @@ def test_log_out_all_ends_every_fill(owner, door, conn, data_dir, limits):
     assert refused(call(door, START, addresses[3]), 401, "no-key")
     assert refused(call(door, FILL, addresses[3]), 401, "no-key")
     pair(conn, "third-fake-key", "Third", plugin=PLUGIN)
-    assert refused(call(door, START, addresses[3], "third-fake-key"), 404, "no-ticket")
+    assert refused(call(door, START, addresses[3], "third-fake-key"), 403, "not-logged-in")
     assert refused(call(door, FILL, addresses[3], "third-fake-key"), 403, "not-logged-in")
+    log_in(owner)
+    assert refused(call(door, START, addresses[3], "third-fake-key"), 404, "no-ticket")  # the old press is gone too
 
 
 @pytest.mark.parametrize("browser_id", ["999", "not a number", "", "1.0", "9" * 40])

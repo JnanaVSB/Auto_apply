@@ -3,6 +3,7 @@ and only your own answers to what passed go in the pack. A value never comes fro
 taken only once it has matched yours exactly, so the compare can only remove lines. It holds no database, ticket or
 clock."""
 
+import unicodedata
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,7 @@ from app.submit import FIELD_KINDS, Choice, Drawn, Field, distinct, match
 
 MAX_KEY = 1_000  # characters
 MAX_CHANGES = 100
+MAX_SHOWN = 100  # characters of what only a page says
 GONE, ADDED, UNCHECKED = "no longer on the form", "new on the form", "wasn't checked"
 FILE_UNCHECKED = "the app only checked that it's a file box"
 CHOICES_UNCHECKED = "its choices weren't checked"
@@ -64,7 +66,7 @@ def compare(
             changes.append(_change(saved, ALIKE))
     saved_keys = {line.field.key for line in lines}
     changes += [
-        _change(found, UNCHECKED if found.key in board.unlisted else ADDED)
+        {"question": _page_says(found.label), "what": UNCHECKED if found.key in board.unlisted else ADDED}
         for found in fields
         if found.key not in saved_keys
     ]
@@ -130,6 +132,12 @@ def _labels(line: match.Line, found: Field) -> list[str] | None:
 
 def _change(found: Field, what: str) -> dict:
     return {"question": found.label, "what": what}
+
+
+def _page_says(label: str) -> str:
+    """Words only the page gave, shown as its own: no invisible format characters, cut, and in quotes."""
+    words = "".join(character for character in label if unicodedata.category(character) != "Cf")
+    return f'The form shows "{words[:MAX_SHOWN]}{"…" if len(words) > MAX_SHOWN else ""}"'
 
 
 def _at_most(changes: list[dict]) -> list[dict]:

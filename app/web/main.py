@@ -208,7 +208,7 @@ def create_app(
         low = bool(view.scoring) and set(view.scoring) <= {"low", "quick"}  # the Low score tab shows the reasons
         return _page(
             request, "jobs.html", view=view, page=page, choices=choices, options=queries.OPTIONS, low=low,
-            counts=queries.counts(conn, scoring),
+            counts=queries.counts(conn, scoring), toolbar_fills=fills.toolbar_fills(conn), sign_days=fills.SIGN_DAYS,
         )  # fmt: skip
 
     @app.get("/jobs/{job_id:int}")

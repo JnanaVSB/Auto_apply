@@ -133,7 +133,9 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
 
     @app.post(PREFIX + "start")
     async def start(request: Request) -> Response:
-        address = _text(await read_call(request), "address")
+        body = await read_call(request)
+        _logged_in(request)
+        address = _text(body, "address")
         state = request.state
         ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
         if ticket is None:
@@ -170,6 +172,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
     @app.post(PREFIX + "form")
     async def form(request: Request) -> Response:
         body = await read_call(request)
+        _logged_in(request)
         ticket_id = _text(body, "ticket")
         conn, tickets = request.app.state.conn, request.app.state.tickets
         ticket = tickets.running(ticket_id, request.state.browser_id)

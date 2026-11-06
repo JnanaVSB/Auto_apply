@@ -108,8 +108,8 @@ def test_a_greenhouse_form_as_it_is_really_drawn():
         "School": UNCHECKED,
         "Degree": UNCHECKED,
         "Discipline": UNCHECKED,
-        "Country*": UNCHECKED,  # as the page words it, like anything the saved read doesn't have
-        "Are you Hispanic or Latino?": UNCHECKED,
+        'The form shows "Country*"': UNCHECKED,  # as the page words it, like anything the saved read doesn't have
+        'The form shows "Are you Hispanic or Latino?"': UNCHECKED,
     }
 
 
@@ -214,10 +214,40 @@ def test_a_field_gone_from_the_form_leaves_out_that_field_alone():
     assert changes == [{"question": "Why Acme?", "what": GONE}]
 
 
+def form_shows(words):
+    return f'The form shows "{words}"'
+
+
+@pytest.mark.parametrize(
+    ("label", "words"),
+    [
+        ("Your plugin key expired", "Your plugin key expired"),
+        ("x" * 100, "x" * 100),
+        ("x" * 101, "x" * 100 + "…"),
+        ("\u202eGo to\u202c evil.example", "Go to evil.example"),
+        ("Zero\u200bwidth", "Zerowidth"),
+        ("\u200b" + "x" * 100, "x" * 100),
+    ],
+)
+@pytest.mark.parametrize(
+    ("key", "board", "what"), [("extra", lever.DRAWN, NEW), ("country", greenhouse.DRAWN, UNCHECKED)]
+)
+def test_words_only_the_page_gave_are_quoted_cut_and_stripped(label, words, key, board, what):
+    _, changes = compared(lines_of(Form(()), {}), [box(key, label)], board)
+    assert changes == [{"question": form_shows(words), "what": what}]
+
+
+def test_a_saved_field_keeps_its_own_label_whole():
+    label = "x" * 200
+    form = Form((Field("phone", label, "text", True, "standard"),))
+    _, changes = compared(lines_of(form, {"phone": "Fake"}), [])
+    assert changes == [{"question": label, "what": GONE}]
+
+
 def test_a_field_added_to_the_form_changes_nothing_else():
     passed, changes = compared(lines_of(FOUR, FOUR_VALUES), [*FOUR_DRAWN.values(), box("extra", "Anything else?")])
     assert keys(passed) == list(FOUR_DRAWN)
-    assert changes == [{"question": "Anything else?", "what": NEW}]
+    assert changes == [{"question": form_shows("Anything else?"), "what": NEW}]
 
 
 def test_each_difference_of_one_field_is_said():
@@ -473,7 +503,7 @@ def test_hidden_boxes_are_dropped_and_a_repeated_key_keeps_the_first():
 
 def test_a_long_label_is_cut_in_what_is_said():
     _, changes = compared(lines_of(Form(()), {}), [box("extra", "x" * 2000)])
-    assert changes == [{"question": "x" * 1000, "what": NEW}]
+    assert changes == [{"question": form_shows("x" * 100 + "…"), "what": NEW}]
 
 
 def test_invisible_characters_are_taken_out_of_a_drawn_label():
@@ -485,6 +515,6 @@ def test_invisible_characters_are_taken_out_of_a_drawn_label():
 def test_at_most_100_changes_and_then_how_many_more(extra, more):
     _, changes = compared(lines_of(Form(()), {}), [box(f"key_{number}", f"Label {number}") for number in range(extra)])
     assert len(changes) == (100 if more is None else 101)
-    assert changes[99] == {"question": "Label 99", "what": NEW}
+    assert changes[99] == {"question": form_shows("Label 99"), "what": NEW}
     if more:
         assert changes[100] == {"question": f"{more:,} more", "what": "not shown here"}
