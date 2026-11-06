@@ -1,11 +1,14 @@
 """The browser plugin's door: pairing a browser, and who may come in on /plugin/. Fake keys and made-up plugins only."""
 
+import base64
 import hashlib
 import json
 import logging
+import os
 import re
 from contextlib import ExitStack
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -18,6 +21,7 @@ from test_web_phone import FORWARDED, FUNNEL, HOST, IDENTITY, ORIGIN, PHONE, pho
 
 from app import collect, config, submit
 from app.config import Config
+from app.documents import pdf
 from app.fetch import Fetcher
 from app.submit import Field, Form, fills, match, preview
 from app.web import main, preparer, queries, security
@@ -27,7 +31,9 @@ START = "/plugin/start"
 KNOWN = "/plugin/known"
 FILL = "/plugin/fill"
 FORM = "/plugin/form"
-ROUTES = (HELLO, START, KNOWN, FILL, FORM)
+REPORT = "/plugin/report"
+PAPER = "/plugin/file"
+ROUTES = (HELLO, START, KNOWN, FILL, FORM, REPORT, PAPER)
 SETTINGS = "/settings/plugin"
 REMOVE = "/settings/plugin/remove"
 LOG_OUT_ALL = "/settings/phone/log-out-all"
@@ -43,6 +49,13 @@ SECOND_KEY = "second-fake-key"
 FILLS = "SELECT toolbar, browser, state, stop_kind FROM fills ORDER BY id"
 NAME_BOX = {"key": "first_name", "label": "First Name*", "kind": "text", "required": True}
 NAME_PACK = {"key": "first_name", "kind": "text", "value": "Fake"}
+RESUME_FIELD = Field("resume", "Resume/CV", "file", True, "standard")
+LETTER_FIELD = Field("cover_letter", "Cover Letter", "file", False, "standard")
+RESUME_BOX = {"key": "resume", "label": "Resume/CV", "kind": "file", "required": True}
+LETTER_BOX = {"key": "cover_letter", "label": "Cover Letter", "kind": "file", "required": False}
+RESUME_PDF, LETTER_PDF = b"%PDF-1.7 a fake resume", b"%PDF-1.7 a fake letter"
+DONE = """INSERT INTO preparations (job_id, kind, version, sources, writer, status, draft, created_on)
+    VALUES (?, ?, ?, '[]', '{}', 'done', '{}', 'then')"""
 STOP = {"go": False, "reason": "unexpected-page"}
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD")
 BAD_ORIGINS = (
@@ -895,7 +908,7 @@ def test_no_field_matching_stops_the_fill(door, conn, data_dir, paired, fields):
     ticket = running(door, conn, data_dir)
     assert send(door, ticket, fields).json() == STOP
     assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", "unexpected-page")]
-    assert {"question": "First Name", "what": "no longer on the form"} in changes(conn)
+    assert {"question": "First Name", "what": "the plugin didn't see this on the form"} in changes(conn)
     assert refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
 
 
@@ -1060,7 +1073,7 @@ def test_a_bad_body_is_still_answered_first_with_no_login(door, conn):
     assert refused(door.post(FORM, content=b"{", headers=sent()), 400, "bad-request")
 
 
-@pytest.mark.parametrize("path", [START, KNOWN, FILL])
+@pytest.mark.parametrize("path", [START, KNOWN, FILL, PAPER])
 def test_a_key_with_no_login_gets_nothing_from_any_route(door, conn, limits, path):
     pair(conn, plugin=PLUGIN)
     ready_job(conn)
@@ -1115,6 +1128,584 @@ def test_the_kinds_with_a_job_or_an_answer_hold_no_words(owner, door, conn, limi
     assert answers[1].json() == {"error": "no-job"}
     assert answers[2].json()["job"] == f"/jobs/{job}"
     assert answers[4].json() == {"error": "no-ticket"}
+
+
+# /plugin/report
+
+
+def report(door, ticket, state="filled", key=KEY, origin=PLUGIN, **body):
+    whole = {"protocol": 1, "ticket": ticket, "state": state, "values": [], "left": []} | body
+    return door.post(REPORT, json=whole, headers=sent(key, origin))
+
+
+def answered(door, conn, data_dir, job=None):
+    """A fill that has had its answers; its ticket."""
+    ticket = running(door, conn, data_dir, job)
+    assert send(door, ticket, [NAME_BOX]).json()["go"]
+    return ticket
+
+
+def reported(conn):
+    return one(conn, "SELECT state, stop_kind, changes, filled FROM fills ORDER BY id DESC")
+
+
+def ok(response):
+    return (response.status_code, response.json()) == (200, {"ok": True})
+
+
+STOPS = ("bot-check", "limit", "unexpected-page", "cant-set")
+LEFT_WORDS = {
+    "no-box": "the plugin couldn't find this box",
+    "custom": "this drop-down is yours to pick",
+    "place": "pick this place from the site's list yourself",
+    "no-choice": "the plugin couldn't tell which choice is yours",
+    "cant-set": "the form wouldn't let the plugin set this",
+    "no-file": "the PDF couldn't be fetched",
+    "file-refused": "the box doesn't show the PDF: check it",
+    "didnt-stick": "the form shows something else here: check it",
+    "not-reached": "the fill stopped before this one",
+}
+VALUE = {"key": "first_name", "value": "Fake Person"}
+LEFT = {"key": "first_name", "why": "no-box"}
+BAD_KEYS = (
+    {"key": None}, {"key": 1}, {"key": True}, {"key": ["first_name"]}, {"key": {"a": 1}}, {"key": "x" * 1001},
+)  # fmt: skip
+BAD_VALUES = (None, 1, True, 1.5, {"a": 1}, [1], [None], ["ok", 1], [["nested"]], "x" * 20_001, ["ok", "x" * 20_001])
+BAD_LISTS = (None, 1, True, "x", {"key": "first_name"}, [1], [None], ["first_name"], [[]])
+BAD_REPORTS = (
+    *({"state": state} for state in (None, 1, True, "", "FILLED", "reread", "gone", "sent", ["filled"], {"a": 1})),
+    *(
+        {"state": "stopped", "kind": kind}
+        for kind in (None, 1, True, "", "other", "too-many-fields", "nothing-to-fill", ["limit"], {"a": 1})
+    ),
+    *({"kind": kind} for kind in (*STOPS, "other", "", 0, False, ["limit"])),
+    *({"values": values} for values in BAD_LISTS),
+    *({"left": left} for left in BAD_LISTS),
+    *({"values": [VALUE | key]} for key in BAD_KEYS),
+    *({"left": [LEFT | key]} for key in BAD_KEYS),
+    *({"values": [VALUE | {"value": value}]} for value in BAD_VALUES),
+    *({"left": [LEFT | {"why": why}]} for why in (None, 1, True, "", "other", ["no-box"], {"a": 1})),
+    {"values": [{"key": "first_name"}]},
+    {"values": [{"value": "Fake Person"}]},
+    {"left": [{"key": "first_name"}]},
+    {"left": [{"why": "no-box"}]},
+    {"values": [VALUE] * 501},
+    {"left": [LEFT] * 501},
+    {"values": [VALUE, None]},  # one bad line refuses the good one with it
+    {"left": [LEFT, None]},
+)
+
+
+def test_a_filled_report_keeps_the_questions_and_the_ticket(door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert reported(conn) == ("filled", None, "[]", '["First Name"]')
+    assert door.app.state.tickets.running(ticket, paired).reported
+
+
+def test_a_filled_report_of_nothing_saves_an_empty_list(door, conn, data_dir, paired):
+    assert ok(report(door, answered(door, conn, data_dir)))
+    assert reported(conn) == ("filled", None, "[]", "[]")
+
+
+@pytest.mark.parametrize(("why", "words"), LEFT_WORDS.items())
+def test_each_line_left_goes_on_the_row_in_the_app_s_own_words(door, conn, data_dir, paired, why, words):
+    assert ok(report(door, answered(door, conn, data_dir), left=[{"key": "first_name", "why": why}]))
+    assert changes(conn) == [{"question": "First Name", "what": words}]
+    assert reported(conn)[3] == "[]"
+
+
+def test_lines_left_come_before_what_the_compare_said(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    extra = {"key": "question_1", "label": "Why Acme?", "kind": "long_text", "required": False}
+    assert send(door, ticket, [NAME_BOX, extra]).json()["go"]
+    assert ok(report(door, ticket, left=[LEFT]))
+    assert changes(conn) == [
+        {"question": "First Name", "what": LEFT_WORDS["no-box"]},
+        {"question": 'The form shows "Why Acme?"', "what": "new on the form"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("extras", "last"),
+    [
+        (99, {"question": 'The form shows "x"', "what": "new on the form"}),
+        (100, {"question": "1 more", "what": "not shown here"}),
+        (150, {"question": "51 more", "what": "not shown here"}),
+    ],
+)
+def test_lines_left_keep_the_limit_of_100_and_its_count(door, conn, data_dir, paired, extras, last):
+    ticket = running(door, conn, data_dir)
+    others = [{"key": f"k{number}", "label": "x", "kind": "text", "required": False} for number in range(extras)]
+    assert send(door, ticket, [NAME_BOX, *others]).json()["go"]
+    assert ok(report(door, ticket, left=[LEFT]))
+    assert len(changes(conn)) == (100 if extras == 99 else 101) and changes(conn)[-1] == last
+    assert changes(conn)[0] == {"question": "First Name", "what": LEFT_WORDS["no-box"]}  # never lost in the count
+
+
+@pytest.mark.parametrize("body", [{"values": [VALUE] * 3}, {"left": [LEFT] * 3}])
+def test_a_repeated_key_counts_once(door, conn, data_dir, paired, body):
+    assert ok(report(door, answered(door, conn, data_dir), **body))
+    assert len(json.loads(reported(conn)[3])) + len(changes(conn)) == 1
+
+
+def test_a_line_that_didn_t_stick_is_only_for_you_to_check(owner, door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = answered(door, conn, data_dir, job)
+    assert ok(report(door, ticket, values=[VALUE], left=[LEFT | {"why": "didnt-stick"}]))
+    assert reported(conn)[3] == "[]"
+    assert changes(conn) == [{"question": "First Name", "what": LEFT_WORDS["didnt-stick"]}]
+    page = owner.get(f"/jobs/{job}/form").text
+    assert "<h3>Filled</h3>" not in page and "<h3>Check these on the form</h3>" in page
+
+
+def test_a_page_s_key_and_a_made_up_question_reach_nothing(owner, door, conn, data_dir, paired):
+    job = ready_job(conn)
+    ticket = running(door, conn, data_dir, job)
+    drawn = {"key": "question_1", "label": "Drawn by the page", "kind": "text", "required": False}
+    assert send(door, ticket, [NAME_BOX | {"label": "First Name *"}, drawn]).json()["go"]
+    before = reported(conn)[2]
+    made_up = {"question": "Made-up question", "label": "Made-up question"}
+    assert ok(
+        report(
+            door, ticket,
+            values=[VALUE | made_up, {"key": "question_1", "value": "x"}, {"key": "not-in-the-pack", "value": "x"}],
+            left=[{"key": "question_1", "why": "custom"}, {"key": "Made-up key", "why": "no-box"}],
+            question="Made-up question",
+        )
+    )  # fmt: skip
+    assert reported(conn) == ("filled", None, before, '["First Name"]')
+    pages = owner.get(f"/jobs/{job}/form").text + owner.get(SETTINGS).text
+    assert "Made-up" not in pages and "not-in-the-pack" not in pages and "<li>First Name</li>" in pages
+
+
+def test_with_no_answers_out_no_key_counts_on_a_stop(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind="bot-check", values=[VALUE], left=[LEFT]))
+    assert reported(conn) == ("stopped", "bot-check", "[]", "[]")
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_report_s_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    answered(door, conn, data_dir)
+    assert refused(report(door, ticket), 400, "bad-request")
+    assert reported(conn)[0] == "sent"
+
+
+def test_a_made_up_ticket_is_no_ticket_whatever_the_report(door, conn, data_dir, paired):
+    answered(door, conn, data_dir)
+    assert refused(report(door, "made-up"), 404, "no-ticket")
+    assert refused(report(door, "made-up", "reread", values=None), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+def test_another_browser_s_ticket_is_no_ticket_for_a_report(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    ticket = answered(door, conn, data_dir)
+    assert refused(report(door, ticket, key=SECOND_KEY, origin=OTHER_PLUGIN), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+def test_a_ticket_not_yet_started_is_no_ticket_for_a_report(door, conn, data_dir, paired):
+    press(door, conn, data_dir, ready_job(conn))
+    (ticket,) = held(door).values()
+    assert refused(report(door, ticket.id, "stopped", kind="limit"), 404, "no-ticket")
+    assert fill_rows(conn) == [(0, None, "waiting", None)]
+
+
+def test_a_ticket_past_its_time_is_no_ticket_for_a_report(door, conn, data_dir, clock, paired):
+    ticket = answered(door, conn, data_dir)
+    clock.now += fills.RUNNING_SECONDS + 1
+    assert refused(report(door, ticket), 404, "no-ticket")
+    assert reported(conn)[0] == "sent"
+
+
+@pytest.mark.parametrize("body", BAD_REPORTS)
+def test_a_bad_report_saves_nothing_and_uses_nothing_up(door, conn, data_dir, paired, body):
+    ticket = answered(door, conn, data_dir)
+    assert refused(report(door, ticket, **body), 400, "bad-request")
+    assert reported(conn) == ("sent", None, "[]", None)
+    assert ok(report(door, ticket, values=[VALUE]))
+
+
+@pytest.mark.parametrize("name", ["state", "values", "left"])
+def test_a_report_missing_a_part_is_a_bad_request(door, conn, data_dir, paired, name):
+    ticket = answered(door, conn, data_dir)
+    whole = {"protocol": 1, "ticket": ticket, "state": "filled", "values": [], "left": []}
+    del whole[name]
+    assert refused(door.post(REPORT, json=whole, headers=sent()), 400, "bad-request")
+    assert reported(conn)[0] == "sent"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"values": [VALUE] * 500, "left": [LEFT] * 500},
+        {"values": [VALUE | {"key": "x" * 1000}], "left": [LEFT | {"key": "x" * 1000}]},
+        {"values": [VALUE | {"value": "x" * 20_000}]},
+        {"values": [VALUE | {"value": ["x" * 20_000, "y"]}]},
+        {"values": [VALUE | {"value": []}]},
+        {"kind": None},
+    ],
+)
+def test_a_report_at_the_limits_is_read(door, conn, data_dir, paired, body):
+    assert ok(report(door, answered(door, conn, data_dir), **body))
+    assert reported(conn)[0] == "filled"
+
+
+def test_filled_before_the_answers_went_out_is_a_bad_request(door, conn, data_dir, paired):
+    ticket = running(door, conn, data_dir)
+    assert refused(report(door, ticket, values=[VALUE]), 400, "bad-request")
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
+    assert send(door, ticket, [NAME_BOX]).json()["go"]  # nothing was used up
+
+
+@pytest.mark.parametrize("second", [{}, {"state": "stopped", "kind": "limit"}, {"left": [LEFT]}])
+def test_a_second_report_says_ok_and_changes_nothing(door, conn, data_dir, paired, second):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, values=[VALUE]))
+    first = reported(conn)
+    assert ok(report(door, ticket, **second))
+    assert reported(conn) == first and len(held(door)) == 1
+
+
+@pytest.mark.parametrize("kind", STOPS)
+def test_a_stop_before_the_answers_went_out_ends_the_fill_as_stopped(door, conn, data_dir, paired, kind):
+    ticket = running(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind=kind))
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "stopped", kind)]
+    assert not held(door) and refused(send(door, ticket, [NAME_BOX]), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("kind", STOPS)
+def test_a_stop_after_the_answers_went_out_stays_sent(door, conn, data_dir, paired, kind):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind=kind, values=[VALUE]))
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", kind)]
+    assert reported(conn)[3] == '["First Name"]' and not held(door)
+
+
+def test_a_report_after_a_stop_finds_no_ticket_and_changes_nothing(door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    assert ok(report(door, ticket, "stopped", kind="limit"))
+    first = reported(conn)
+    assert refused(report(door, ticket, "stopped", kind="bot-check"), 404, "no-ticket")
+    assert reported(conn) == first
+
+
+@pytest.mark.parametrize("body", [{}, {"state": "stopped", "kind": "limit"}])
+def test_a_busy_database_changes_nothing_at_a_report(door, conn, data_dir, paired, body):
+    ticket = answered(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = report(door, ticket, **{"values": [VALUE], "left": [LEFT]} | body)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert reported(conn) == ("sent", None, "[]", None) and len(held(door)) == 1
+    assert ok(report(door, ticket, **{"values": [VALUE], "left": [LEFT]} | body))  # the report can be sent again
+
+
+def test_a_report_needs_no_live_login(owner, door, conn, data_dir, paired):
+    ticket = answered(door, conn, data_dir)
+    log_out(owner)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert reported(conn)[0] == "filled"
+
+
+def test_a_report_s_values_are_left_nowhere(owner, door, conn, data_dir, paired, caplog):
+    fake_value = "fake-answer-never-kept"
+    caplog.set_level(logging.DEBUG)
+    job = ready_job(conn)
+    ticket = answered(door, conn, data_dir, job)
+    kept = next(iter(held(door).values()))
+    with_fake_value = [VALUE | {"value": fake_value}, VALUE | {"value": [fake_value, "x"]}]
+    answers = [
+        report(door, ticket, values=[*with_fake_value, {"key": 1, "value": fake_value}]),  # refused
+        report(door, ticket, values=with_fake_value, left=[LEFT]),
+        report(door, ticket, values=with_fake_value),  # a repeat
+    ]
+    places = {
+        "the answers": " ".join(answer.text for answer in answers),
+        "the row": repr(conn.execute("SELECT * FROM fills").fetchall()),
+        "the log": " ".join(record.getMessage() for record in caplog.records),
+        "the ticket": repr(kept),
+        "the box": owner.get(f"/jobs/{job}/form").text,
+        "Settings": owner.get(SETTINGS).text,
+    }
+    assert ok(answers[1]) and kept.reported
+    assert [place for place, text in places.items() if fake_value in text] == []  # names the place, never the value
+
+
+# /plugin/file
+
+
+def paper(conn, data_dir, job, kind="resume", version=1, body=RESUME_PDF):
+    """A finished version of a job's resume or letter, with its PDF; where that is."""
+    with conn:
+        conn.execute(DONE, (job, kind, version))
+    target = pdf.tailored(data_dir, job, version, kind)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(body)
+    return target
+
+
+def packed(door, conn, data_dir, letter=False, body=RESUME_PDF):
+    """A fill that has had its answers, with a resume and, if asked, a letter in the pack; its job, ticket and PDF."""
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((FIRST_NAME, RESUME_FIELD, LETTER_FIELD)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    target = paper(conn, data_dir, job, body=body)
+    if letter:
+        paper(conn, data_dir, job, "cover_letter", body=LETTER_PDF)
+    ticket = running(door, conn, data_dir, job)
+    pack = send(door, ticket, [NAME_BOX, RESUME_BOX, LETTER_BOX]).json()["pack"]
+    assert [line["value"] for line in pack if line["kind"] == "file"] == [
+        {"slot": slot} for slot in ("resume", "cover_letter")[: 1 + letter]
+    ]
+    return job, ticket, target
+
+
+def fetch(door, ticket, slot="resume", key=KEY, origin=PLUGIN):
+    return door.post(PAPER, json={"protocol": 1, "ticket": ticket, "slot": slot}, headers=sent(key, origin))
+
+
+def handed_out(conn):
+    return one(conn, "SELECT files FROM fills ORDER BY id DESC")[0]
+
+
+def goes_out(response, name, body):
+    return (response.status_code, response.json()) == (200, {"name": name, "data": base64.b64encode(body).decode()})
+
+
+def test_a_pdf_the_pack_named_goes_out_once_with_its_trail(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+    assert handed_out(conn) == '["resume"]'
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+    assert handed_out(conn) == '["resume"]'
+
+
+def test_two_slots_each_go_out_once(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir, letter=True)
+    assert goes_out(fetch(door, ticket, "cover_letter"), "Cover-letter.pdf", LETTER_PDF)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+    assert handed_out(conn) == '["cover_letter", "resume"]'
+    assert refused(fetch(door, ticket, "cover_letter"), 404, "no-ticket")
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("slot", ["cover_letter", "made-up", "", "../resume", None, 1, True, ["resume"], {"a": 1}])
+def test_a_slot_the_pack_didn_t_name_is_no_ticket(door, conn, data_dir, paired, slot):
+    _, ticket, target = packed(door, conn, data_dir)
+    paper(conn, data_dir, one(conn, "SELECT id FROM jobs")[0], "cover_letter", body=LETTER_PDF)  # made after the pack
+    assert refused(fetch(door, ticket, slot), 404, "no-ticket")
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", target.read_bytes())
+
+
+def test_no_slot_in_the_body_is_no_ticket(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert refused(door.post(PAPER, json={"protocol": 1, "ticket": ticket}, headers=sent()), 404, "no-ticket")
+
+
+def test_a_made_up_ticket_gets_no_pdf(door, conn, data_dir, paired):
+    packed(door, conn, data_dir)
+    assert refused(fetch(door, "made-up"), 404, "no-ticket")
+
+
+@pytest.mark.parametrize("ticket", [None, 1, True, ["x"], {"a": 1}, "x" * 2001])
+def test_a_pdf_s_ticket_must_be_a_string_of_at_most_2000_characters(door, conn, data_dir, paired, ticket):
+    packed(door, conn, data_dir)
+    assert refused(fetch(door, ticket), 400, "bad-request")
+
+
+def test_another_browser_s_ticket_gets_no_pdf(door, conn, data_dir, paired):
+    pair(conn, SECOND_KEY, "Second", plugin=OTHER_PLUGIN)
+    _, ticket, _ = packed(door, conn, data_dir)
+    assert refused(fetch(door, ticket, key=SECOND_KEY, origin=OTHER_PLUGIN), 404, "no-ticket")
+    assert handed_out(conn) is None and goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_ticket_with_no_answers_yet_gets_no_pdf(door, conn, data_dir, paired):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    submit.save(conn, job, Form((FIRST_NAME, RESUME_FIELD)), "api")
+    preview.keep(conn, job, FIRST_NAME, "Fake")
+    paper(conn, data_dir, job)
+    assert refused(fetch(door, running(door, conn, data_dir, job)), 404, "no-ticket")
+
+
+def test_no_live_login_gets_no_pdf_and_uses_nothing_up(owner, door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    log_out(owner)
+    assert refused(fetch(door, ticket), 403, "not-logged-in")
+    assert handed_out(conn) is None
+    log_in(owner)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_job_with_its_record_gets_no_pdf_and_ends_the_fill(door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(
+            "INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+            "VALUES (?, '2026-11-05', 'then', 'by hand', ?, '[]', '[]')",
+            (job, FORM_ADDRESS),
+        )
+    assert refused(fetch(door, ticket), 404, "no-ticket")
+    assert handed_out(conn) is None and not held(door)
+    assert fill_rows(conn) == [(0, "Laptop Chrome", "sent", "submitted")]
+
+
+def outside_the_folder(target, data_dir):
+    copy = data_dir / "elsewhere.pdf"
+    copy.write_bytes(RESUME_PDF)
+    target.unlink()
+    target.symlink_to(copy)
+
+
+def in_another_job_s_folder(target, data_dir):
+    copy = data_dir / "documents" / "999" / target.name
+    copy.parent.mkdir()
+    copy.write_bytes(RESUME_PDF)
+    target.unlink()
+    target.symlink_to(copy)
+
+
+def changed_after_the_pack(target, data_dir):
+    target.write_bytes(b"%PDF-1.7 rebuilt since")
+
+
+def gone(target, data_dir):
+    target.unlink()
+
+
+def a_folder_in_its_place(target, data_dir):
+    target.unlink()
+    target.mkdir()
+
+
+def a_link_to_itself(target, data_dir):
+    target.unlink()
+    target.symlink_to(target)
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        outside_the_folder,
+        in_another_job_s_folder,
+        changed_after_the_pack,
+        gone,
+        a_folder_in_its_place,
+        a_link_to_itself,
+    ],
+)
+def test_a_spoiled_file_is_no_file_and_can_be_fetched_once_put_back(door, conn, data_dir, paired, spoil):
+    _, ticket, target = packed(door, conn, data_dir)
+    spoil(target, data_dir)
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert handed_out(conn) is None
+    if target.is_dir() and not target.is_symlink():
+        target.rmdir()
+    else:
+        target.unlink(missing_ok=True)
+    target.write_bytes(RESUME_PDF)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_job_s_folder_that_leads_elsewhere_is_no_file(door, conn, data_dir, paired):
+    _, ticket, target = packed(door, conn, data_dir)
+    moved = data_dir / "elsewhere"
+    target.parent.rename(moved)
+    target.parent.symlink_to(moved)
+    assert refused(fetch(door, ticket), 404, "no-file")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not a pdf", b"", b" %PDF-1.7", b"%PDF", b"%PDF 1.7", b"%PDF-" + bytes(10 * 2**20 - 4)],
+    ids=["text", "empty", "a space first", "too short", "no dash", "a byte over 10 MB"],
+)
+def test_what_isn_t_a_pdf_of_at_most_10_mb_is_no_file(door, conn, data_dir, paired, body):
+    _, ticket, _ = packed(door, conn, data_dir, body=body)
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert handed_out(conn) is None
+
+
+def test_a_pdf_of_exactly_10_mb_goes_out(door, conn, data_dir, paired):
+    body = b"%PDF-" + bytes(10 * 2**20 - 5)
+    _, ticket, _ = packed(door, conn, data_dir, body=body)
+    assert goes_out(fetch(door, ticket), "Resume.pdf", body)
+
+
+def test_a_file_over_10_mb_is_never_read(door, conn, data_dir, paired, monkeypatch):
+    _, ticket, target = packed(door, conn, data_dir)
+    with target.open("ab") as file:
+        file.truncate(11 * 2**20)
+    read, reader = [], Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read.append(path.name) or reader(path))
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert target.name not in read
+
+
+def test_a_named_pipe_is_no_file_and_is_never_read(door, conn, data_dir, paired, monkeypatch):
+    _, ticket, target = packed(door, conn, data_dir)
+    target.unlink()
+    os.mkfifo(target)
+    read = []  # a read of a pipe would wait for ever, so this notes it and reads nothing: a slip fails, never hangs
+    monkeypatch.setattr(Path, "read_bytes", lambda path: read.append(path.name) or b"")
+    assert refused(fetch(door, ticket), 404, "no-file")
+    assert target.name not in read
+
+
+def test_a_newer_version_made_during_the_fill_never_goes_out(door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    paper(conn, data_dir, job, version=2, body=b"%PDF-1.7 a newer resume")
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_a_busy_database_sends_no_pdf_and_uses_nothing_up(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    conn.execute("BEGIN IMMEDIATE")
+    response = fetch(door, ticket)
+    conn.rollback()
+    assert refused(response, 503, "app-error")
+    assert handed_out(conn) is None
+    assert goes_out(fetch(door, ticket), "Resume.pdf", RESUME_PDF)
+
+
+def test_no_answer_holds_a_path_and_no_log_holds_a_pdf(owner, door, conn, data_dir, paired, caplog):
+    caplog.set_level(logging.DEBUG)
+    _, ticket, target = packed(door, conn, data_dir)
+    answers = [fetch(door, ticket, "made-up"), fetch(door, "made-up")]
+    moved = target.with_suffix(".moved")
+    target.rename(moved)
+    answers.append(fetch(door, ticket))
+    moved.rename(target)
+    answers += [fetch(door, ticket), fetch(door, ticket)]
+    assert [answer.status_code for answer in answers] == [404, 404, 404, 200, 404]
+    paths = [word for answer in answers for word in (str(data_dir), target.name, "documents") if word in answer.text]
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    pdf_words = (RESUME_PDF.decode(), base64.b64encode(RESUME_PDF).decode(), target.name)
+    assert paths == [] and [word for word in pdf_words if word in logged] == []
+
+
+def test_the_trail_outlives_a_report_and_remove(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    fetch(door, ticket)
+    assert ok(report(door, ticket, values=[VALUE]))
+    assert handed_out(conn) == '["resume"]'
+    owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
+    assert handed_out(conn) == '["resume"]' and fills.latest(conn, job)["files"] == "resume"
+
+
+def test_a_trail_survives_a_stop_too(door, conn, data_dir, paired):
+    _, ticket, _ = packed(door, conn, data_dir)
+    fetch(door, ticket)
+    assert ok(report(door, ticket, "stopped", kind="bot-check"))
+    assert handed_out(conn) == '["resume"]'
 
 
 @pytest.fixture

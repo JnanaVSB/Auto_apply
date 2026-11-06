@@ -1,0 +1,28 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  min-width: 20rem;
+  max-width: 32rem;
+  margin: 1rem;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+
+p {
+  margin: 0.5rem 0;
+}
+
+input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.muted {
+  opacity: 0.75;
+}

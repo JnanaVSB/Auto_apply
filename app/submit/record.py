@@ -153,13 +153,13 @@ def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> list[dic
         if (done := runs.last_done(conn, job_id, kind)) is None:
             continue
         version = done["version"]
-        digest = _sha256(pdf.tailored(data_dir, job_id, version, kind))
+        digest = sha256(pdf.tailored(data_dir, job_id, version, kind))
         found.append({"slot": kind, "label": f"{name} v{version}", "version": version, "sha256": digest,
                       "note": "" if digest else MISSING})  # fmt: skip
     return found
 
 
-def _sha256(path: Path) -> str:
+def sha256(path: Path) -> str:
     try:
         with path.open("rb") as file:  # read a piece at a time
             return hashlib.file_digest(file, "sha256").hexdigest()

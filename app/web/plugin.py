@@ -2,10 +2,12 @@
 login. It reads no cookie, so the plugin can't keep a login alive, and adds no CORS header: that is what keeps job pages
 out."""
 
+import base64
 import hashlib
 import hmac
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -15,7 +17,7 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import fills, preview
+from app.submit import MAX_FIELDS, compare, fills, preview
 from app.web import queries
 
 PREFIX = "/plugin/"
@@ -24,15 +26,20 @@ PROTOCOL = 1
 MAX_BODY = 1024 * 1024
 MAX_VERSION = 32
 MAX_TEXT = 2_000  # an address or a ticket
+MAX_VALUE = 20_000  # one answer as a form shows it
 BROWSER = "SELECT name FROM paired_browsers WHERE id = ?"
 ORIGIN = re.compile(r"chrome-extension://[a-p]{32}")
 VERSION = re.compile(r"[0-9]+(\.[0-9]+){0,3}")  # as Chrome writes one; \d would also take other scripts' digits
 NO_KEY, WRONG_PLUGIN, OLD_PLUGIN = "no-key", "wrong-plugin", "old-plugin"
 TOO_BIG, BAD_REQUEST, APP_ERROR = "too-big", "bad-request", "app-error"
-NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB = "no-ticket", "not-logged-in", "not-ready", "no-job"
+NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB, NO_FILE = "no-ticket", "not-logged-in", "not-ready", "no-job", "no-file"
 # every refusal the plugin can get, from the agreement between the two; anything else is never passed on
-KINDS = {NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB}
+KINDS = {
+    NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB,
+    NO_FILE,
+}  # fmt: skip
 STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
+PAGE_STOPS = (fills.BOT_CHECK, fills.LIMIT, fills.UNEXPECTED_PAGE, fills.CANT_SET)
 
 
 def key_hash(key: str) -> str:
@@ -187,12 +194,67 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
             raise HTTPException(400, BAD_REQUEST) from None
         return JSONResponse(STOP if answers is None else {"go": True, "pack": answers})
 
+    @app.post(PREFIX + "report")
+    async def report(request: Request) -> Response:
+        body = await read_call(request)  # no live login: nothing goes out, and one that ran out mustn't lose the record
+        conn, tickets = request.app.state.conn, request.app.state.tickets
+        ticket = tickets.running(_text(body, "ticket"), request.state.browser_id)
+        if ticket is None:
+            raise HTTPException(404, NO_TICKET)
+        state, stop = body.get("state"), body.get("kind")
+        finished = state == "filled" and stop is None and ticket.answered
+        if not (finished or (state == "stopped" and stop in PAGE_STOPS)):
+            raise HTTPException(400, BAD_REQUEST)
+        filled = list(_lines(body.get("values"), "value", _is_value))  # only the keys: an answer goes no further
+        left = _lines(body.get("left"), "why", _is_why)
+        if not ticket.reported:
+            tickets.report(conn, ticket, stop, filled, left)
+        return JSONResponse({"ok": True})
+
+    @app.post(PREFIX + "file")
+    async def file(request: Request) -> Response:
+        body = await read_call(request)
+        _logged_in(request)
+        ticket_id = _text(body, "ticket")
+        conn, tickets = request.app.state.conn, request.app.state.tickets
+        ticket = tickets.running(ticket_id, request.state.browser_id)
+        if ticket is None or not ticket.answered or tickets.closed_by_record(conn, ticket):
+            raise HTTPException(404, NO_TICKET)
+        slot = body.get("slot")
+        if not isinstance(slot, str) or slot not in ticket.files or slot in ticket.handed:
+            raise HTTPException(404, NO_TICKET)
+        data = fills.named_pdf(data_dir, ticket, slot)
+        if data is None:
+            raise HTTPException(404, NO_FILE)
+        tickets.hand(conn, ticket, slot)  # the trail first: if this can't be saved, nothing goes out
+        return JSONResponse({"name": fills.PDF_NAMES[slot], "data": base64.b64encode(data).decode()})
+
 
 def _text(body: dict, name: str) -> str:
     text = body.get(name)
     if not (isinstance(text, str) and len(text) <= MAX_TEXT):
         raise HTTPException(400, BAD_REQUEST)
     return text
+
+
+def _lines(items: object, name: str, good: Callable[[object], bool]) -> dict:
+    """A report's list as each key's `name`, hostile until checked: anything wrong refuses the whole body."""
+    if not (isinstance(items, list) and len(items) <= MAX_FIELDS):
+        raise HTTPException(400, BAD_REQUEST)
+    for item in items:
+        key = item.get("key") if isinstance(item, dict) else None
+        if not (isinstance(key, str) and len(key) <= compare.MAX_KEY and good(item.get(name))):
+            raise HTTPException(400, BAD_REQUEST)
+    return {item["key"]: item[name] for item in items}
+
+
+def _is_value(value: object) -> bool:
+    texts = value if isinstance(value, list) else [value]
+    return all(isinstance(text, str) and len(text) <= MAX_VALUE for text in texts)
+
+
+def _is_why(why: object) -> bool:
+    return isinstance(why, str) and why in fills.LEFT
 
 
 def _logged_in(request: Request) -> None:

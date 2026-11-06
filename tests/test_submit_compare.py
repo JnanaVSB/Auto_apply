@@ -13,7 +13,7 @@ from app.submit import Choice, Field, Form, ashby, compare, greenhouse, lever, m
 # What the browser says the form shows
 
 
-GONE, NEW = "no longer on the form", "new on the form"
+GONE, NEW = "the plugin didn't see this on the form", "new on the form"
 WORDS, KIND, REQUIRED = "the question's words changed", "the kind of box changed", "whether it's required changed"
 CHOICES, CHOICES_UNCHECKED = "its choices changed", "its choices weren't checked"
 FILE_UNCHECKED, UNCHECKED = "the app only checked that it's a file box", "wasn't checked"
@@ -514,6 +514,8 @@ def test_invisible_characters_are_taken_out_of_a_drawn_label():
 @pytest.mark.parametrize(("extra", "more"), [(100, None), (101, 1), (150, 50)])
 def test_at_most_100_changes_and_then_how_many_more(extra, more):
     _, changes = compared(lines_of(Form(()), {}), [box(f"key_{number}", f"Label {number}") for number in range(extra)])
+    assert len(changes) == extra  # cut only when saved, so a report can add to them and the count stays true
+    changes = compare.at_most(changes)
     assert len(changes) == (100 if more is None else 101)
     assert changes[99] == {"question": form_shows("Label 99"), "what": NEW}
     if more:

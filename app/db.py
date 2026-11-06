@@ -756,6 +756,10 @@ UPGRADES = (
     );
     CREATE INDEX fills_started ON fills (started_on);
     """,
+    """
+    ALTER TABLE fills ADD COLUMN filled TEXT;  -- JSON: the questions filled. Public form text, never an answer
+    ALTER TABLE fills ADD COLUMN files TEXT;  -- JSON: the PDF slots handed out
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 
