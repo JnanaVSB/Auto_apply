@@ -27,10 +27,14 @@
         </form>
       </td>
     </tr>
+    {% if plugin %}<tr><td colspan="5">Plugin ID<br><code class="address">{{ plugin | replace("chrome-extension://", "") }}</code></td></tr>{% endif %}
     {% endfor %}
   </tbody>
 </table>
 <p class="hint">If the plugin says it was refused, remove that browser here and add it again.</p>
+{% if browsers | map(attribute=5) | select | list %}
+<p class="hint">Compare each plugin ID with the ID on your browser's extensions page: if it's different, remove that browser.</p>
+{% endif %}
 {% endif %}
 <h2>Add a browser</h2>
 <form method="post" action="/settings/plugin" class="stacked">

@@ -22,6 +22,8 @@ HOST, DEFAULT_PORT = "127.0.0.1", 8765
 DASHBOARD_LOCK = "dashboard-lock.db"
 SAVE_LOGIN = """INSERT INTO dashboard_login (id, password_hash, set_on) VALUES (1, ?, ?)
     ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash, set_on = excluded.set_on"""
+COUNT_LINKED = "SELECT count(*) FROM paired_browsers"
+STILL_LINKED = "Browsers still linked: {}. If your password may have leaked, remove them in Settings → Browser plugin."
 
 
 def _set_password(conn: sqlcipher3.Connection) -> None:
@@ -59,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command or not conn.execute("SELECT 1 FROM dashboard_login").fetchone():
                     _set_password(conn)
                     print("Dashboard password saved.")
+                    if args.command and (linked := conn.execute(COUNT_LINKED).fetchone()[0]):
+                        print(STILL_LINKED.format(linked))
             if args.command:
                 return 0
             if not _port_free(args.port):

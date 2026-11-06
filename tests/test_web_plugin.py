@@ -51,6 +51,10 @@ BAD_NAME = "Not added: type a name of 1 to 40 characters, with no tabs or line b
 WRONG_PLUGIN_HINT = "If the plugin says it was refused, remove that browser here and add it again."
 LOG_OUT_ALL_HINT = "This also removes every browser in Settings → Browser plugin: each one will need a new key."
 NOT_FINISHED = "A plugin is linked, but didn't finish connecting"
+COMPARE_HINT = (
+    "Compare each plugin ID with the ID on your browser's extensions page: if it's different, remove that browser."
+)
+SHOWN_ID = '<code class="address">' + "a" * 32 + "</code>"
 BUSY = "The database is busy"
 
 
@@ -713,6 +717,19 @@ def test_the_list_says_when_a_plugin_is_pinned_but_has_not_said_hello(owner, doo
     assert NOT_FINISHED in text and "No plugin has connected yet" not in text
     door.post(HELLO, json=GOOD, headers=sent())
     assert NOT_FINISHED not in words(owner.get(SETTINGS))
+
+
+def test_the_list_shows_each_plugin_id_to_compare_and_nothing_for_a_browser_with_none(owner, door, conn):
+    pair(conn)
+    pair(conn, "second-fake-key", "Second")
+    text = words(owner.get(SETTINGS))
+    assert "Plugin ID" not in text and COMPARE_HINT not in text
+    door.post(HELLO, json=GOOD | {"version": "bad"}, headers=sent())
+    for state in (NOT_FINISHED, "1.2.3"):
+        text = words(owner.get(SETTINGS))
+        assert state in text and SHOWN_ID in text and COMPARE_HINT in text
+        assert text.count("Plugin ID") == 1 and "chrome-extension://" not in text
+        door.post(HELLO, json=GOOD, headers=sent())
 
 
 def test_the_phone_can_pair_a_browser_too(phone_dashboard, conn):
