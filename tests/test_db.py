@@ -896,6 +896,35 @@ def _export_tables(conn) -> list:
     return conn.execute(f"SELECT name, sql FROM sqlite_master WHERE name IN ({names}) ORDER BY name").fetchall()  # noqa: S608
 
 
+def test_version_22_adds_paired_browsers_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_21:
+        version_21.setattr(db, "UPGRADES", db.UPGRADES[:21])
+        version_21.setattr(db, "SCHEMA_VERSION", 21)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+            before = _everything(conn)
+    with monkeypatch.context() as version_22:
+        version_22.setattr(db, "UPGRADES", db.UPGRADES[:22])
+        version_22.setattr(db, "SCHEMA_VERSION", 22)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 22
+            found, rows = _everything(conn)
+            assert [row for row in found if row[2] != "paired_browsers"] == before[0]
+            assert {name: rows[name] for name in before[1]} == before[1] and len(rows) == len(before[1]) + 1
+            assert conn.execute("SELECT count(*) FROM paired_browsers").fetchone()[0] == 0
+            add = "INSERT INTO paired_browsers (name, key_hash, added_on) VALUES (?, ?, 'then')"
+            with conn:
+                conn.execute(add, ("Laptop", "hash-1"))
+            for repeated in (("Laptop", "hash-2"), ("Other", "hash-1")):
+                with pytest.raises(sqlcipher3.IntegrityError):
+                    conn.execute(add, repeated)
+        with closing(db.connect(path)) as conn:  # runs once: opening again changes nothing
+            assert conn.execute("SELECT name FROM paired_browsers").fetchall() == [("Laptop",)]
+
+
 def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, monkeypatch):
     path = tmp_path / "upgraded"
     with monkeypatch.context() as version_19:

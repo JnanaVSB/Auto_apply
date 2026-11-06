@@ -28,6 +28,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 
     @app.post(PAGE + "/log-out-all")
     async def log_out_all(request: Request) -> Response:
+        conn = request.app.state.conn
+        with conn:  # first: a busy database fails the press with nothing done, so it can be pressed again
+            conn.execute("DELETE FROM paired_browsers")
         request.app.state.logins.log_out_all()
         response = RedirectResponse("/login", 303)
         response.delete_cookie(security.cookie_name(request.state.remote), path="/", secure=request.state.remote)
