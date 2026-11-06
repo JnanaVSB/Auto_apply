@@ -278,6 +278,8 @@ class Config(BaseModel):
     gmail_every_minutes: Annotated[int, Field(ge=0, le=1440, strict=True)] = 30  # Gmail: sync while open; 0 = off
     gmail_read_all: Annotated[bool, Field(strict=True)] = False  # Gmail: sort every e-mail, not only job-signed ones
     requests_per_second: Annotated[int, Field(ge=1, le=5, strict=True)] = 1  # to each job site; 1 is polite
+    fills_per_day: Annotated[int, Field(ge=1, le=50, strict=True)] = 10  # on the laptop's calendar
+    fill_pause_minutes: Annotated[int, Field(ge=0, le=60, strict=True)] = 2  # between two fills; 0 = off
     phone_address: Annotated[str | None, AfterValidator(_phone_address)] = ""  # the phone's way in; "" = off
     scoring: ScoringSettings = ScoringSettings()
     ai: AISettings = AISettings()

@@ -38,7 +38,7 @@ LIST_ROW = re.compile(r"list_url_([0-9]{1,4})")  # one Simplify list on the sett
 # Whole numbers on the settings form
 NUMBERS = (
     "collect_every_hours", "phonebook_every_days", "tracker_stale_days", "gmail_lookback_days", "gmail_every_minutes",
-    "requests_per_second",
+    "requests_per_second", "fills_per_day", "fill_pause_minutes",
 )  # fmt: skip
 SETTINGS_HEADER = "# auto_apply settings, saved by the dashboard. Each setting is explained in config.example.yaml.\n"
 SAVE_ANSWER = """INSERT INTO answer_key (job_id, label, marked_on) VALUES (?, ?, ?)

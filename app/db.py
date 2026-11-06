@@ -742,6 +742,20 @@ UPGRADES = (
         last_used TEXT
     );
     """,
+    """
+    CREATE TABLE fills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL REFERENCES jobs (id),
+        address TEXT NOT NULL,
+        started_on TEXT NOT NULL,  -- when the ticket was made: what the cap and the pause count
+        toolbar INTEGER NOT NULL,  -- 1: from the plugin's toolbar, 0: Open and fill
+        browser TEXT,  -- the name of the browser that pressed or took it, kept after Remove; NULL until one does
+        state TEXT NOT NULL,
+        stop_kind TEXT,
+        changes TEXT  -- JSON: each field the compare left for you, and why. Public form text, never an answer
+    );
+    CREATE INDEX fills_started ON fills (started_on);
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

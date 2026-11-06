@@ -930,6 +930,34 @@ def test_version_22_adds_paired_browsers_and_changes_nothing_else(tmp_path, monk
             assert conn.execute("SELECT name FROM paired_browsers").fetchall() == [("Laptop",)]
 
 
+def test_version_23_adds_fills_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_22:
+        version_22.setattr(db, "UPGRADES", db.UPGRADES[:22])
+        version_22.setattr(db, "SCHEMA_VERSION", 22)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+            before = _everything(conn)
+    with monkeypatch.context() as version_23:
+        version_23.setattr(db, "UPGRADES", db.UPGRADES[:23])
+        version_23.setattr(db, "SCHEMA_VERSION", 23)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 23
+            found, rows = _everything(conn)
+            added = {row[1] for row in found if row[2] == "fills"}
+            assert added == {"fills", "fills_started"}
+            assert [row for row in found if row[1] not in added] == before[0]
+            assert {name: rows[name] for name in before[1]} == before[1] and len(rows) == len(before[1]) + 1
+            assert conn.execute("SELECT count(*) FROM fills").fetchone()[0] == 0
+            with conn:
+                conn.execute("INSERT INTO fills (job_id, address, started_on, toolbar, state) "
+                             "VALUES (1, 'x', 'then', 0, 'waiting')")  # fmt: skip
+        with closing(db.connect(path)) as conn:  # runs once: opening again changes nothing
+            assert conn.execute("SELECT count(*) FROM fills").fetchone()[0] == 1
+
+
 def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, monkeypatch):
     path = tmp_path / "upgraded"
     with monkeypatch.context() as version_19:

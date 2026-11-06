@@ -75,6 +75,17 @@ class Form:
             object.__setattr__(self, "limit_note", _line(self.limit_note, MAX_HELP))
 
 
+@dataclass(frozen=True)
+class Drawn:
+    """What a site's form shows once a browser draws it, where that differs from what the app read."""
+
+    undrawn: frozenset[str]  # saved keys that may not be drawn
+    undrawn_starts: tuple[str, ...]  # the same, by how the key begins
+    unlisted: frozenset[str]  # drawn keys the read doesn't list
+    hidden_choices: bool  # a drop-down's choices are drawn only once it is opened
+    file_checks: tuple[str, ...]  # what a file box can be compared by: its words and required mark differ when drawn
+
+
 def fingerprint(form: Form) -> str:
     """Changes with anything in the form: a field, its wording, choices, file types or place, or the limit note."""
     text = json.dumps([_fields(form), form.limit_note], sort_keys=True, ensure_ascii=False)
