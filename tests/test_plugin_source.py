@@ -400,7 +400,7 @@ def test_every_why_and_stop_is_one_the_app_knows():
     known = {*fill_words.LEFT, *plugin.PAGE_STOPS}
     assert known <= literals
     assert {word for word in literals if re.fullmatch(r"[a-z]+(?:-[a-z]+)+", word)} <= known | {
-        "aria-controls", "aria-disabled", "aria-label", "aria-required", "one-time-code",
+        "aria-controls", "aria-disabled", "aria-label", "aria-readonly", "aria-required", "one-time-code",
     }  # fmt: skip
 
 
@@ -448,7 +448,7 @@ def test_an_option_is_pressed_only_after_each_check():
     choose = page_function("choose", DROPDOWN)
     assert code(DROPDOWN).count("press(") == 2  # where it's written, and here
     pressed = choose.index("press(option);")
-    checks = ("stopHere(landedAt(), box)", "only(", ".closest(PRESSES)", ".checkVisibility(SEEN)", '"aria-disabled"')
+    checks = ("stopHere(landedAt(), box)", "only(", "wouldPress(option)", ".checkVisibility(SEEN)", '"aria-disabled"')
     for check in checks:
         assert choose.index(check) < pressed, check
     assert 'if (stopHere(landedAt(), box)) return "cant-set";' in choose
@@ -458,7 +458,7 @@ def test_an_option_is_pressed_only_after_each_check():
 def test_every_option_is_counted_before_any_is_judged():
     choose = page_function("choose", DROPDOWN)
     assert "only(optionsOf(box), (found) => found.textContent, line.value)" in choose
-    assert choose.index("only(") < choose.index(".closest(PRESSES)") and "filter(" not in choose
+    assert choose.index("only(") < choose.index("wouldPress(option)") and "filter(" not in choose
 
 
 def test_nothing_a_click_would_also_press_may_be_or_hold_the_option():
@@ -466,7 +466,15 @@ def test_nothing_a_click_would_also_press_may_be_or_hold_the_option():
     assert set(presses.split(", ")) == {
         "a", "area", "button", "input", "label", "select", "summary", "textarea", "[role=button]", "[role=link]",
     }  # fmt: skip
-    assert "option.closest(PRESSES)" in page_function("choose", DROPDOWN) and "matches(PRESSES)" not in code(DROPDOWN)
+    assert "option.closest(PRESSES)" in page_function("wouldPress", DROPDOWN)
+    assert "matches(PRESSES)" not in code(DROPDOWN)
+
+
+def test_no_shadow_part_may_sit_round_the_option_open_or_closed():
+    walk = page_function("wouldPress", DROPDOWN)
+    assert "for (let node = option; node; node = node.parentElement)" in walk
+    assert "chrome.dom.openOrClosedShadowRoot(node)" in walk and ".shadowRoot" not in walk
+    assert walk.index(".closest(PRESSES)") < walk.index("openOrClosedShadowRoot")
 
 
 @pytest.mark.parametrize(
@@ -495,7 +503,7 @@ def test_a_place_is_only_named_at_the_start(words, place):
 def test_a_drop_down_is_left_before_anything_is_written_and_cleaned_up_after():
     pick = page_function("pick", DROPDOWN)
     written = pick.index("box.focus();")
-    checks = ('line.kind !== "single"', "closed(box)", "shown === undefined", "PLACE.test(line.key)",
+    checks = ('line.kind !== "single"', "closed(box)", '"aria-readonly"', "shown === undefined", "PLACE.test(line.key)",
               "PLACE.test(question(box))", "same(line.value, shown)")  # fmt: skip
     for check in checks:
         assert pick.index(check) < written, check
@@ -824,6 +832,8 @@ def test_the_guide_says_what_a_page_can_do():
     assert "if its name differs" in text
     assert "A custom drop-down is one of these for now" not in text
     assert "only when exactly one choice has the answer's whole words" in text
+    assert "a question that starts with a country, place or state" in text
+    assert "Stay on the form's tab while it fills" in text
 
 
 def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on():

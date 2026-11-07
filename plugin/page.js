@@ -1,5 +1,5 @@
 // The page part: it reads, sets and reads back a form's boxes. It never sees the key or the ticket, sends no address and
-// presses nothing. The waits are for the site, not to look human.
+// presses nothing but a drop-down's option. The waits are for the site, not to look human.
 const ANCHOR_MS = 10000;
 const LOOK_MS = 200;
 const QUIET_MS = 1500;

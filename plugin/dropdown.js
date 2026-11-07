@@ -4,7 +4,7 @@
 const MENU_MS = 2000;
 // At the start only: "Are you allowed to work in this country?" is a yes or no, and the site's own place lists aren't
 const PLACE = /^\W*(?:country|location|city|state|province|region)\b/i;
-// A click on an option runs these too, if the option is one or sits inside one
+// A click on an option runs these too, if the option is one or sits inside one in the page's plain tree
 const PRESSES = "a, area, button, input, label, select, summary, textarea, [role=button], [role=link]";
 
 // What it shows as picked, "" when it says nothing is, and undefined when it can't say: the text box holds typed words.
@@ -36,13 +36,22 @@ function press(option) {
   }
 }
 
+// A click also runs through what an option is slotted into, and a closed part can't be read, so any shadow part counts.
+function wouldPress(option) {
+  if (option.closest(PRESSES)) return true;
+  for (let node = option; node; node = node.parentElement) {
+    if (chrome.dom.openOrClosedShadowRoot(node)) return true;
+  }
+  return false;
+}
+
 // Every option counts, fakes too, so a fake beside a real one is two alike. A stop found here is made by `fillLines`.
 async function choose(line, box) {
   await menuShown(box);
   if (stopHere(landedAt(), box)) return "cant-set";
   const option = only(optionsOf(box), (found) => found.textContent, line.value);
   if (!option) return "no-choice";
-  if (option.closest(PRESSES) || !option.checkVisibility(SEEN)) return "cant-set";
+  if (wouldPress(option) || !option.checkVisibility(SEEN)) return "cant-set";
   if (option.getAttribute("aria-disabled") === "true") return "cant-set";
   press(option);
   return undefined;
@@ -51,7 +60,8 @@ async function choose(line, box) {
 // Blur is what closes the list, as no key is ever raised. After a pick the box is the site's, so its text stays.
 async function pick(line, box) {
   const shown = shownPick(box);
-  if (line.kind !== "single" || closed(box) || shown === undefined) return "custom";
+  const locked = closed(box) || box.getAttribute("aria-readonly") === "true";
+  if (line.kind !== "single" || locked || shown === undefined) return "custom";
   if (PLACE.test(line.key) || PLACE.test(question(box))) return "place";
   if (same(line.value, shown)) return undefined;
   let why = "cant-set";
