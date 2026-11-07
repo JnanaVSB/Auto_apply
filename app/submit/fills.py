@@ -331,13 +331,15 @@ class Tickets:
     ) -> None:
         """How the fill went, from the browser: `filled` keys, and each `left` key with why, which wins, as a line that
         didn't stick is in both. Only the pack's keys count, each said in the app's own words, so nothing a page wrote
-        is kept. What you must act on comes first, so it's never lost in the count. Saved first: a busy database raises
-        and changes nothing. `stop` is why it stopped; that ends the ticket, and a row with its answers stays `sent`."""
+        is kept. What you must act on comes first, so it's never lost in the count, and a pick that read back no longer
+        says its choices weren't checked. Saved first: a busy database raises and changes nothing. `stop` is why it
+        stopped; that ends the ticket, and a row with its answers stays `sent`."""
         state = "filled" if stop is None else "sent" if ticket.answered else "stopped"
         questions = ticket.questions.items()
         lines = [{"question": question, "what": LEFT[left[key]]} for key, question in questions if key in left]
-        changes = compare.at_most(lines + ticket.changes)
         done = [question for key, question in questions if key in filled and key not in left]
+        stale = [{"question": question, "what": compare.CHOICES_UNCHECKED} for question in done]
+        changes = compare.at_most(lines + [change for change in ticket.changes if change not in stale])
         with conn:
             conn.execute(REPORTED, (state, stop, _json(changes), _json(done), ticket.fill))
         ticket.reported = True

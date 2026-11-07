@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app import db
 from app.config import Config
 from app.sources import closed_site, is_simplify_site, posting_of
-from app.submit import Drawn, ashby, fill_words, fills, greenhouse, lever
+from app.submit import Drawn, ashby, compare, fill_words, fills, greenhouse, lever
 from app.submit.preview import Preview
 from app.web import queries, security
 
@@ -623,6 +623,27 @@ def test_one_live_login_among_ended_ones_is_enough(clock):
     logins = security.Logins(clock, {"old": session(0.0, 0.0), "new": session(clock.now, clock.now)})
     clock.now += security.IDLE_SECONDS
     assert logins.live()
+
+
+# What a report keeps
+
+
+def test_a_pick_that_read_back_no_longer_says_its_choices_weren_t_checked(conn, laptop, at, tickets):
+    running, *_ = three_fills(conn, tickets, laptop)
+    picked, refused, stuck = "Need sponsorship?", "Which team?", "Which office?"
+    unchecked = [{"question": question, "what": compare.CHOICES_UNCHECKED} for question in (picked, refused, stuck)]
+    other = {"question": picked, "what": compare.ADDED}
+    tickets.save_answer(conn, running, [*unchecked, other])
+    running.questions = {"a": picked, "b": refused, "c": stuck}
+    tickets.report(conn, running, None, ["a", "c"], {"b": "no-choice", "c": "didnt-stick"})
+    said = fill_words.latest(conn, running.job)
+    assert said["filled"] == [picked]
+    assert said["changes"] == [
+        {"question": refused, "what": fill_words.LEFT["no-choice"]},
+        {"question": stuck, "what": fill_words.LEFT["didnt-stick"]},
+        *unchecked[1:],
+        other,
+    ]
 
 
 # Who may read `changes`

@@ -194,7 +194,7 @@ function setTicks(list, labels) {
 function setLine(line, list) {
   if (!list || (list.length > 1 && !isGroup(line, list))) return "no-box";
   const [box] = list;
-  if (box.matches(DROPDOWN)) return "custom";
+  if (box.matches(DROPDOWN)) return pick(line, box);
   if (line.kind === "location") return "place";
   if (list.every(closed)) return "cant-set";
   if (line.kind === "text" || line.kind === "long_text") return setText(box, line.value);
@@ -227,7 +227,7 @@ async function upload(line, root) {
 async function setOne(line, root) {
   try {
     if (line.kind === "file") return await upload(line, root);
-    const why = setLine(line, boxes(root).get(line.key));
+    const why = await setLine(line, boxes(root).get(line.key));
     return why ? { why } : {};
   } catch {
     return { why: "cant-set" };
@@ -236,6 +236,7 @@ async function setOne(line, root) {
 
 function shownValue(line, list) {
   const [box] = list;
+  if (box.matches(DROPDOWN)) return shownPick(box) ?? "";
   if (line.kind === "file") return box.files?.[0]?.name ?? "";
   if (line.kind === "consent") return box.checked ? line.value : "";
   if (box.matches(TEXT_BOX)) return box.value;
