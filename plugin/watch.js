@@ -1,5 +1,6 @@
 // The watcher: once a fill's answers are out, it reads the form again and notices your press of Submit.
-// It only listens: it presses, blocks and delays nothing. It loads before page.js, so it uses page.js only when called.
+// It only listens: it presses, blocks and delays nothing. It loads before dropdown.js and page.js, so it uses them only
+// when called.
 const REREAD_MS = 5000;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
 // The same as the app's

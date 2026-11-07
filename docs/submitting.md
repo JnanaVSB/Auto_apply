@@ -81,7 +81,7 @@ question.
 - **Left for you** in the job's box lists what you do yourself on the form. The app never answers these.
 - **Check these on the form** appears after a fill. It lists what the plugin couldn't set, and what looks different from
   what the app read. On Greenhouse the plugin picks in a drop-down only when exactly one choice has the answer's whole
-  words. Anywhere else, and for a question that starts with a country, place or state, a custom drop-down is yours to
+  words. On other sites, and for a question that starts with a country, place or state, a custom drop-down is yours to
   pick.
 
 **When a fill stops,** the box and the popup say why:

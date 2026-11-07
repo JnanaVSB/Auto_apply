@@ -2,7 +2,8 @@
 // go into the drop-down's text box, which opens its list, and the one option with those whole words gets a press. It
 // loads before page.js, so it uses page.js only when called.
 const MENU_MS = 2000;
-// At the start only: "Are you allowed to work in this country?" is a yes or no, and the site's own place lists aren't
+// At the start only: "Are you allowed to work in this country?" is a yes or no; a question that starts with a place is
+// the site's long list, so it's left
 const PLACE = /^\W*(?:country|location|city|state|province|region)\b/i;
 // A click on an option runs these too, if the option is one or sits inside one in the page's plain tree
 const PRESSES = "a, area, button, input, label, select, summary, textarea, [role=button], [role=link]";
@@ -45,7 +46,8 @@ function wouldPress(option) {
   return false;
 }
 
-// Every option counts, fakes too, so a fake beside a real one is two alike. A stop found here is made by `fillLines`.
+// Every option counts, fakes too, so a fake beside a real one is two alike. A stop seen here leaves this field;
+// `fillLines` then makes the stop.
 async function choose(line, box) {
   await menuShown(box);
   if (stopHere(landedAt(), box)) return "cant-set";
@@ -64,7 +66,7 @@ async function pick(line, box) {
   if (line.kind !== "single" || locked || shown === undefined) return "custom";
   if (PLACE.test(line.key) || PLACE.test(question(box))) return "place";
   if (same(line.value, shown)) return undefined;
-  let why = "cant-set";
+  let why = "cant-set"; // until set, so an exception still clears the words
   box.focus();
   try {
     why = setText(box, line.value) ?? (await choose(line, box));
