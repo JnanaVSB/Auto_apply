@@ -441,7 +441,10 @@ def _typed(field: Field, form: dict[str, str]) -> str:
 
 
 def _suggestion(line: match.Line) -> str:
-    """A suggested answer as `_typed` keeps yours: its text, or the labels of its choices, one a line."""
+    """A suggested answer as `_typed` keeps yours: its text, the labels of its choices, one a line, or a file's label,
+    never its path."""
+    if line.field.kind == "file":
+        return line.source
     if isinstance(line.value, str):
         return line.value
     return "\n".join(line.field.labels[value] for value in line.value)

@@ -11,6 +11,7 @@ from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
     FILL,
     FORM,
+    LETTER_PDF,
     LINK,
     OTHER_PLUGIN,
     PLUGIN,
@@ -38,7 +39,7 @@ from test_web_plugin import (
 
 from app import questionnaire
 from app.config import Config
-from app.submit import MAX_FIELDS, Field, Form, ashby, fills, match, preview, wordings
+from app.submit import MAX_FIELDS, Field, Form, ashby, fills, match, preview, record, wordings
 from app.submit import load as load_form
 from app.submit import save as save_form
 from app.web import actions, queries
@@ -61,6 +62,7 @@ NOT_SEEN = (
 SHOWN_NOT_SEEN = NOT_SEEN.replace("'", "&#39;")
 READ_STOP = {"go": False, "reason": "read"}
 UNEXPECTED = {"go": False, "reason": "unexpected-page"}
+TOO_FEW = {"go": False, "reason": "too-few"}
 STATUS = '<p id="fill-status"'
 LOOKS_SENT = "It looks sent. If the site took it, press I submitted it."
 
@@ -263,10 +265,12 @@ def test_another_browser_can_t_use_a_taken_ticket(owner, door, conn, data_dir, p
     assert load_form(conn, job) is None and held(door)
 
 
-@pytest.mark.parametrize("fields", [[], [TOP_FILE], [NAME] * (MAX_FIELDS + 1)])
-def test_nothing_to_save_is_a_stop_and_uses_the_ticket_up(owner, door, conn, data_dir, paired, fields):
+@pytest.mark.parametrize(
+    ("fields", "stop"), [([], TOO_FEW), ([TOP_FILE], TOO_FEW), ([NAME] * (MAX_FIELDS + 1), UNEXPECTED)]
+)
+def test_nothing_to_save_is_a_stop_and_uses_the_ticket_up(owner, door, conn, data_dir, paired, fields, stop):
     job = ashby_job(conn, data_dir)
-    assert read(owner, door, job, fields).json() == UNEXPECTED
+    assert read(owner, door, job, fields).json() == stop
     assert load_form(conn, job) is None and not held(door) and fill_rows(conn) == []
 
 
@@ -508,13 +512,56 @@ def test_use_all_lets_them_go(owner, door, conn, data_dir, paired, full_answers,
     assert [line["key"] for line in pack] == ["_systemfield_name", "_systemfield_email", "phone"]
 
 
-def test_a_file_box_the_page_wrote_is_a_decision_and_gets_no_pdf(owner, door, conn, data_dir, paired, person):
+def letter_job(owner, door, conn, data_dir):
+    """A read form with a cover letter box, and a finished letter."""
     job = ashby_job(conn, data_dir)
-    paper(conn, data_dir, job, "cover_letter")
-    read(owner, door, job, [NAME, RESUME, LETTER])
+    paper(conn, data_dir, job, "cover_letter", body=LETTER_PDF)
+    read(owner, door, job, [NAME, EMAIL, RESUME, LETTER])
+    return job
+
+
+def use(owner, conn, data_dir, job, key):
+    line = lines(conn, data_dir, job)[key]
+    data = {"field": key, "seen": form_part._seen([line]), "csrf_token": csrf(owner)}
+    return owner.post(f"/jobs/{job}/form/use", data=data)
+
+
+def test_a_file_box_the_page_wrote_waits_for_your_use(owner, door, conn, data_dir, paired, person):
+    job = letter_job(owner, door, conn, data_dir)
+    line = lines(conn, data_dir, job)["made-up-file"]
+    assert (line.status, line.source) == ("suggested", "Cover letter v1")
+    assert why_not(conn, data_dir, job) == fills.ANSWER_FIRST
+    page = box(owner, job)
+    assert "Cover letter v1" in page and "Answer it another way" not in page
+
+
+def test_a_use_on_a_file_keeps_its_label_and_lets_the_pdf_go_once(owner, door, conn, data_dir, paired, person, limits):
+    job = letter_job(owner, door, conn, data_dir)
+    use(owner, conn, data_dir, job, "made-up-file")
+    assert one(conn, "SELECT answer FROM form_answers WHERE field = 'made-up-file'") == ("Cover letter v1",)
+    line = lines(conn, data_dir, job)["made-up-file"]
+    assert (line.status, line.source, line.note) == ("fill", match.MINE, "Cover letter v1")
+    assert record.shown(line) == "Cover letter v1"
+    assert why_not(conn, data_dir, job) is None
+    press(door, conn, data_dir, job)
+    ticket = call(door, START, ASHBY_FORM).json()["ticket"]
+    pack = send(door, ticket, [NAME, EMAIL, RESUME, LETTER]).json()["pack"]
+    assert {"slot": "cover_letter"} in [line_["value"] for line_ in pack]
+    assert fetch(door, ticket, "cover_letter").status_code == 200
+    assert refused(fetch(door, ticket, "cover_letter"), 404, "no-ticket")
+
+
+def test_a_newer_file_asks_you_again(owner, door, conn, data_dir, paired, person):
+    job = letter_job(owner, door, conn, data_dir)
+    use(owner, conn, data_dir, job, "made-up-file")
+    paper(conn, data_dir, job, "cover_letter", version=2, body=LETTER_PDF)
     line = lines(conn, data_dir, job)["made-up-file"]
     assert (line.status, line.decision, line.value) == ("decide", "choose_file", "")
-    assert why_not(conn, data_dir, job) == fills.ANSWER_FIRST
+    assert "the file changed" in line.note and why_not(conn, data_dir, job) == fills.ANSWER_FIRST
+    assert f'action="/jobs/{job}/form/forget"' in box(owner, job)
+    owner.post(f"/jobs/{job}/form/forget", data={"field": "made-up-file", "csrf_token": csrf(owner)})
+    line = lines(conn, data_dir, job)["made-up-file"]
+    assert (line.status, line.source) == ("suggested", "Cover letter v2")
 
 
 def test_a_consent_the_page_wrote_is_a_decision():
@@ -529,7 +576,81 @@ def test_the_site_s_own_boxes_still_fill(owner, door, conn, data_dir, paired, pe
     found = lines(conn, data_dir, job)
     assert [line.status for line in found.values()] == ["fill", "fill", "fill"]
     assert preview.preview(conn, data_dir, job).open == 0
-    assert ashby.OWN_KEYS == {"_systemfield_name", "_systemfield_email", "_systemfield_resume"}
+    assert ashby.OWN_KEYS == {"_systemfield_name": "text", "_systemfield_email": "text", "_systemfield_resume": "file"}
+
+
+@pytest.mark.parametrize(
+    ("key", "kind"), [("_systemfield_resume", "text"), ("_systemfield_email", "file"), ("_systemfield_name", "single")]
+)
+def test_a_site_s_own_key_on_another_kind_of_box_is_dropped(key, kind):
+    assert (
+        ashby.form((Field(key, "LinkedIn", kind, False, "drawn"), Field("a1", "Why?", "text", True, "drawn")))
+        .fields[0]
+        .key
+        == "a1"
+    )
+
+
+def test_a_page_can_t_get_an_answer_out_through_the_resume_key(owner, door, conn, data_dir, paired, full_answers):
+    job = ashby_job(conn, data_dir)
+    read(
+        owner,
+        door,
+        job,
+        [NAME, EMAIL, {"key": "_systemfield_resume", "label": "LinkedIn", "kind": "text", "required": True}],
+    )
+    assert saved_keys(conn, job) == ["_systemfield_name", "_systemfield_email"]
+
+
+def test_an_own_key_of_another_kind_is_held_back_even_if_it_was_saved():
+    field = Field("_systemfield_resume", "LinkedIn", "text", False, "company")
+    assert preview.held_back(match.Line(field, "fill", "made-up", "Questionnaire")).status == "suggested"
+
+
+SYMBOL = {"key": "age", "label": "Are you 18?", "kind": "text", "required": True}
+
+
+def test_a_symbol_change_holds_your_answer_back_and_keeps_the_row(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, SYMBOL])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[1], "Yes")
+    assert lines(conn, data_dir, job)["age"].source == match.MINE
+    read(owner, door, job, [NAME, SYMBOL | {"label": "Are you < 18?"}])
+    line = lines(conn, data_dir, job)["age"]
+    assert line.source != match.MINE and "the question changed" in line.note
+    assert one(conn, "SELECT answer, wording FROM form_answers WHERE field = 'age'") == ("Yes", "")
+
+
+def test_a_symbol_change_in_a_choice_counts_too(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    choice = {"key": "pick", "label": "Pick", "kind": "single", "required": True}
+    read(owner, door, job, [NAME, choice | {"choices": [{"label": "A+", "value": "1"}]}])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[1], "A+")
+    read(owner, door, job, [NAME, choice | {"choices": [{"label": "A-", "value": "1"}]}])
+    assert one(conn, "SELECT wording FROM form_answers WHERE field = 'pick'") == ("",)
+
+
+def test_the_same_words_keep_your_answer(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, SYMBOL])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[1], "Yes")
+    read(owner, door, job, [NAME, SYMBOL | {"label": "  ARE you   18?"}])
+    assert lines(conn, data_dir, job)["age"].source == match.MINE
+
+
+def test_a_busy_database_changes_neither_the_form_nor_your_answer(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, SYMBOL])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[1], "Yes")
+    ticket = read_ticket(owner, door, job)["ticket"]
+    conn.execute("BEGIN IMMEDIATE")
+    response = send(door, ticket, [NAME, SYMBOL | {"label": "Are you < 18?"}])
+    conn.rollback()
+    assert refused(response, 503, "app-error") and held(door)
+    assert (
+        load_form(conn, job)[0].fields[1].label == "Are you 18?"
+        and lines(conn, data_dir, job)["age"].source == match.MINE
+    )
 
 
 def test_your_own_answer_stays_a_fill(owner, door, conn, data_dir, paired, person):
@@ -563,7 +684,7 @@ def test_a_read_with_under_half_the_saved_questions_keeps_the_saved_form(owner, 
     boxes = [WHY | {"key": f"q{number}", "label": f"Question {number}"} for number in range(8)]
     read(owner, door, job, boxes)
     drawn = [*boxes[:kept], WHY | {"key": "new", "label": "A new question"}]
-    assert read(owner, door, job, drawn).json() == UNEXPECTED
+    assert read(owner, door, job, drawn).json() == TOO_FEW
     assert saved_keys(conn, job) == [box_["key"] for box_ in boxes] and not held(door)
 
 

@@ -1,7 +1,6 @@
 // The watcher: once a fill's answers are out, it reads the form again and notices your press of Submit.
 // It only listens: it presses, blocks and delays nothing. It loads before page.js, so it uses page.js only when called.
 const REREAD_MS = 5000;
-const SEND_WORDS = /^(submit|send)( my| your)?( job)?( application)?$/;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
 const SECRET_QUESTION = /password/i;
 const HOLDS_A_BOX = "input, select, textarea, label";
@@ -13,14 +12,6 @@ let formRoot;
 let lastKept;
 let thanksSign; // the app's own words for this site, never a page's
 let lookingForThanks = false;
-
-const isControl = (node) =>
-  node.tagName === "BUTTON" ||
-  (node.tagName === "INPUT" && ["submit", "button"].includes(node.type)) ||
-  node.getAttribute?.("role") === "button";
-// Its whole words, as a person sees them. Other words aren't noticed, which is the safe side.
-const saysSubmit = (control) =>
-  [control.textContent, control.value].some((words) => SEND_WORDS.test(tidy(words ?? "")));
 
 const isSecret = (box) =>
   box.autocomplete.split(/\s+/).some((word) => SECRET_BOXES.has(word)) || SECRET_QUESTION.test(question(box));
@@ -44,12 +35,21 @@ function readForm(root) {
   return values;
 }
 
-// A page chooses what its controls say, so an element wrapped round the boxes, or one you can't see, doesn't count.
-// This can't stop a page that draws a real button with Submit's words on something else.
+// A press is only the board's named Submit, or, with none named, a real type=submit of this form. Words decide nothing,
+// as a page chooses them. Where a board can't say, nothing is noticed: "I submitted it" still works, and fewer is safe.
+function isSubmit(node) {
+  if (node.nodeType !== Node.ELEMENT_NODE) return false;
+  if (BOARD.submit) return node.matches(BOARD.submit);
+  const real = ["INPUT", "BUTTON"].includes(node.tagName) && node.getAttribute("type")?.toLowerCase() === "submit";
+  return real && node.form === formRoot;
+}
+
+// An element wrapped round the boxes, or one you can't see, doesn't count. A page can still draw a real Submit of its
+// own form on something else, and that can't be told.
 function heard(event) {
   if (!event.isTrusted) return;
-  const control = event.composedPath().find(isControl);
-  if (!control || !formRoot?.contains(control) || !saysSubmit(control)) return;
+  const control = event.composedPath().find(isSubmit);
+  if (!control || !formRoot?.contains(control)) return;
   if (!control.checkVisibility(SEEN) || control.querySelector(HOLDS_A_BOX)) return;
   const saved = ask({ do: "read", state: "clicked", values: readForm(formRoot) });
   const already = shownBeforePress();

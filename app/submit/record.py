@@ -74,7 +74,7 @@ def shown(line: match.Line) -> str:
     if line.status not in ("fill", "suggested"):
         return ""
     if field.kind == "file":
-        return line.source
+        return line.note if line.source == match.MINE else line.source
     if field.kind == "consent" and line.value == match.TICKED:
         return "ticked"
     if isinstance(line.value, tuple):
@@ -133,12 +133,14 @@ def submit(
         raise Refused(NO_CARD)
     held = conn.execute(LAST_READ, (job_id,)).fetchone()
     read, checked_on = (json.loads(held[0]), held[1]) if held and held[0] and lines is not None else (None, None)
-    handed = json.loads(held[2]) if held and held[2] else {}
-    fields = _fields(lines, read) if lines is not None else [
+    handed = json.loads(held[2]) if read is not None and held[2] else {}
+    paths = {str(found[1]): slot for slot, found in documents(conn, data_dir, job_id).items() if found}
+    labels = {path: _label(slot, handed[slot]["version"]) for path, slot in paths.items() if slot in handed}
+    fields = _fields(lines, read, labels) if lines is not None else [
         {"question": label, "value": text, "from": "Questionnaire"}
         for label, text in standard(questionnaire.load(conn)[0])
     ]  # fmt: skip
-    files = _files(conn, data_dir, job_id, handed, _changed(conn, data_dir, job_id, lines, read) if read else set())
+    files = _files(conn, data_dir, job_id, handed, _changed(paths, lines, read) if read else set())
     saved = (job_id, on.isoformat(), now(), "by hand" if read is None else "browser", job["apply_url"],
              json.dumps(fields, ensure_ascii=False), json.dumps(files, ensure_ascii=False), checked_on)  # fmt: skip
     try:
@@ -164,28 +166,29 @@ def moved_back(conn: sqlcipher3.Connection, job_id: int, found: dict) -> str | N
     return next((move["moved_on"] for move in later if move["moved_on"] >= found["saved_on"]), None)
 
 
-def _fields(lines: tuple[match.Line, ...], read: dict | None = None) -> list[dict]:
-    """Each question as the app prepared it, or with a read as the form last showed it. What you do yourself on the site
-    is never guessed at: no value."""
+def _fields(lines: tuple[match.Line, ...], read: dict | None = None, labels: dict | None = None) -> list[dict]:
+    """Each question as the app prepared it, or with a read as the form last showed it, with `labels` for a PDF handed
+    out, by its path. What you do yourself on the site is never guessed at: no value."""
     fields = []
     for line in lines:
         if line.status != "hidden":
             field = {"question": line.field.label, "value": "" if line.status in NO_VALUE else shown(line),
                      "from": NO_VALUE.get(line.status, line.source),
                      "note": line.note}  # fmt: skip
-            fields.append(field if read is None else field | _as_read(line, field["value"], read))
+            fields.append(field if read is None else field | _as_read(line, field["value"], read, labels or {}))
     return fields
 
 
-def _as_read(line: match.Line, prepared: str, read: dict) -> dict:
+def _as_read(line: match.Line, prepared: str, read: dict, labels: dict) -> dict:
     """What the read changes in a line's row: nothing if it shows what the app prepared. A file goes by its verdict, as
     a read never holds another file's name."""
     key = line.field.key
     if key not in read:
         return {"value": "", "from": NOT_READ}
     if line.field.kind == "file":
+        handed = labels.get(line.value)
         verdicts = {
-            fill_words.SAME_FILE: {},
+            fill_words.SAME_FILE: {"value": handed, "from": handed} if handed else {},
             fill_words.CHANGED_FILE: {"value": ANOTHER_FILE, "from": AS_SHOWN},
             "": {"value": "", "from": NO_FILE_SHOWN},
         }
@@ -204,25 +207,26 @@ def _plain(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def _changed(
-    conn: sqlcipher3.Connection, data_dir: Path, job_id: int, lines: tuple[match.Line, ...], read: dict
-) -> set[str]:
+def _label(slot: str, version: int) -> str:
+    return f"{dict(DOCUMENTS)[slot]} v{version}"
+
+
+def _changed(paths: dict[str, str], lines: tuple[match.Line, ...], read: dict) -> set[str]:
     """The slots whose file line reads as changed."""
-    paths = {str(found[1]): slot for slot, found in documents(conn, data_dir, job_id).items() if found}
     verdicts = ((line, read.get(line.field.key)) for line in lines if line.field.kind == "file")
     return {paths[line.value] for line, said in verdicts if said == fill_words.CHANGED_FILE and line.value in paths}
 
 
 def _files(conn: sqlcipher3.Connection, data_dir: Path, job_id: int, handed: dict, changed: set[str]) -> list[dict]:
-    """The resume and cover letter the last fill handed out, else the newest finished ones, each with its SHA-256. A PDF
+    """The resume and cover letter a read's fill handed out, else the newest finished ones, each with its SHA-256. A PDF
     gone from the folder is noted and never stops the record."""
     found = []
-    for kind, name in DOCUMENTS:
+    for kind, _ in DOCUMENTS:
         if (done := handed.get(kind) or runs.last_done(conn, job_id, kind)) is None:
             continue
         version = done["version"]
         digest = done["sha256"] if kind in handed else sha256(pdf.tailored(data_dir, job_id, version, kind))
-        found.append({"slot": kind, "label": f"{name} v{version}", "version": version, "sha256": digest,
+        found.append({"slot": kind, "label": _label(kind, version), "version": version, "sha256": digest,
                       "note": "" if digest else MISSING} | ({"changed": True} if kind in changed else {}))  # fmt: skip
     return found
 

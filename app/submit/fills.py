@@ -19,10 +19,11 @@ import sqlcipher3
 from app.collect import now
 from app.config import Config
 from app.council import runs
+from app.questionnaire import spelled
 from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, load, preview, record, save
+from app.submit import MAX_FIELDS, Field, Form, ashby, compare, greenhouse, lever, load, preview, record, save
 from app.submit.fill_words import (
     BROWSER_REMOVED,
     CHANGED_FILE,
@@ -35,6 +36,7 @@ from app.submit.fill_words import (
     SAME_FILE,
     SUBMITTED,
     THANKED,
+    TOO_FEW,
     TOO_MANY_FIELDS,
     UNEXPECTED_PAGE,
 )
@@ -279,25 +281,29 @@ class Tickets:
         ticket.pdfs = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
 
-    def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> bool:
-        """Saves the fields a browser says the form shows as the job's form, and says if it did; either way that uses
-        the ticket up, and BadForm if the list can't be read leaves it. Saved first: a busy database raises and uses
-        nothing up. Saved answers stay, by their keys, and questions that have gone are counted, so the box says so;
-        with under half the saved form's questions left, the saved form stays."""
-        fields = ()
-        if len(items) <= MAX_FIELDS:  # none of them is read otherwise
-            try:
-                fields = SITES[ticket.site].form(compare.fields_from(items)).fields
-            except ValueError:
-                raise BadForm from None
+    def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> str | None:
+        """Saves the fields a browser says the form shows as the job's form; why not if it can't, and either way that
+        uses the ticket up. BadForm if the list can't be read leaves it. Saved first: a busy database raises and uses
+        nothing up. Saved answers stay, by their keys, unless a symbol changed what they answer; questions that have
+        gone are counted, so the box says so, and with under half left the saved form stays."""
+        if len(items) > MAX_FIELDS:  # none of them is read
+            del self.tickets[ticket.job]
+            return UNEXPECTED_PAGE
+        try:
+            fields = SITES[ticket.site].form(compare.fields_from(items)).fields
+        except ValueError:
+            raise BadForm from None
         saved = load(conn, ticket.job)
-        had = {field.key for field in saved[0].fields if field.kind != "hidden"} if saved else set()
-        still = had & {field.key for field in fields}
+        had = {field.key: field for field in saved[0].fields if field.kind != "hidden"} if saved else {}
+        still = [field for field in fields if field.key in had]
         enough = bool(fields) and 2 * len(still) >= len(had)  # a page half drawn never replaces a good form
         if enough:
-            save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
+            with conn:  # `save` commits this with it, so a busy database changes neither
+                changed = [field.key for field in still if _spelled(field) != _spelled(had[field.key])]
+                preview.asked_something_else(conn, ticket.job, changed)
+                save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
         del self.tickets[ticket.job]
-        return enough
+        return None if enough else TOO_FEW
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
         """Whether the job has its record, which ends the ticket: a busy database can save "I submitted it" and not end
@@ -444,6 +450,11 @@ def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
     except (OSError, RuntimeError):  # RuntimeError: a link that leads to itself
         return None
     return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == sha256 else None
+
+
+def _spelled(field: Field) -> list[str]:
+    """A question as a symbol can change it, which its wording ignores."""
+    return [spelled(field.label), *(spelled(choice.label) for choice in field.choices)]
 
 
 def _json(items: list | dict) -> str:

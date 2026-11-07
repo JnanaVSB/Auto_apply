@@ -436,12 +436,6 @@ def top_level_names(name):
     return set(re.findall(r"^(?:const|let|function|async function) (\w+)", code(name), re.M))
 
 
-def word_test():
-    found = re.search(r"^const SEND_WORDS = /(.*)/;$", code(WATCH), re.M)
-    assert found
-    return re.compile(found[1])
-
-
 def listener(event):
     """A chrome.tabs listener's whole body, which must start at the top level or a sleeping worker never hears it."""
     found = re.search(rf"^chrome\.tabs\.{event}\.addListener\(.*?^\}}\);$", code(BACKGROUND), re.S | re.M)
@@ -505,30 +499,25 @@ def test_a_press_must_be_on_a_control_you_can_see_that_holds_no_box():
     assert 'const HOLDS_A_BOX = "input, select, textarea, label";' in code(WATCH)
 
 
-def test_a_press_must_be_on_a_control_inside_the_form():
+def test_a_press_is_only_a_board_s_named_submit_or_a_real_submit_of_the_form():
     heard = page_function("heard", WATCH)
-    assert "event.composedPath().find(isControl)" in heard and "formRoot?.contains(control)" in heard
-    assert "saysSubmit(control)" in heard
-    # on its own words, one tidy phrase each, and never what a page wrote only for a screen reader
-    assert '[control.textContent, control.value].some((words) => SEND_WORDS.test(tidy(words ?? "")))' in code(WATCH)
-    assert "aria-label" not in code(WATCH)
-    assert '"BUTTON"' in code(WATCH) and '"INPUT"' in code(WATCH) and '"A"' not in code(WATCH)  # a link is no press
-    assert 'getAttribute?.("role") === "button"' in code(WATCH) and '["submit", "button"]' in code(WATCH)
+    assert "event.composedPath().find(isSubmit)" in heard and "formRoot?.contains(control)" in heard
+    submit = page_function("isSubmit", WATCH)
+    assert submit.index("BOARD.submit") < submit.index("getAttribute")
+    assert "return node.matches(BOARD.submit);" in submit
+    assert '["INPUT", "BUTTON"].includes(node.tagName)' in submit
+    assert 'node.getAttribute("type")?.toLowerCase() === "submit"' in submit  # a <button> with no type doesn't say so
+    assert "node.form === formRoot" in submit
 
 
-@pytest.mark.parametrize(
-    ("words", "counts"),
-    [
-        ("submit", True), ("submit application", True), ("submit my application", True),
-        ("submit your application", True), ("submit job application", True), ("send application", True),
-        ("send my application", True), ("send", True),
-        ("application", False), ("subscribe", False), ("resubmit", False), ("next", False), ("save", False),
-        ("submit a question", False), ("how to submit your papers", False), ("submit a bug report", False),
-        ("send feedback", False), ("submit your application now", False), ("please submit", False),
-    ],
-)  # fmt: skip
-def test_the_whole_words_of_a_press(words, counts):
-    assert bool(word_test().search(words)) is counts
+def test_no_words_decide_a_press():
+    for word in ("SEND_WORDS", "wordsOf", "saysSubmit", "isControl", "textContent, control.value", "aria-label"):
+        assert word not in code(WATCH)
+
+
+def test_no_board_names_its_submit_until_a_real_form_has_shown_it():
+    assert [name for name in files("boards/*.js") if re.search(r"\bsubmit\b", code(name))] == []
+    assert "No Submit is named here" in (PLUGIN / "boards/ashby.js").read_text("utf-8")
 
 
 def test_a_read_goes_through_boxes_and_skips_what_it_must():
@@ -778,9 +767,17 @@ def test_the_guide_says_what_a_page_can_do():
     assert "each answer waits for you to press Use" in text
     assert "It looks sent. If the site took it, press I submitted it." in text
     assert "a page can also make a click of yours count as that press" in text
+    assert "On Ashby nothing is noticed yet" in text
+    assert "the saved form stays" in text
+    assert "Use works for a file too" in text
     assert "While it watches the form, it never reads a password box" in text
     assert "Reload this page to see how it went" in text
     assert "if its name differs" in text
+
+
+def test_a_read_of_too_few_questions_says_so():
+    assert "This read found too few of the form's questions, so the saved form stays." in code(POPUP)
+    assert '["too-few", ' in code(POPUP)
 
 
 def test_a_press_s_words_go_wherever_a_ticket_goes():

@@ -74,7 +74,7 @@
       {% if field.help %}<br><span class="muted">{{ field.help }}</span>{% endif %}
       {% if line.status == "suggested" %}
       <br>{{ value }} <span class="muted">({{ line.source }})</span>{% if field.key in seen %} {{ post("use", "Use", {"field": field.key, "seen": seen[field.key]}) }}{% endif %}
-      <details><summary>Answer it another way</summary>{{ answer_box(field) }}</details>
+      {% if field.kind != "file" %}<details><summary>Answer it another way</summary>{{ answer_box(field) }}</details>{% endif %}
       {% elif line.decision == "unknown" and field.kind in ("text", "location", "long_text", "single", "multi") %}
       {{ answer_box(field) }}
       {% elif line.decision == "consent" %}
@@ -84,6 +84,7 @@
       {% elif line.decision == "cover_letter" %}
       <br><span class="muted">Press Write cover letter in the Ready to Apply box: the letter is filled in here once it is done.</span>
       {% endif %}
+      {% if field.kind == "file" and line.source == mine %}{{ post("forget", "Choose again", key) }}{% endif %}
       {{ post("window", "I'll do this in the window myself", key) }}
       {% if line.decision != "consent" and not field.required %}{{ post("empty", "Leave it empty", key) }}{% endif %}
       {% if line.decision in ("non_pdf", "choose_file") %}

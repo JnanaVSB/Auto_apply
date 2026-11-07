@@ -274,6 +274,33 @@ def test_the_record_names_the_pdf_that_went_out(owner, door, conn, data_dir, pai
     assert entry["sha256"] == hashlib.sha256(RESUME_PDF).hexdigest()
 
 
+def test_a_browser_record_s_row_and_list_agree(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    assert fetch(door, ticket).status_code == 200
+    paper(conn, data_dir, job, version=2, body=b"%PDF-1.7 a newer made-up resume")
+    assert ok(file_read(door, ticket))
+    submitted(owner, job)
+    found = record.recorded(conn, job)
+    row_ = next(field for field in found["fields"] if field["question"] == "Resume/CV")
+    assert (row_["value"], row_["from"]) == ("Resume v1", "Resume v1") and found["files"][0]["label"] == "Resume v1"
+
+
+def test_a_by_hand_record_names_the_newest_whatever_a_fill_handed_out(owner, door, conn, data_dir, paired):
+    job, ticket, _ = packed(door, conn, data_dir)
+    with conn:
+        conn.execute(ON_BOARD, (job,))
+    assert fetch(door, ticket).status_code == 200
+    owner.post(f"/jobs/{job}/form/unsent", headers={"X-CSRF-Token": csrf(owner)})
+    newer = b"%PDF-1.7 a newer made-up resume"
+    paper(conn, data_dir, job, version=2, body=newer)
+    submitted(owner, job)
+    found = record.recorded(conn, job)
+    assert found["how"] == "by hand" and found["files"][0]["label"] == "Resume v2"
+    assert found["files"][0]["sha256"] == hashlib.sha256(newer).hexdigest()
+
+
 def test_a_pdf_that_didn_t_go_out_is_the_newest_as_before(owner, door, conn, data_dir, paired):
     job, ticket, _ = packed(door, conn, data_dir)
     with conn:

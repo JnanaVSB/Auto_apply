@@ -7,13 +7,18 @@ from app.submit import Drawn, Field, Form
 
 FORM_PAGE = "https://jobs.ashbyhq.com/{}/{}/application"
 DRAWN = Drawn()
-# The page writes this form, so only these go out by themselves: every other answer waits for your decision
-OWN_KEYS = frozenset({"_systemfield_name", "_systemfield_email", "_systemfield_resume"})
+# The page writes this form, so only these go out by themselves, each in its own kind of box: every other answer waits
+# for your decision
+OWN_KEYS = {"_systemfield_name": "text", "_systemfield_email": "text", "_systemfield_resume": "file"}
 
 
 def form(fields: tuple[Field, ...]) -> Form:
-    """The form as the plugin read it. A file box with no label is the site's own top box, never a question."""
-    kept = [field for field in fields if field.kind != "file" or field.label.strip()]
+    """The form as the plugin read it. A file box with no label is the site's own top box, never a question, and a box
+    wearing one of the site's own keys on another kind isn't that box."""
+    kept = [
+        field for field in fields
+        if (field.kind != "file" or field.label.strip()) and OWN_KEYS.get(field.key, field.kind) == field.kind
+    ]  # fmt: skip
     return Form(tuple(replace(field, part=_part(field.key)) for field in kept))
 
 

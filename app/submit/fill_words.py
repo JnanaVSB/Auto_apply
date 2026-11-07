@@ -20,6 +20,7 @@ UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many
 BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
 BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
 GONE, NOT_SENT, THANKED = "gone", "not-sent", "thanked"
+TOO_FEW = "too-few"  # a read of a form, which has no row
 SAME_FILE, CHANGED_FILE = "same", "changed"  # all a read keeps of a file box
 SAID_THANKS = "your press of Submit was followed by the site's thank-you page, so it was recorded"
 HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them

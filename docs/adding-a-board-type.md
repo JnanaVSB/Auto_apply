@@ -95,6 +95,12 @@ Add at least:
 - an empty board means "no openings";
 - `api_url` gives the exact address.
 
+## A site's Submit
+This part is also for a site the browser plugin can fill. The plugin notices your press of Submit only on a real
+`type=submit` control of the form. A site where that can't work, such as Ashby with no `<form>`, is never noticed until
+its file in `plugin/boards/` names the control as `submit`, a selector inside the form. Take that only from a real form
+you saw yourself, never from a button's words: a page chooses those.
+
 ## A site's thank-you sign
 This part is for a site the browser plugin can fill, not for a new board. The plugin can record an application by itself
 once it knows how a site says thank you. Every site ships with this off.

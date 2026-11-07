@@ -92,13 +92,16 @@ is open, and use Open and fill. The plugin can't read yes/no buttons, or questio
 those yourself on the form.
 
 These questions are what the page showed, and a script on the page can change them: read them before you fill. So
-apart from your name, e-mail and resume, each answer waits for you to press Use, or Use all. If a later read finds fewer
-questions, the box says how many went.
+apart from your name, e-mail and resume, each answer waits for you to press Use, or Use all. Use works for a file too,
+such as a cover letter: if a newer version is made, you say yes again. If a later read finds fewer questions, the box
+says how many went. If it finds under half of them, the saved form stays, and the popup says so.
 
 ## After you press Submit
-- **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of the site's Submit.
-  Nothing is recorded yet, because the site may have refused the form. A Submit with other words isn't noticed: **I
-  submitted it** works all the same. The popup says only that you pressed Submit, as it can't see the job's box.
+- **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of the form's own Submit
+  button. Nothing is recorded yet, because the site may have refused the form. The plugin goes by the form's own
+  Submit, never by a button's words, so a button that isn't marked as one isn't noticed. On Ashby nothing is noticed yet:
+  it has no form to go by, until a real application there has shown which button is its Submit. **I submitted it** works
+  all the same. The popup says only that you pressed Submit, as it can't see the job's box.
 - **I submitted it** saves the record and moves the card to Applied. You choose the date.
 - **I didn't send it** ends the fill and wipes what the plugin read. Nothing is recorded and no card moves. It still
   counts towards the day's fills, because your answers did go to the page.

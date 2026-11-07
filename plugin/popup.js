@@ -17,6 +17,7 @@ const WORDS = new Map([
   ["filling", "Filling this tab…"],
   ["reading", "Reading this form…"],
   ["read", "The form was read. Go back to the job's box and reload it."],
+  ["too-few", "This read found too few of the form's questions, so the saved form stays. Check the tab, then press Read again."],
   ["known", ""],
   ["honest", "Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this browser can read them too."],
   ["app-error", "Something went wrong. Try again."],

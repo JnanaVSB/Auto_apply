@@ -282,8 +282,9 @@ def _is_why(why: object) -> bool:
 def _read(request: Request, ticket: fills.Ticket, items: list, data_dir: Path) -> JSONResponse:
     """A read ticket's form: nothing goes back, whatever your answers are."""
     conn = request.app.state.conn
-    if not request.app.state.tickets.read_form(conn, ticket, items):
-        return JSONResponse(STOP)
+    stop = request.app.state.tickets.read_form(conn, ticket, items)
+    if stop:
+        return JSONResponse({"go": False, "reason": stop})
     remember(conn, data_dir, queries.job(conn, ticket.job))
     return JSONResponse({"go": False, "reason": "read"})
 

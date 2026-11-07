@@ -15,6 +15,7 @@ YOURS = """INSERT INTO form_answers (job_id, field, answer, given_by, preparatio
     VALUES (?, ?, ?, 'you', NULL, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
     given_by = 'you', preparation_id = NULL, saved_on = excluded.saved_on, wording = excluded.wording"""
 FORGET = "DELETE FROM form_answers WHERE job_id = ? AND field = ? AND given_by = 'you'"
+ASKED_ELSE = "UPDATE form_answers SET wording = '' WHERE job_id = ? AND field = ?"
 
 
 @dataclass(frozen=True)
@@ -46,11 +47,11 @@ def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview
 def held_back(line: match.Line) -> match.Line:
     """A line of a form the page wrote, where a compare only checks the page against itself: the app's answer waits for
     your decision, unless it is your own or goes in one of the site's own boxes."""
-    if line.status != "fill" or line.source == match.MINE or line.field.key in ashby.OWN_KEYS:
+    own = ashby.OWN_KEYS.get(line.field.key) == line.field.kind
+    if line.status != "fill" or line.source == match.MINE or own:
         return line
-    if line.field.kind in ("file", "consent"):
-        decision = "choose_file" if line.field.kind == "file" else "consent"
-        return replace(line, status="decide", decision=decision, value="", source="")
+    if line.field.kind == "consent":
+        return replace(line, status="decide", decision="consent", value="", source="")
     return replace(line, status="suggested")
 
 
@@ -72,6 +73,11 @@ def keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) ->
     """Your answer for this job's question as it is worded now, replacing a Writer draft."""
     with conn:
         conn.execute(YOURS, (job_id, field.key, answer, now(), wordings.wording(field)))
+
+
+def asked_something_else(conn: sqlcipher3.Connection, job_id: int, keys: list[str]) -> None:
+    """Your answers to these questions were given to other words: they stay, and no longer answer. The caller saves."""
+    conn.executemany(ASKED_ELSE, [(job_id, key) for key in keys])
 
 
 def forget(conn: sqlcipher3.Connection, job_id: int, key: str) -> None:
