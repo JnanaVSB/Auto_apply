@@ -191,10 +191,10 @@ function setTicks(list, labels) {
   return undefined;
 }
 
-function setLine(line, list) {
+function setLine(line, list, root) {
   if (!list || (list.length > 1 && !isGroup(line, list))) return "no-box";
   const [box] = list;
-  if (box.matches(DROPDOWN)) return pick(line, box);
+  if (box.matches(DROPDOWN)) return pick(line, box, root);
   if (line.kind === "location") return "place";
   if (list.every(closed)) return "cant-set";
   if (line.kind === "text" || line.kind === "long_text") return setText(box, line.value);
@@ -227,16 +227,16 @@ async function upload(line, root) {
 async function setOne(line, root) {
   try {
     if (line.kind === "file") return await upload(line, root);
-    const why = await setLine(line, boxes(root).get(line.key));
+    const why = await setLine(line, boxes(root).get(line.key), root);
     return why ? { why } : {};
   } catch {
     return { why: "cant-set" };
   }
 }
 
-function shownValue(line, list) {
+function shownValue(line, list, root) {
   const [box] = list;
-  if (box.matches(DROPDOWN)) return shownPick(box) ?? "";
+  if (box.matches(DROPDOWN)) return shownPick(box, root) ?? "";
   if (line.kind === "file") return box.files?.[0]?.name ?? "";
   if (line.kind === "consent") return box.checked ? line.value : "";
   if (box.matches(TEXT_BOX)) return box.value;
@@ -252,7 +252,7 @@ function readBack(done, left, root) {
   let stuck = 0;
   for (const { line, name } of done) {
     const list = found.get(line.key);
-    const value = list ? shownValue(line, list) : "";
+    const value = list ? shownValue(line, list, root) : "";
     values.push({ key: line.key, value: cut(value) });
     if (list && same(name ?? line.value, value)) stuck += 1;
     else left.push({ key: line.key, why: line.kind === "file" ? "file-refused" : "didnt-stick" });

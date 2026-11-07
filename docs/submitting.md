@@ -82,7 +82,8 @@ question.
 - **Check these on the form** appears after a fill. It lists what the plugin couldn't set, and what looks different from
   what the app read. On Greenhouse the plugin picks in a drop-down only when exactly one choice has the answer's whole
   words. On other sites, and for a question that starts with a country, place or state, a custom drop-down is yours to
-  pick.
+  pick. A searchable drop-down left for you may still have been sent your answer: the plugin types it in to find the
+  choice, so the site may have seen your answer typed in.
 
 **When a fill stops,** the box and the popup say why:
 - **The site wants to check you are a person:** finish the check in the tab, then fill in the rest yourself.

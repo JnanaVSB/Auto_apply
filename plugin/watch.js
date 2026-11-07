@@ -18,11 +18,11 @@ const isSecret = (box) =>
 
 // A select on its placeholder is empty, and a ticked box with no words of its own is still ticked. A drop-down that
 // can't say what it shows gives undefined.
-function shownHere(key, list) {
-  if (list[0].matches(DROPDOWN)) return shownPick(list[0]);
+function shownHere(key, list, root) {
+  if (list[0].matches(DROPDOWN)) return shownPick(list[0], root);
   if (list[0].tagName === "SELECT" && !list[0].value) return "";
   const kind = kindOf(key, list[0]);
-  if (!isGroup({ kind }, list)) return shownValue({ kind, value: "ticked" }, list);
+  if (!isGroup({ kind }, list)) return shownValue({ kind, value: "ticked" }, list, root);
   const ticked = list.filter((box) => box.checked).map((box) => ownLabel(box).trim() || box.value || "ticked");
   return kind === "multi" ? ticked : (ticked[0] ?? "");
 }
@@ -31,7 +31,7 @@ function readForm(root) {
   const values = [];
   for (const [key, list] of boxes(root)) {
     if (list.some(isSecret)) continue;
-    const value = shownHere(key, list);
+    const value = shownHere(key, list, root);
     if (value !== undefined) values.push({ key, value: cut(value) });
   }
   return values;

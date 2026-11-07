@@ -9,32 +9,28 @@ const PLACE = /^\W*(?:country|location|city|state|province|region)\b/i;
 const PRESSES = "a, area, button, input, label, select, summary, textarea, [role=button], [role=link]";
 
 // What it shows as picked, "" when it says nothing is, and undefined when it can't say: the text box holds typed words.
-function shownPick(box) {
+// The control must be this box's own, inside the form: a part round the form or round other boxes isn't one drop-down.
+function shownPick(box, root) {
   const shape = BOARD.dropdown;
   const control = shape && box.closest(shape.control);
-  if (!control) return undefined;
+  const own = control && control !== root && root.contains(control);
+  if (!own || control.querySelectorAll("input, select, textarea").length !== 1) return undefined;
   const picked = control.querySelector(shape.picked);
   if (picked) return picked.textContent;
   return control.querySelector(shape.empty) ? "" : undefined;
 }
 
-// Only the list the box itself names, and a box naming none has no options.
-function optionsOf(box) {
+// Only the list the box itself names, inside the form and apart from the box. A box naming none has no options.
+function optionsOf(box, root) {
   const named = box.getAttribute("aria-controls");
   const list = named && document.getElementById(named);
-  return list ? [...list.querySelectorAll("[role=option]")] : [];
+  const apart = list && list !== root && root.contains(list) && !list.contains(box);
+  return apart ? [...list.querySelectorAll("[role=option]")] : [];
 }
 
-async function menuShown(box) {
+async function menuShown(box, root) {
   const ends = Date.now() + MENU_MS;
-  while (Date.now() < ends && !optionsOf(box).length) await wait(LOOK_MS);
-}
-
-// Some lists pick on one and some on the other. A site that wants a real press won't take this: the read-back says so.
-function press(option) {
-  for (const type of ["mousedown", "click"]) {
-    option.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
-  }
+  while (Date.now() < ends && !optionsOf(box, root).length) await wait(LOOK_MS);
 }
 
 // A click also runs through what an option is slotted into, and a closed part can't be read, so any shadow part counts.
@@ -46,22 +42,36 @@ function wouldPress(option) {
   return false;
 }
 
+function allowed(option, box, root) {
+  if (!option.isConnected || !optionsOf(box, root).includes(option) || wouldPress(option)) return false;
+  return option.checkVisibility(SEEN) && option.getAttribute("aria-disabled") !== "true";
+}
+
+// Some lists pick on one and some on the other. Both go to the option itself, at no point on the screen, so nothing
+// drawn over it can take the click, and an option below the screen's edge is still reached. The page's own mousedown
+// can move the option, into a button or a link, so it's asked again before the click. A site that wants a real press
+// won't take this: the read-back says so.
+function press(option, box, root) {
+  option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  if (!allowed(option, box, root)) return false;
+  option.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  return true;
+}
+
 // Every option counts, fakes too, so a fake beside a real one is two alike. A stop seen here leaves this field;
 // `fillLines` then makes the stop.
-async function choose(line, box) {
-  await menuShown(box);
+async function choose(line, box, root) {
+  await menuShown(box, root);
   if (stopHere(landedAt(), box)) return "cant-set";
-  const option = only(optionsOf(box), (found) => found.textContent, line.value);
+  const option = only(optionsOf(box, root), (found) => found.textContent, line.value);
   if (!option) return "no-choice";
-  if (wouldPress(option) || !option.checkVisibility(SEEN)) return "cant-set";
-  if (option.getAttribute("aria-disabled") === "true") return "cant-set";
-  press(option);
+  if (!allowed(option, box, root) || !press(option, box, root)) return "cant-set";
   return undefined;
 }
 
 // Blur is what closes the list, as no key is ever raised. After a pick the box is the site's, so its text stays.
-async function pick(line, box) {
-  const shown = shownPick(box);
+async function pick(line, box, root) {
+  const shown = shownPick(box, root);
   const locked = closed(box) || box.getAttribute("aria-readonly") === "true";
   if (line.kind !== "single" || locked || shown === undefined) return "custom";
   if (PLACE.test(line.key) || PLACE.test(question(box))) return "place";
@@ -69,7 +79,7 @@ async function pick(line, box) {
   let why = "cant-set"; // until set, so an exception still clears the words
   box.focus();
   try {
-    why = setText(box, line.value) ?? (await choose(line, box));
+    why = setText(box, line.value) ?? (await choose(line, box, root));
     return why;
   } finally {
     if (why) setText(box, "");

@@ -51,7 +51,7 @@ HONEST = (
 LINES_THAT_HOLD_A_RULE = (
     (BACKGROUND, "if (record?.ticket && here && record.answered) {"),
     (BACKGROUND, "JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined"),
-    (PAGE, "const why = await setLine(line, boxes(root).get(line.key));"),
+    (PAGE, "const why = await setLine(line, boxes(root).get(line.key), root);"),
     (PAGE, 'if (!box.matches(TEXT_BOX)) return "cant-set";'),
     (PAGE, """if (line.kind === "consent") return box.matches('input[type="checkbox"]') ? tick(box) : "cant-set";"""),
 )
@@ -171,7 +171,8 @@ def test_the_page_side_makes_no_network_call(word):
 
 def test_the_only_events_made_are_input_and_change_and_a_press_on_an_option():
     for name in files("*.js"):
-        allowed = (("MouseEvent", "type"),) if name == DROPDOWN else (("Event", '"input"'), ("Event", '"change"'))
+        press = (("MouseEvent", '"mousedown"'), ("MouseEvent", '"click"'))
+        allowed = press if name == DROPDOWN else (("Event", '"input"'), ("Event", '"change"'))
         for event, first in re.findall(r"new\s+(\w*Event)\(\s*([^,)\s]*)", code(name)):
             assert (event, first) in allowed, name
 
@@ -437,8 +438,10 @@ def test_a_line_that_holds_a_rule_is_still_there(name, line):
 
 def test_only_the_one_function_presses_and_only_with_these_two_events():
     press = page_function("press", DROPDOWN)
-    assert 'for (const type of ["mousedown", "click"])' in press
-    assert code(DROPDOWN).count("dispatchEvent") == code(DROPDOWN).count("MouseEvent") == 1
+    down, click = press.index('new MouseEvent("mousedown"'), press.index('new MouseEvent("click"')
+    asked = press.index("if (!allowed(option, box, root)) return false;")
+    assert down < asked < click  # the page's own mousedown can move the option
+    assert code(DROPDOWN).count("dispatchEvent") == code(DROPDOWN).count("MouseEvent") == 2
     assert [name for name in files("*.js") if "MouseEvent" in code(name)] == [DROPDOWN]
     assert sorted(name for name in files("*.js") if "dispatchEvent" in code(name)) == [DROPDOWN, PAGE]
 
@@ -446,18 +449,22 @@ def test_only_the_one_function_presses_and_only_with_these_two_events():
 def test_an_option_is_pressed_only_after_each_check():
     choose = page_function("choose", DROPDOWN)
     assert code(DROPDOWN).count("press(") == 2  # where it's written, and here
-    pressed = choose.index("press(option);")
-    checks = ("stopHere(landedAt(), box)", "only(", "wouldPress(option)", ".checkVisibility(SEEN)", '"aria-disabled"')
-    for check in checks:
+    pressed = choose.index("press(option, box, root)")
+    for check in ("stopHere(landedAt(), box)", "only(", "allowed(option, box, root)"):
         assert choose.index(check) < pressed, check
+    allowed = page_function("allowed", DROPDOWN)
+    for check in ("option.isConnected", "optionsOf(box, root).includes(option)", "wouldPress(option)",
+                  ".checkVisibility(SEEN)", '"aria-disabled"'):  # fmt: skip
+        assert check in allowed, check
+    assert code(DROPDOWN).count("allowed(option, box, root)") == 3  # where it's written, before mousedown, before click
     assert 'if (stopHere(landedAt(), box)) return "cant-set";' in choose
     assert 'if (!option) return "no-choice";' in choose
 
 
 def test_every_option_is_counted_before_any_is_judged():
     choose = page_function("choose", DROPDOWN)
-    assert "only(optionsOf(box), (found) => found.textContent, line.value)" in choose
-    assert choose.index("only(") < choose.index("wouldPress(option)") and "filter(" not in choose
+    assert "only(optionsOf(box, root), (found) => found.textContent, line.value)" in choose
+    assert choose.index("only(") < choose.index("allowed(option, box, root)") and "filter(" not in choose
 
 
 def test_nothing_a_click_would_also_press_may_be_or_hold_the_option():
@@ -514,16 +521,20 @@ def test_the_only_list_is_the_one_the_box_names():
     assert 'box.getAttribute("aria-controls")' in options
     assert 'list.querySelectorAll("[role=option]")' in options
     assert code(DROPDOWN).count("[role=option]") == 1 and "document.querySelector" not in code(DROPDOWN)
+    assert "list !== root && root.contains(list) && !list.contains(box)" in options  # never html, body or the form
 
 
 def test_the_stop_is_asked_after_the_wait():
     choose = page_function("choose", DROPDOWN)
-    assert choose.index("await menuShown(box);") < choose.index("stopHere(") < choose.index("optionsOf(box)")
+    waited, looked = choose.index("await menuShown(box, root);"), choose.index("optionsOf(box, root)")
+    assert waited < choose.index("stopHere(") < looked
 
 
 def test_a_read_of_a_drop_down_is_what_it_shows_as_picked():
     picked = page_function("shownPick", DROPDOWN)
     assert "BOARD.dropdown" in picked and ".value" not in picked
+    assert "control !== root && root.contains(control)" in picked  # a part round the form isn't one drop-down's
+    assert 'control.querySelectorAll("input, select, textarea").length !== 1) return undefined;' in picked
 
 
 def test_only_greenhouse_says_how_a_pick_shows_and_the_words_live_in_its_file():
@@ -821,6 +832,7 @@ def test_the_guide_says_what_a_page_can_do():
     assert "only when exactly one choice has the answer's whole words" in text
     assert "a question that starts with a country, place or state" in text
     assert "Stay on the form's tab while it fills" in text
+    assert "the site may have seen your answer typed in" in text
 
 
 def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on():
