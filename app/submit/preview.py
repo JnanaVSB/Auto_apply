@@ -8,6 +8,7 @@ import sqlcipher3
 
 from app import questionnaire
 from app.collect import now
+from app.questionnaire import spelled
 from app.submit import Field, Form, ashby, load, match, record, wordings
 
 KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
@@ -47,7 +48,7 @@ def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview
 def held_back(line: match.Line) -> match.Line:
     """A line of a form the page wrote, where a compare only checks the page against itself: the app's answer waits for
     your decision, unless it is your own or goes in one of the site's own boxes."""
-    own = ashby.OWN_KEYS.get(line.field.key) == line.field.kind
+    own = ashby.OWN_KEYS.get(line.field.key) == line.field.kind  # `ashby.form` drops the rest: this is a second lock
     if line.status != "fill" or line.source == match.MINE or own:
         return line
     if line.field.kind == "consent":
@@ -75,9 +76,15 @@ def keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) ->
         conn.execute(YOURS, (job_id, field.key, answer, now(), wordings.wording(field)))
 
 
-def asked_something_else(conn: sqlcipher3.Connection, job_id: int, keys: list[str]) -> None:
-    """Your answers to these questions were given to other words: they stay, and no longer answer. The caller saves."""
-    conn.executemany(ASKED_ELSE, [(job_id, key) for key in keys])
+def asked_something_else(conn: sqlcipher3.Connection, job_id: int, had: dict[str, Field], fields: list[Field]) -> None:
+    """Your answers to questions whose words a symbol changed, which a wording ignores: they stay, and no longer answer.
+    `had` is the saved form by key, and the caller's save commits this."""
+    changed = [(job_id, field.key) for field in fields if _spelled(field) != _spelled(had[field.key])]
+    conn.executemany(ASKED_ELSE, changed)
+
+
+def _spelled(field: Field) -> list[str]:
+    return [spelled(field.label), *(spelled(choice.label) for choice in field.choices)]
 
 
 def forget(conn: sqlcipher3.Connection, job_id: int, key: str) -> None:

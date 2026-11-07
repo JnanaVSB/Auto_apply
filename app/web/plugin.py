@@ -8,7 +8,6 @@ import hmac
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -149,10 +148,8 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
         if ticket is None:
             raise HTTPException(404, NO_TICKET)
-        sign = fills.SITES[ticket.site].DRAWN.thanks
-        return JSONResponse(
-            {"ticket": ticket.id, "mode": ticket.mode, "board": ticket.site, "thanks": sign and asdict(sign)}
-        )
+        thanks = fills.SITES[ticket.site].DRAWN.thanks or None
+        return JSONResponse({"ticket": ticket.id, "mode": ticket.mode, "board": ticket.site, "thanks": thanks})
 
     @app.post(PREFIX + "known")
     async def known(request: Request) -> Response:

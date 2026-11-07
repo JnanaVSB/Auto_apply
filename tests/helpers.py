@@ -38,6 +38,11 @@ def csrf(client):
     return client.app.state.logins.sessions[client.cookies[security.COOKIE]].csrf
 
 
+def box(client, job):
+    """The job's Application form part, as the dashboard draws it."""
+    return client.get(f"/jobs/{job}/form").text
+
+
 def add_job(conn, title, sources=("greenhouse:acme",), **values):
     """A made-up job, stored directly, listed by `sources`."""
     row = {

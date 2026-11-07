@@ -8,7 +8,7 @@ from app.submit import Drawn, Field, Form
 FORM_PAGE = "https://jobs.ashbyhq.com/{}/{}/application"
 DRAWN = Drawn()
 # The page writes this form, so only these go out by themselves, each in its own kind of box: every other answer waits
-# for your decision
+# for your decision. `form` drops a box wearing one on another kind, and `preview.held_back` checks again, on purpose
 OWN_KEYS = {"_systemfield_name": "text", "_systemfield_email": "text", "_systemfield_resume": "file"}
 
 

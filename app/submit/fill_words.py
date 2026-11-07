@@ -49,10 +49,9 @@ HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say t
         "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
         "it in yourself in the open tab."
     ),
-    (
-        "filled",
-        None,
-    ): "the plugin filled what it could. Check the form, then press Submit yourself. A reload empties it.",
+    ("filled", None): (
+        "the plugin filled what it could. Check the form, then press Submit yourself. A reload empties it."
+    ),
     ("filled", BROWSER_REMOVED): "the plugin filled what it could, then its browser was removed",
     ("filled", REPLACED): "the plugin filled what it could, then a newer press ended the fill",
     ("filled", SUBMITTED): "the plugin filled what it could, then you pressed I submitted it",

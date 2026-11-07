@@ -169,6 +169,7 @@ class Line:
     decision: str = ""  # a DECISIONS key when status is "decide"
     note: str = ""  # e.g. "split from your full name"
     askable: bool = False  # optional and left empty only because no rule answers it: you still may
+    file_label: str = ""  # a kept file's version, as `source` says who chose it
 
 
 def match(
@@ -274,7 +275,7 @@ class _Matcher:
         """A file you said yes to, by its label: a newer version asks you again."""
         found = next((found for found in self.files.values() if found and found[0] == label), None)
         if found:
-            return Line(field, "fill", str(found[1]), MINE, note=label)
+            return Line(field, "fill", str(found[1]), MINE, file_label=label)
         return Line(field, "decide", source=MINE, decision="choose_file", note=FILE_CHANGED)
 
     def _site_box(self, field: Field, _: str) -> Line | None:

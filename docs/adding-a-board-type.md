@@ -95,29 +95,6 @@ Add at least:
 - an empty board means "no openings";
 - `api_url` gives the exact address.
 
-## A site's Submit
-This part is also for a site the browser plugin can fill. The plugin notices your press of Submit only on a real
-`type=submit` control of the form. A site where that can't work, such as Ashby with no `<form>`, is never noticed until
-its file in `plugin/boards/` names the control as `submit`, a selector inside the form. Take that only from a real form
-you saw yourself, never from a button's words: a page chooses those.
-
-## A site's thank-you sign
-This part is for a site the browser plugin can fill, not for a new board. The plugin can record an application by itself
-once it knows how a site says thank you. Every site ships with this off.
-
-To switch a site on, set `thanks` on `DRAWN` in the site's own file in `app/submit/`:
-
-```python
-DRAWN = Drawn(thanks=Thanks(path="/thanks"))
-```
-
-- `path` is how the address ends after a real Submit, on the same host.
-- `selector` and `words` are for a thank-you shown on the same address: an element that holds those words.
-
-Take the sign only from a real application you saw yourself, never from a guess: a wrong sign can write a record that
-can't be erased. The test `test_every_site_ships_off` holds all three sites off, so switching one on means changing that
-test too.
-
 Run everything before asking for review:
 
 ```bash
@@ -126,3 +103,21 @@ python -m pytest
 ```bash
 ruff format . && ruff check .
 ```
+
+## A site's Submit
+This part is for a site the browser plugin can fill, not for a new board. The plugin notices your press of Submit only on
+a real `type=submit` control of the form. A site where that can't work, such as Ashby with no `<form>`, is never noticed
+until its file in `plugin/boards/` names the control as `submit`, a selector inside the form. Take that only from a real
+form you saw yourself, never from a button's words: a page chooses those.
+
+## A site's thank-you address
+The app can record an application by itself once it knows the address a site thanks you at. Every site ships with this
+off. To switch a site on, set `thanks` on `DRAWN` in the site's own file in `app/submit/`, to how the address ends after
+a real Submit, on the same host:
+
+```python
+DRAWN = Drawn(thanks="/thanks")
+```
+
+Take it only from a real application you saw yourself, never from a guess: a wrong sign can write a record that can't be
+erased. The test `test_every_site_ships_off` holds all three sites off, so switching one on means changing that test too.

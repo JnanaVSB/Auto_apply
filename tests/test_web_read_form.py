@@ -6,7 +6,7 @@ import html
 from datetime import UTC, datetime
 
 import pytest
-from helpers import add_job, csrf, log_in, one
+from helpers import add_job, box, csrf, log_in, one
 from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
     FILL,
@@ -52,8 +52,7 @@ EMAIL = {"key": "_systemfield_email", "label": "Email", "kind": "text", "require
 RESUME = {"key": "_systemfield_resume", "label": "Resume", "kind": "file", "required": True}
 WHY = {"key": "a1b2", "label": "Why this team?", "kind": "text", "required": True}
 TOP_FILE = {"key": "top-file", "label": "", "kind": "file", "required": False}
-READING = "Reading in the new tab… Reload this page when it&#39;s done."
-NOT_READ = "The form opened without reading it."
+READING, NOT_READ = form_part.READING.replace("'", "&#39;"), form_part.NOT_READ
 SHOWS = "Reading shows the form to the plugin. Nothing of yours goes to the site."
 NOT_SEEN = (
     "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form. "
@@ -85,10 +84,6 @@ def ashby_job(conn, data_dir, resume=True, link=ASHBY_LINK):
 
 def read_press(client, job):
     return client.post(f"/jobs/{job}/form/read-in-browser", headers={"X-CSRF-Token": csrf(client)})
-
-
-def box(client, job):
-    return client.get(f"/jobs/{job}/form").text
 
 
 def read_ticket(owner, door, job):
@@ -540,7 +535,7 @@ def test_a_use_on_a_file_keeps_its_label_and_lets_the_pdf_go_once(owner, door, c
     use(owner, conn, data_dir, job, "made-up-file")
     assert one(conn, "SELECT answer FROM form_answers WHERE field = 'made-up-file'") == ("Cover letter v1",)
     line = lines(conn, data_dir, job)["made-up-file"]
-    assert (line.status, line.source, line.note) == ("fill", match.MINE, "Cover letter v1")
+    assert (line.status, line.source, line.file_label, line.note) == ("fill", match.MINE, "Cover letter v1", "")
     assert record.shown(line) == "Cover letter v1"
     assert why_not(conn, data_dir, job) is None
     press(door, conn, data_dir, job)

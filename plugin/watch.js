@@ -4,14 +4,10 @@ const REREAD_MS = 5000;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
 const SECRET_QUESTION = /password/i;
 const HOLDS_A_BOX = "input, select, textarea, label";
-const THANKS_LOOKS = 60;
-const THANKS_MS = 1000;
 
 let watching = false;
 let formRoot;
 let lastKept;
-let thanksSign; // the app's own words for this site, never a page's
-let lookingForThanks = false;
 
 const isSecret = (box) =>
   box.autocomplete.split(/\s+/).some((word) => SECRET_BOXES.has(word)) || SECRET_QUESTION.test(question(box));
@@ -20,7 +16,7 @@ const isSecret = (box) =>
 function shownHere(key, list) {
   if (list[0].tagName === "SELECT" && !list[0].value) return "";
   const kind = kindOf(key, list[0]);
-  if (!isGroup({ kind }, list)) return shownValue({ key, kind, value: "ticked" }, list);
+  if (!isGroup({ kind }, list)) return shownValue({ kind, value: "ticked" }, list);
   const ticked = list.filter((box) => box.checked).map((box) => ownLabel(box).trim() || box.value || "ticked");
   return kind === "multi" ? ticked : (ticked[0] ?? "");
 }
@@ -37,6 +33,7 @@ function readForm(root) {
 
 // A press is only the board's named Submit, or, with none named, a real type=submit of this form. Words decide nothing,
 // as a page chooses them. Where a board can't say, nothing is noticed: "I submitted it" still works, and fewer is safe.
+// The attribute, not `.type`, which says "submit" for a <button> that never said so.
 function isSubmit(node) {
   if (node.nodeType !== Node.ELEMENT_NODE) return false;
   if (BOARD.submit) return node.matches(BOARD.submit);
@@ -51,39 +48,7 @@ function heard(event) {
   const control = event.composedPath().find(isSubmit);
   if (!control || !formRoot?.contains(control)) return;
   if (!control.checkVisibility(SEEN) || control.querySelector(HOLDS_A_BOX)) return;
-  const saved = ask({ do: "read", state: "clicked", values: readForm(formRoot) });
-  const already = shownBeforePress();
-  saved.then((reply) => (already ? undefined : thanksAfter(reply))).catch(() => {});
-}
-
-const thanksShown = () =>
-  [...document.querySelectorAll(thanksSign.selector)].some((element) =>
-    tidy(element.textContent).includes(tidy(thanksSign.words)),
-  );
-
-// A sign on the page before the press says nothing of it. A bad selector counts as shown, so it is never looked for.
-function shownBeforePress() {
-  try {
-    return thanksShown();
-  } catch {
-    return true;
-  }
-}
-
-async function thanksAfter(reply) {
-  if (!reply?.kept || !thanksSign || lookingForThanks) return;
-  lookingForThanks = true;
-  try {
-    for (let looks = 0; looks < THANKS_LOOKS; looks += 1) {
-      if (thanksShown()) {
-        await ask({ do: "thanked" });
-        return;
-      }
-      await wait(THANKS_MS);
-    }
-  } finally {
-    lookingForThanks = false;
-  }
+  ask({ do: "read", state: "clicked", values: readForm(formRoot) }).catch(() => {});
 }
 
 // Only what the app accepted is remembered, so a read it couldn't save goes again next time.
@@ -106,9 +71,7 @@ async function watch() {
   watching = true;
   try {
     if (location.href !== landedAt()) return;
-    const told = await ask({ do: "watch" });
-    if (!told?.on) return;
-    thanksSign = told.thanks;
+    if (!(await ask({ do: "watch" }))?.on) return;
     await anchorShown();
     await quiet();
     formRoot = rootOf(anchored());

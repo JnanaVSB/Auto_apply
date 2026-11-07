@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import sqlcipher3
-from helpers import add_job, csrf, log_in, one
+from helpers import add_job, box, csrf, log_in, one
 from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
     FIRST_NAME,
@@ -49,7 +49,7 @@ HONEST = (
 )
 NOT_FILLED = "The form opened without filling."
 PRESS_FAILED = "That press couldn't be saved."
-FILLING = "Filling in the new tab… Reload this page to see how it went."
+FILLING = form_part.FILLING
 OPEN_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 RECORD = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
@@ -133,10 +133,6 @@ def client(client, limits):
 @pytest.fixture
 def paired(conn):
     return pair(conn, plugin=PLUGIN)
-
-
-def box(client, job):
-    return client.get(f"/jobs/{job}/form").text
 
 
 def press(client, job):

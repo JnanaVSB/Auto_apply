@@ -58,9 +58,9 @@ This takes about ten minutes. Menus in Chrome change, so a name here may differ 
 ## Each job
 The plugin works in Chrome only, and only with the dashboard on its normal port, 8765.
 
-**Open and fill** is in the job's box, under **Fill the form**. It opens the form in a new tab and fills it. Reload this
-page to see how it went: the box doesn't update by itself. It shows once every decision is answered and a browser is
-connected. Words you may see in its place:
+**Open and fill** is in the job's box, under **Fill the form**. It shows once every decision is answered and a browser
+is connected. It opens the form in a new tab and fills it. Reload this page to see how it went: the box doesn't update
+by itself. Words you may see in its place:
 - **Answer the decisions above first:** some questions are still open.
 - **Connect a browser first:** finish "Install".
 - **Today's fills are used:** you've reached the day's limit. Wait for tomorrow, or raise the number.
@@ -97,11 +97,12 @@ such as a cover letter: if a newer version is made, you say yes again. If a late
 says how many went. If it finds under half of them, the saved form stays, and the popup says so.
 
 ## After you press Submit
-- **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of the form's own Submit
-  button. Nothing is recorded yet, because the site may have refused the form. The plugin goes by the form's own
-  Submit, never by a button's words, so a button that isn't marked as one isn't noticed. On Ashby nothing is noticed yet:
-  it has no form to go by, until a real application there has shown which button is its Submit. **I submitted it** works
-  all the same. The popup says only that you pressed Submit, as it can't see the job's box.
+- **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of one of the form's own
+  submit buttons. Any of them counts, even one with other words, such as Save draft. Nothing is recorded yet, because
+  the site may have refused the form.
+- **Some sites' Submit buttons aren't noticed.** On Ashby nothing is noticed yet: it has no form to go by, until a real
+  application there has shown which button is its Submit. **I submitted it** works all the same.
+- **The popup** says only that you pressed Submit, as it can't see the job's box.
 - **I submitted it** saves the record and moves the card to Applied. You choose the date.
 - **I didn't send it** ends the fill and wipes what the plugin read. Nothing is recorded and no card moves. It still
   counts towards the day's fills, because your answers did go to the page.

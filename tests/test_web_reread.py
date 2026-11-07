@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from helpers import add_job, csrf, log_in, one
+from helpers import add_job, box, csrf, log_in, one
 from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
     BAD_KEYS,
@@ -93,10 +93,6 @@ def kept(conn):
 
 def unsent(client, job):
     return client.post(f"/jobs/{job}/form/unsent", headers={"X-CSRF-Token": csrf(client)})
-
-
-def box(client, job):
-    return client.get(f"/jobs/{job}/form").text
 
 
 def one_a_day(data_dir):

@@ -19,11 +19,10 @@ import sqlcipher3
 from app.collect import now
 from app.config import Config
 from app.council import runs
-from app.questionnaire import spelled
 from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import MAX_FIELDS, Field, Form, ashby, compare, greenhouse, lever, load, preview, record, save
+from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, load, preview, record, save
 from app.submit.fill_words import (
     BROWSER_REMOVED,
     CHANGED_FILE,
@@ -70,7 +69,6 @@ REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? W
 HANDED = "UPDATE fills SET files = ?, pdfs = ? WHERE id = ?"
 READ = "UPDATE fills SET values_read = ?, checked_on = ? WHERE id = ?"
 CLICKED = "UPDATE fills SET clicked_on = ? WHERE id = ?"
-WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL, clicked_on = NULL WHERE job_id = ?"
 ALL_WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL"
 # Only the job's newest row: a newer press that is still waiting is left alone
 UNSENT = """UPDATE fills SET stop_kind = ?, values_read = NULL, checked_on = NULL WHERE state IN ('sent', 'filled')
@@ -159,10 +157,10 @@ class Ticket:
     changes: list[dict] = field(default_factory=list)  # all the compare said, uncut, so a report's count stays true
     questions: dict[str, str] = field(default_factory=dict)  # each key in the pack, with the app's own saved label
     reported: bool = False  # the browser has said how it went: it says so once
-    files: dict[str, tuple[Path, str, int]] = field(default_factory=dict)  # each PDF in the pack: SHA-256 and version
+    files: dict[str, tuple[Path, dict]] = field(default_factory=dict)  # each PDF in the pack, with what `pdfs` keeps
     handed: list[str] = field(default_factory=list)  # the slots given out: each goes once
     known: frozenset[str] = frozenset()  # the keys a read may keep as they are
-    pdfs: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
+    names: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
     read: dict = field(default_factory=dict)  # the read held on the row
     clicked: float | None = None  # when you last pressed the site's Submit
     mode: str = "fill"  # or "read": the plugin reads the form and fills nothing
@@ -194,7 +192,7 @@ class Tickets:
         old, moment, address = self._live().get(job["id"]), now(), form_address(job)
         toolbar, unused = browser_id is not None, _unused(conn, job["id"], moment)
         with conn:
-            conn.execute(WIPED, (job["id"],))
+            conn.execute(record.WIPED, (job["id"],))
             if old and old.taken:
                 conn.execute(ENDED, (REPLACED, old.fill))
             if unused is None:
@@ -216,7 +214,7 @@ class Tickets:
             return reason
         old, address = self._live().get(job["id"]), form_address(job)
         with conn:
-            conn.execute(WIPED, (job["id"],))
+            conn.execute(record.WIPED, (job["id"],))
             if old and old.taken:
                 conn.execute(ENDED, (REPLACED, old.fill))
         self.tickets[job["id"]] = Ticket(
@@ -273,12 +271,14 @@ class Tickets:
         ticket.files = {
             slot: (
                 documents[slot][1],
-                record.sha256(documents[slot][1]),
-                runs.last_done(conn, ticket.job, slot)["version"],
+                {
+                    "version": runs.last_done(conn, ticket.job, slot)["version"],
+                    "sha256": record.sha256(documents[slot][1]),
+                },
             )
             for slot in slots.values()
         }
-        ticket.pdfs = {key: PDF_NAMES[slot] for key, slot in slots.items()}
+        ticket.names = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
 
     def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> str | None:
@@ -298,10 +298,8 @@ class Tickets:
         still = [field for field in fields if field.key in had]
         enough = bool(fields) and 2 * len(still) >= len(had)  # a page half drawn never replaces a good form
         if enough:
-            with conn:  # `save` commits this with it, so a busy database changes neither
-                changed = [field.key for field in still if _spelled(field) != _spelled(had[field.key])]
-                preview.asked_something_else(conn, ticket.job, changed)
-                save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
+            preview.asked_something_else(conn, ticket.job, had, still)  # `save` commits this, or rolls it back
+            save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
         del self.tickets[ticket.job]
         return None if enough else TOO_FEW
 
@@ -347,9 +345,8 @@ class Tickets:
     def hand(self, conn: sqlcipher3.Connection, ticket: Ticket, slot: str) -> None:
         """Saves that this PDF goes out, before it does: a busy database raises and uses nothing up."""
         handed = [*ticket.handed, slot]
-        pdfs = {name: {"version": ticket.files[name][2], "sha256": ticket.files[name][1]} for name in handed}
         with conn:
-            conn.execute(HANDED, (_json(handed), _json(pdfs), ticket.fill))
+            conn.execute(HANDED, (_json(handed), _json({name: ticket.files[name][1] for name in handed}), ticket.fill))
         ticket.handed = handed
 
     def reread(self, conn: sqlcipher3.Connection, ticket: Ticket, values: dict, clicked: bool) -> None:
@@ -359,7 +356,7 @@ class Tickets:
         is your press of Submit, which counts even when the read doesn't. Saved first: a busy database raises and
         changes nothing."""
         read = {key: _clean(value) for key, value in values.items() if key in ticket.known}
-        read |= {key: _file_verdict(values[key], name) for key, name in ticket.pdfs.items() if key in values}
+        read |= {key: _file_verdict(values[key], name) for key, name in ticket.names.items() if key in values}
         count, held = sum(map(_filled, read.values())), sum(map(_filled, ticket.read.values()))
         accepted, moment = count >= 1 and 2 * count >= held, now()
         with conn:
@@ -375,7 +372,7 @@ class Tickets:
     def can_thank(self, ticket: Ticket) -> bool:
         """Whether a thank-you page counts for this ticket: its site is switched on, and you pressed Submit just now."""
         pressed = ticket.clicked is not None and self.clock() - ticket.clicked <= THANKS_SECONDS
-        return pressed and SITES[ticket.site].DRAWN.thanks is not None
+        return pressed and bool(SITES[ticket.site].DRAWN.thanks)
 
     def thanked(self, conn: sqlcipher3.Connection, data_dir: Path, ticket: Ticket, job: dict) -> bool:
         """The site's thank-you page after your press: records it as "I submitted it" would, with today's date, and says
@@ -439,7 +436,7 @@ class Tickets:
 def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
     """The PDF the pack named, byte for byte, so a newer one can't slip in; None if it isn't a plain file in the job's
     own folder, is too big, isn't a PDF or has changed. A link can't lead out, as only real paths are compared."""
-    path, sha256, _ = ticket.files[slot]
+    path, handed = ticket.files[slot]
     folder = data_dir.resolve() / "documents" / str(ticket.job)
     try:
         real = path.resolve()
@@ -449,12 +446,7 @@ def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
         data = real.read_bytes()
     except (OSError, RuntimeError):  # RuntimeError: a link that leads to itself
         return None
-    return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == sha256 else None
-
-
-def _spelled(field: Field) -> list[str]:
-    """A question as a symbol can change it, which its wording ignores."""
-    return [spelled(field.label), *(spelled(choice.label) for choice in field.choices)]
+    return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == handed["sha256"] else None
 
 
 def _json(items: list | dict) -> str:

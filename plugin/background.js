@@ -191,8 +191,7 @@ async function watch(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
   const on = Boolean(record?.ticket && record.answered) && (await onForm(tabId, record));
-  const thanks = on && record.thanks?.selector ? record.thanks : undefined;
-  return { on, thanks };
+  return { on };
 }
 
 function read(message, sender) {
@@ -240,17 +239,9 @@ async function saidThanks(tabId, record) {
   if (latest) await keep(tabId, { ...latest, said: { ...latest.said, recorded: true } });
 }
 
-async function thanked(message, sender) {
-  const tabId = sender.tab.id;
-  const record = await recordOf(tabId);
-  if (!record?.ticket || !record.thanks?.selector || !record.clickedAt || !(await onForm(tabId, record))) return {};
-  await saidThanks(tabId, record);
-  return {};
-}
-
 function atThanksPage(record, tab) {
-  if (!record.thanks?.path || !record.clickedAt) return false;
-  return originOf(tab.url) === originOf(record.address) && new URL(tab.url).pathname.endsWith(record.thanks.path);
+  if (!record.thanks || !record.clickedAt) return false;
+  return originOf(tab.url) === originOf(record.address) && new URL(tab.url).pathname.endsWith(record.thanks);
 }
 
 async function leftForm(tabId) {
@@ -330,7 +321,6 @@ async function paired() {
 // Maps, not objects: `do` comes from outside, and "constructor" must find nothing.
 const PAGE = new Map([
   ["open", open], ["form", form], ["file", file], ["done", done], ["moved", moved], ["watch", watch], ["read", read],
-  ["thanked", thanked],
 ]);
 const POPUP = new Map([["status", status], ["fill", fill]]);
 const OPTIONS = new Map([["pair", pair], ["paired", paired]]);

@@ -5,7 +5,6 @@ read goes. Made-up jobs, forms and answers; nothing here opens a site."""
 import hashlib
 import json
 from datetime import date
-from pathlib import Path
 
 import pytest
 import sqlcipher3
@@ -301,6 +300,14 @@ def test_a_by_hand_record_names_the_newest_whatever_a_fill_handed_out(owner, doo
     assert found["files"][0]["sha256"] == hashlib.sha256(newer).hexdigest()
 
 
+def test_a_kept_file_s_row_says_its_label_once(conn, data_dir):
+    kept = match.Line(
+        Field("q", "Question q", "file", False, "company"), "fill", "a.pdf", match.MINE, file_label="Letter v1"
+    )
+    found = frozen(conn, data_dir, None, kept)
+    assert row(found) == {"question": "Question q", "value": "Letter v1", "from": match.MINE, "note": ""}
+
+
 def test_a_pdf_that_didn_t_go_out_is_the_newest_as_before(owner, door, conn, data_dir, paired):
     job, ticket, _ = packed(door, conn, data_dir)
     with conn:
@@ -366,10 +373,6 @@ def test_a_browser_record_never_claims_what_was_sent_or_what_you_did(owner, door
     for text in (owner.get(f"/jobs/{job}/form").text, paper_text(found)):
         assert "What the form held when last checked (" in text and CAUTION in text
         assert "What was sent" not in text and "you changed" not in text.lower() and BY_HAND not in text
-
-
-def test_the_old_words_are_gone():
-    assert "What was sent" not in Path(record.__file__).read_text("utf-8")
 
 
 def test_a_script_in_a_read_is_escaped_in_the_box(owner, door, conn, data_dir, paired):

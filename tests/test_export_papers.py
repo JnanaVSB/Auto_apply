@@ -253,7 +253,7 @@ def test_a_row_with_no_note_key_is_read_all_the_same():
 def test_a_row_with_no_value_shows_its_from_words(status, words):
     line = SimpleNamespace(field=SimpleNamespace(label="Hobby?", kind="text"), status=status, value="", source="x",
                            note="")  # fmt: skip
-    assert section(papers.filled_answers(JOB, fields(*record._fields((line,))), None, {}), "Hobby?") == [words]
+    assert section(papers.filled_answers(JOB, fields(*record._fields((line,), None)), None, {}), "Hobby?") == [words]
 
 
 @pytest.mark.parametrize(

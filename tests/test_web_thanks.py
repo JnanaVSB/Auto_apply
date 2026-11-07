@@ -33,12 +33,12 @@ from test_web_plugin import (
     running,
 )
 
-from app.submit import Thanks, ashby, fill_words, fills, greenhouse, lever, record
+from app.submit import ashby, fill_words, fills, greenhouse, lever, record
 
 CARD = "INSERT INTO tracker VALUES (?, 'ready', NULL, NULL, 'then')"
 APPLIED = "INSERT INTO tracker VALUES (?, 'applied', NULL, '2026-10-17', 'then')"
 LOOKS_SENT = "It looks sent. If the site took it, press I submitted it."
-SIGN = Thanks(path="/thanks")
+SIGN = "/thanks"
 SAID = "your press of Submit was followed by the site's thank-you page, so it was recorded"
 
 
@@ -79,7 +79,7 @@ def nothing_recorded(conn, job):
 
 @pytest.mark.parametrize("site", [greenhouse, lever, ashby])
 def test_every_site_ships_off(site):
-    assert site.DRAWN.thanks is None
+    assert site.DRAWN.thanks == ""
 
 
 def test_the_plugin_is_told_no_sign(door, conn, data_dir, paired):
@@ -87,11 +87,9 @@ def test_the_plugin_is_told_no_sign(door, conn, data_dir, paired):
     assert call(door, START).json()["thanks"] is None
 
 
-def test_the_plugin_is_told_a_site_s_sign_word_for_word(door, conn, data_dir, paired, monkeypatch):
-    sign = Thanks(selector="h1.done", words="Thank you")
-    monkeypatch.setattr(greenhouse, "DRAWN", replace(greenhouse.DRAWN, thanks=sign))
+def test_the_plugin_is_told_a_site_s_sign_word_for_word(door, conn, data_dir, paired, site_on):
     press(door, conn, data_dir, ready_job(conn))
-    assert call(door, START).json()["thanks"] == {"path": "", "selector": "h1.done", "words": "Thank you"}
+    assert call(door, START).json()["thanks"] == SIGN
 
 
 def test_a_site_that_is_off_refuses_even_after_a_real_press(door, conn, data_dir, paired):

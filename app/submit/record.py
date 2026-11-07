@@ -5,6 +5,7 @@ what the site received. Nothing here contacts any site."""
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -21,7 +22,7 @@ SAVE = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address,
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
 LOAD = "SELECT submitted_on, saved_on, how, address, fields, files, checked_on FROM submissions WHERE job_id = ?"
 LAST_READ = "SELECT values_read, checked_on, pdfs FROM fills WHERE job_id = ? ORDER BY id DESC LIMIT 1"
-WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL WHERE job_id = ?"
+WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL, clicked_on = NULL WHERE job_id = ?"
 NO_CARD = "This job has no card in Ready: use Add an application on the Tracker page, or press Prepare first"
 BY_YOU, EMPTY_FROM, MISSING = "answered by you on the site", "left empty", "file was missing"
 NOT_READ, AS_SHOWN = "the plugin couldn't read this box", "as the form showed it"
@@ -74,7 +75,7 @@ def shown(line: match.Line) -> str:
     if line.status not in ("fill", "suggested"):
         return ""
     if field.kind == "file":
-        return line.note if line.source == match.MINE else line.source
+        return line.file_label or line.source
     if field.kind == "consent" and line.value == match.TICKED:
         return "ticked"
     if isinstance(line.value, tuple):
@@ -86,10 +87,10 @@ def documents(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> dict[
     """The job's newest finished resume and cover letter, each (label, PDF), or None without one or without its
     file."""
     found: dict[str, tuple[str, Path] | None] = {}
-    for kind, name in DOCUMENTS:
+    for kind, _ in DOCUMENTS:
         done = runs.last_done(conn, job_id, kind)
         path = pdf.tailored(data_dir, job_id, done["version"], kind) if done else None
-        found[kind] = (f"{name} v{done['version']}", path) if path and path.is_file() else None
+        found[kind] = (_label(kind, done["version"]), path) if path and path.is_file() else None
     return found
 
 
@@ -135,8 +136,7 @@ def submit(
     read, checked_on = (json.loads(held[0]), held[1]) if held and held[0] and lines is not None else (None, None)
     handed = json.loads(held[2]) if read is not None and held[2] else {}
     paths = {str(found[1]): slot for slot, found in documents(conn, data_dir, job_id).items() if found}
-    labels = {path: _label(slot, handed[slot]["version"]) for path, slot in paths.items() if slot in handed}
-    fields = _fields(lines, read, labels) if lines is not None else [
+    fields = _fields(_as_handed(lines, paths, handed), read) if lines is not None else [
         {"question": label, "value": text, "from": "Questionnaire"}
         for label, text in standard(questionnaire.load(conn)[0])
     ]  # fmt: skip
@@ -166,29 +166,36 @@ def moved_back(conn: sqlcipher3.Connection, job_id: int, found: dict) -> str | N
     return next((move["moved_on"] for move in later if move["moved_on"] >= found["saved_on"]), None)
 
 
-def _fields(lines: tuple[match.Line, ...], read: dict | None = None, labels: dict | None = None) -> list[dict]:
-    """Each question as the app prepared it, or with a read as the form last showed it, with `labels` for a PDF handed
-    out, by its path. What you do yourself on the site is never guessed at: no value."""
+def _as_handed(lines: tuple[match.Line, ...], paths: dict[str, str], handed: dict) -> tuple[match.Line, ...]:
+    """Each file line as the version a fill handed out, so a row and the file list agree."""
+    labels = {path: _label(slot, handed[slot]["version"]) for path, slot in paths.items() if slot in handed}
+    return tuple(
+        replace(line, source=labels[line.value], file_label="") if line.value in labels else line for line in lines
+    )
+
+
+def _fields(lines: tuple[match.Line, ...], read: dict | None) -> list[dict]:
+    """Each question as the app prepared it, or with a read as the form last showed it. What you do yourself on the site
+    is never guessed at: no value."""
     fields = []
     for line in lines:
         if line.status != "hidden":
             field = {"question": line.field.label, "value": "" if line.status in NO_VALUE else shown(line),
                      "from": NO_VALUE.get(line.status, line.source),
                      "note": line.note}  # fmt: skip
-            fields.append(field if read is None else field | _as_read(line, field["value"], read, labels or {}))
+            fields.append(field if read is None else field | _as_read(line, field["value"], read))
     return fields
 
 
-def _as_read(line: match.Line, prepared: str, read: dict, labels: dict) -> dict:
+def _as_read(line: match.Line, prepared: str, read: dict) -> dict:
     """What the read changes in a line's row: nothing if it shows what the app prepared. A file goes by its verdict, as
     a read never holds another file's name."""
     key = line.field.key
     if key not in read:
         return {"value": "", "from": NOT_READ}
     if line.field.kind == "file":
-        handed = labels.get(line.value)
         verdicts = {
-            fill_words.SAME_FILE: {"value": handed, "from": handed} if handed else {},
+            fill_words.SAME_FILE: {},
             fill_words.CHANGED_FILE: {"value": ANOTHER_FILE, "from": AS_SHOWN},
             "": {"value": "", "from": NO_FILE_SHOWN},
         }
