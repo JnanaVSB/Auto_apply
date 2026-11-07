@@ -17,8 +17,9 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import MAX_FIELDS, compare, fills, preview
+from app.submit import MAX_FIELDS, add_problem, compare, fill_words, fills, preview
 from app.web import queries
+from app.web.submit import MAX_REMEMBERED, remember
 
 PREFIX = "/plugin/"
 HELLO = PREFIX + "hello"
@@ -38,8 +39,8 @@ KINDS = {
     NO_KEY, WRONG_PLUGIN, OLD_PLUGIN, TOO_BIG, BAD_REQUEST, APP_ERROR, NO_TICKET, NOT_LOGGED_IN, NOT_READY, NO_JOB,
     NO_FILE,
 }  # fmt: skip
-STOP = {"go": False, "reason": fills.UNEXPECTED_PAGE}
-PAGE_STOPS = (fills.BOT_CHECK, fills.LIMIT, fills.UNEXPECTED_PAGE, fills.CANT_SET)
+STOP = {"go": False, "reason": fill_words.UNEXPECTED_PAGE}
+PAGE_STOPS = (fill_words.BOT_CHECK, fill_words.LIMIT, fill_words.UNEXPECTED_PAGE, fill_words.CANT_SET)
 
 
 def key_hash(key: str) -> str:
@@ -147,7 +148,8 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         ticket = request.app.state.tickets.take(request.app.state.conn, address, state.browser_id, state.browser_name)
         if ticket is None:
             raise HTTPException(404, NO_TICKET)
-        return JSONResponse({"ticket": ticket.id, "mode": "fill", "board": ticket.site})
+        thanks = fills.SITES[ticket.site].DRAWN.thanks or None
+        return JSONResponse({"ticket": ticket.id, "mode": ticket.mode, "board": ticket.site, "thanks": thanks})
 
     @app.post(PREFIX + "known")
     async def known(request: Request) -> Response:
@@ -189,6 +191,8 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         if not isinstance(items, list):
             raise HTTPException(400, BAD_REQUEST)
         try:
+            if ticket.mode == "read":
+                return _read(request, ticket, items, data_dir)
             answers = tickets.answer(conn, data_dir, ticket, items)
         except fills.BadForm:
             raise HTTPException(400, BAD_REQUEST) from None
@@ -202,13 +206,28 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         if ticket is None:
             raise HTTPException(404, NO_TICKET)
         state, stop = body.get("state"), body.get("kind")
+        reading = state in ("reread", "clicked") and stop is None and ticket.answered
+        leaving = state == "gone" and stop is None
         finished = state == "filled" and stop is None and ticket.answered
-        if not (finished or (state == "stopped" and stop in PAGE_STOPS)):
+        thanked = state == "thanked" and stop is None and ticket.answered and tickets.can_thank(ticket)
+        if not (reading or leaving or finished or thanked or (state == "stopped" and stop in PAGE_STOPS)):
             raise HTTPException(400, BAD_REQUEST)
-        filled = list(_lines(body.get("values"), "value", _is_value))  # only the keys: an answer goes no further
+        if thanked:  # the one report that writes what can't be erased, so it alone needs a login
+            _logged_in(request)
+        if (reading or thanked) and tickets.closed_by_record(conn, ticket):
+            raise HTTPException(404, NO_TICKET)
+        values = _lines(body.get("values"), "value", _is_value)
         left = _lines(body.get("left"), "why", _is_why)
-        if not ticket.reported:
-            tickets.report(conn, ticket, stop, filled, left)
+        if thanked:
+            return JSONResponse(
+                {"ok": True, "recorded": tickets.thanked(conn, data_dir, ticket, queries.job(conn, ticket.job))}
+            )
+        if reading:
+            tickets.reread(conn, ticket, values, state == "clicked")
+        elif leaving:
+            tickets.gone(conn, ticket)
+        elif not ticket.reported:
+            tickets.report(conn, ticket, stop, list(values), left)  # only the keys: an answer goes no further
         return JSONResponse({"ok": True})
 
     @app.post(PREFIX + "file")
@@ -254,7 +273,19 @@ def _is_value(value: object) -> bool:
 
 
 def _is_why(why: object) -> bool:
-    return isinstance(why, str) and why in fills.LEFT
+    return isinstance(why, str) and why in fill_words.LEFT
+
+
+def _read(request: Request, ticket: fills.Ticket, items: list, data_dir: Path) -> JSONResponse:
+    """A read ticket's form: nothing goes back, whatever your answers are."""
+    conn = request.app.state.conn
+    stop = request.app.state.tickets.read_form(conn, ticket, items)
+    if stop:
+        return JSONResponse({"go": False, "reason": stop})
+    note = remember(conn, data_dir, queries.job(conn, ticket.job), MAX_REMEMBERED)
+    if note:
+        add_problem(conn, ticket.job, note)
+    return JSONResponse({"go": False, "reason": "read"})
 
 
 def _logged_in(request: Request) -> None:

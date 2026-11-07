@@ -11,6 +11,13 @@ const MANIFEST = chrome.runtime.getManifest();
 const FORM_ORIGINS = new Set(MANIFEST.content_scripts.flatMap((script) => script.matches.map(originOf)));
 const POPUP_PAGE = chrome.runtime.getURL("popup.html");
 const OPTIONS_PAGE = chrome.runtime.getURL("options.html");
+const READ_STATES = new Set(["reread", "clicked"]);
+const MODES = new Set(["fill", "read"]);
+// The fill has ended, or this browser was removed
+const NO_FILL = new Set(["no-ticket", "no-key", "wrong-plugin"]);
+// By tab, a press still on its way to the app, so that a tab leaving says so after it. This is only in memory: a worker
+// that restarted has none, and then a thank-you address can be missed, which records nothing.
+const pressing = new Map();
 
 function originOf(address) {
   try {
@@ -60,6 +67,12 @@ async function call(route, body, key) {
   }
 }
 
+// A tab's record once its ticket has gone. The press went with it: what came of it isn't known here.
+function noTicket({ address, said }) {
+  const { looks, ...rest } = said ?? {};
+  return { address, said: rest };
+}
+
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tab;
@@ -101,8 +114,10 @@ async function open(message, sender) {
   await keep(tabId, { address, said });
   if (!key) return { go: false };
   const answer = await askForTicket(address, key);
-  if (answer.status === 200 && answer.body.mode === "fill" && typeof answer.body.ticket === "string") {
-    await keep(tabId, { ticket: answer.body.ticket, address, slots: [], answered: false, said: {} });
+  if (answer.status === 200 && MODES.has(answer.body.mode) && typeof answer.body.ticket === "string") {
+    const { ticket, mode } = answer.body;
+    const thanks = answer.body.thanks ?? null;
+    await keep(tabId, { ticket, mode, address, slots: [], answered: false, thanks, said: {} });
     return { go: true };
   }
   const problem = answer.body.error ?? "app-error";
@@ -116,11 +131,18 @@ async function form(message, sender) {
   if (!record?.ticket || !Array.isArray(message.fields)) return { stop: "known" };
   if (!(await onForm(tabId, record))) return { stop: "report" };
   const answer = await call("form", { ticket: record.ticket, fields: message.fields }, await storedKey());
+  const latest = await recordOf(tabId); // the tab can leave during the call, and an old copy would bring its ticket back
+  if (latest?.ticket !== record.ticket) return { stop: "known" };
   const { go, pack, reason, error } = answer.body;
   if (answer.status === 200 && go && pack.length > 0) {
     const slots = pack.filter((line) => line.kind === "file").map((line) => line.value.slot);
     await keep(tabId, { ...record, answered: true, slots });
     return { pack };
+  }
+  if (answer.status === 200 && reason === "read") {
+    await flag(tabId, "OK");
+    await keep(tabId, { address: record.address, said: { problem: "read" } });
+    return { stop: "known" };
   }
   if (answer.status === 400 || answer.status === 413) return { stop: "report" }; // it reports this, so the row isn't left open
   await flag(tabId, "!");
@@ -154,6 +176,8 @@ async function done(message, sender) {
   const { state, kind, values, left } = message;
   const body = { ticket: record.ticket, state, kind, values, left };
   const answer = await call("report", body, await storedKey());
+  const latest = await recordOf(tabId); // as in `form`
+  if (latest?.ticket !== record.ticket) return {};
   const unfilled = new Set(left.map((line) => line.key));
   const filled = new Set(values.map((line) => line.key).filter((key) => !unfilled.has(key))).size;
   const said = { state, kind, filled, left: unfilled.size };
@@ -163,11 +187,74 @@ async function done(message, sender) {
   return {};
 }
 
+async function watch(message, sender) {
+  const tabId = sender.tab.id;
+  const record = await recordOf(tabId);
+  const on = Boolean(record?.ticket && record.answered) && (await onForm(tabId, record));
+  return { on };
+}
+
+function read(message, sender) {
+  const going = sendRead(message, sender);
+  if (message.state !== "clicked") return going;
+  const tabId = sender.tab.id;
+  const ended = going.catch(() => {}).finally(() => {
+    if (pressing.get(tabId) === ended) pressing.delete(tabId);
+  });
+  pressing.set(tabId, ended);
+  return going;
+}
+
+async function sendRead(message, sender) {
+  const tabId = sender.tab.id;
+  const record = await recordOf(tabId);
+  const { state, values } = message;
+  if (!record?.ticket || !READ_STATES.has(state) || !Array.isArray(values)) return { stop: true };
+  // The tab may already be leaving after a press, and the address it happened on is what counts.
+  const here = state === "clicked" ? sender.url === record.address : await onForm(tabId, record);
+  if (!here) return { stop: true };
+  const answer = await call("report", { ticket: record.ticket, state, values, left: [] }, await storedKey());
+  const latest = await recordOf(tabId); // the tab can leave during the call, and an old copy would bring its ticket back
+  if (latest?.ticket !== record.ticket) return { stop: true };
+  if (NO_FILL.has(answer.body.error)) {
+    await keep(tabId, noTicket(latest));
+    return { stop: true };
+  }
+  if (answer.status !== 200) {
+    if (state === "reread") await keep(tabId, { ...latest, said: { ...latest.said, unsaved: true } });
+    return {};
+  }
+  const looks = state === "clicked" ? { looks: true } : {};
+  const pressed = state === "clicked" ? { clickedAt: Date.now() } : {};
+  await keep(tabId, { ...latest, ...pressed, said: { ...latest.said, unsaved: false, ...looks } });
+  return { kept: true };
+}
+
+async function saidThanks(tabId, record) {
+  const body = { ticket: record.ticket, state: "thanked", values: [], left: [] };
+  const answer = await call("report", body, await storedKey());
+  if (answer.body.recorded !== true) return;
+  await flag(tabId, "OK");
+  const latest = await recordOf(tabId);
+  if (latest) await keep(tabId, { ...latest, said: { ...latest.said, recorded: true } });
+}
+
+function atThanksPage(record, tab) {
+  if (!record.thanks || !record.clickedAt) return false;
+  return originOf(tab.url) === originOf(record.address) && new URL(tab.url).pathname.endsWith(record.thanks);
+}
+
+async function leftForm(tabId) {
+  const record = await recordOf(tabId);
+  if (record?.ticket) await call("report", { ticket: record.ticket, state: "gone", values: [], left: [] }, await storedKey());
+}
+
+// No call and no wait between the look and the save, and the page that sent this is still there: the tab hasn't left.
 async function moved(message, sender) {
   const tabId = sender.tab.id;
   const record = await recordOf(tabId);
-  await flag(tabId, "!");
   await keep(tabId, { ...record, address: record?.address ?? sender.tab.url, said: { problem: "moved" } });
+  await flag(tabId, "!");
   return {};
 }
 
@@ -181,7 +268,8 @@ async function status() {
   const answer = await call("known", { address: tab.url }, key);
   if (answer.status !== 200) return { say: answer.body.error ?? "app-error", said };
   if (!answer.body.job) return { say: "no-job", said };
-  return { say: inProgress(record) ? "filling" : "known", title: answer.body.title, company: answer.body.company, said };
+  const going = record?.mode === "read" ? "reading" : "filling";
+  return { say: inProgress(record) ? going : "known", title: answer.body.title, company: answer.body.company, said };
 }
 
 async function fill() {
@@ -196,7 +284,7 @@ async function fill() {
     return { say: "not-ready", link: JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined };
   }
   if (answer.body.ok !== true) return { say: answer.body.error ?? "app-error" };
-  if (record?.ticket) await keep(tab.id, { address: record.address, said: record.said }); // the press ended that fill
+  if (record?.ticket) await keep(tab.id, noTicket(record)); // the press ended that fill
   try {
     const reply = await chrome.tabs.sendMessage(tab.id, { do: "begin" }, { frameId: 0 });
     return { say: reply?.moved ? "moved" : "filling" };
@@ -231,7 +319,9 @@ async function paired() {
 }
 
 // Maps, not objects: `do` comes from outside, and "constructor" must find nothing.
-const PAGE = new Map([["open", open], ["form", form], ["file", file], ["done", done], ["moved", moved]]);
+const PAGE = new Map([
+  ["open", open], ["form", form], ["file", file], ["done", done], ["moved", moved], ["watch", watch], ["read", read],
+]);
 const POPUP = new Map([["status", status], ["fill", fill]]);
 const OPTIONS = new Map([["pair", pair], ["paired", paired]]);
 
@@ -248,6 +338,25 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (!handler) return false;
   handler(message, sender).then(reply, () => reply({}));
   return true;
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await pressing.get(tabId);
+  await leftForm(tabId);
+  await chrome.storage.session.remove(recordName(tabId));
+});
+
+// A reload has the same address, so it isn't leaving. Off the form hosts the tab's address can't be seen, so a new status
+// is what tells: `tab.url` is then empty.
+chrome.tabs.onUpdated.addListener(async (tabId, change, tab) => {
+  if (!change.url && !change.status) return;
+  await pressing.get(tabId);
+  const record = await recordOf(tabId);
+  if (!record?.ticket || tab.url === record.address) return;
+  if (atThanksPage(record, tab)) await saidThanks(tabId, record);
+  await leftForm(tabId);
+  const latest = await recordOf(tabId); // it may have landed on another form with a new ticket during that call
+  if (latest?.ticket === record.ticket) await keep(tabId, noTicket(latest));
 });
 
 chrome.runtime.onInstalled.addListener(async () => {

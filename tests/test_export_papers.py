@@ -19,7 +19,7 @@ from app.submit import record
 
 SHA = "a" * 64
 RECORD = {"submitted_on": "2026-10-17", "saved_on": "2026-10-18T10:00:00+00:00", "how": "by hand",
-          "address": "https://example.com/apply?a=1&b=100%", "fields": [], "files": []}  # fmt: skip
+          "address": "https://example.com/apply?a=1&b=100%", "fields": [], "files": [], "checked_on": None}  # fmt: skip
 JOB = {"company": "Acme & Sons", "title": "ML Engineer", "locations": '["Austin, TX", "Remote"]',
        "apply_url": "https://example.com/jobs/1?a=1&b=100%", "description": "We train robots."}  # fmt: skip
 ROW = {"slot": "resume", "label": "Resume v3", "version": 3, "sha256": SHA, "note": ""}
@@ -206,9 +206,11 @@ def test_a_by_hand_paper_says_so(conn):
     assert "What was sent" not in found
 
 
-def test_a_browser_paper_says_what_was_sent_and_nothing_else(conn):
-    found = lines(papers.filled_answers(JOB, RECORD | {"how": "browser"}, None, {}))
-    assert found[0] == "What was sent" and record.MAY_DIFFER not in found
+def test_a_browser_paper_says_what_the_form_held_and_its_caution(conn):
+    read = {"how": "browser", "checked_on": "2026-10-17T15:00:00+00:00"}
+    found = lines(papers.filled_answers(JOB, RECORD | read, None, {}))
+    assert found[0] == "What the form held when last checked (17 Oct 15:00)"
+    assert record.CAUTION in found and record.MAY_DIFFER not in found
     assert not [line for line in found if "by hand" in line]
 
 
@@ -251,7 +253,7 @@ def test_a_row_with_no_note_key_is_read_all_the_same():
 def test_a_row_with_no_value_shows_its_from_words(status, words):
     line = SimpleNamespace(field=SimpleNamespace(label="Hobby?", kind="text"), status=status, value="", source="x",
                            note="")  # fmt: skip
-    assert section(papers.filled_answers(JOB, fields(*record._fields((line,))), None, {}), "Hobby?") == [words]
+    assert section(papers.filled_answers(JOB, fields(*record._fields((line,), None)), None, {}), "Hobby?") == [words]
 
 
 @pytest.mark.parametrize(

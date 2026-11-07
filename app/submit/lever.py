@@ -24,7 +24,7 @@ CARD_KINDS = {
 TEMPLATE = re.compile(r"(cards|surveysResponses)\[([^\]]+)\]\[baseTemplate\]")
 CARD_INPUT = re.compile(r"(?:cards|surveysResponses)\[[^\]]+\](?:\[responses\])?\[field\d+\]")  # read from templates
 SURVEY = "countrySurvey_"  # a voluntary survey's section, followed by the countries it is for
-UNREADABLE = "Lever's page could not be read: the browser reads it when you press Fill in browser."
+UNREADABLE = "Lever's page could not be read: try again later, or apply by hand with the lines below."
 CLOSED = "This posting is closed or was removed (Lever says not found)."
 MOVED = "Lever sent this posting somewhere else; it may be closed: check the job page."
 

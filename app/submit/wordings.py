@@ -26,6 +26,7 @@ KEYS = {  # the sites' own fields, by key: (Questionnaire section, answer)
     "name": ("contact", "full_name"), "preferred_name": ("contact", "preferred_name"), "email": ("contact", "email"),
     "phone": ("contact", "phone"), "urls[LinkedIn]": ("contact", "linkedin"), "urls[GitHub]": ("contact", "github"),
     "urls[Portfolio]": ("contact", "portfolio"), "urls[Other]": ("contact", "other_link"),
+    "_systemfield_name": ("contact", "full_name"), "_systemfield_email": ("contact", "email"),
 }  # fmt: skip
 SITE_BOXES = frozenset({*KEYS, "first_name", "last_name", "location", "city", "comments", "resume", "cover_letter"})
 SURVEY_COUNTRIES = re.compile(r"\(for candidates in: ([^)]*)\)$")  # how app/submit/lever.py words a survey's help

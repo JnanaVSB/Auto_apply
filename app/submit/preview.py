@@ -1,20 +1,22 @@
 """A job's saved form matched to your answers (Phase 7), as the job box, the Ready page and the Writer all see it, and
 the answers you give for one job (form_answers, given by you)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import sqlcipher3
 
 from app import questionnaire
 from app.collect import now
-from app.submit import Field, Form, load, match, record, wordings
+from app.questionnaire import spelled
+from app.submit import Field, Form, ashby, load, match, record, wordings
 
 KEPT = "SELECT field, answer, given_by, wording FROM form_answers WHERE job_id = ?"
 YOURS = """INSERT INTO form_answers (job_id, field, answer, given_by, preparation_id, saved_on, wording)
     VALUES (?, ?, ?, 'you', NULL, ?, ?) ON CONFLICT (job_id, field) DO UPDATE SET answer = excluded.answer,
     given_by = 'you', preparation_id = NULL, saved_on = excluded.saved_on, wording = excluded.wording"""
 FORGET = "DELETE FROM form_answers WHERE job_id = ? AND field = ? AND given_by = 'you'"
+ASKED_ELSE = "UPDATE form_answers SET wording = '' WHERE job_id = ? AND field = ?"
 
 
 @dataclass(frozen=True)
@@ -37,8 +39,20 @@ def preview(conn: sqlcipher3.Connection, data_dir: Path, job_id: int) -> Preview
         return None
     form, read_on, read_from, problem = saved
     found, warnings, no_writer = lines(conn, form, job_id, record.documents(conn, data_dir, job_id))
+    if read_from == "browser":
+        found = tuple(map(held_back, found))
     still_open = sum(line.status in ("decide", "suggested") for line in found)
     return Preview(read_on, read_from, problem, found, warnings, still_open, no_writer)
+
+
+def held_back(line: match.Line) -> match.Line:
+    """A line of a form the page wrote, where a compare only checks the page against itself: the app's answer waits for
+    your decision, unless it is your own or goes in one of the site's own boxes."""
+    if line.status != "fill" or line.source == match.MINE or ashby.own_box(line.field):
+        return line
+    if line.field.kind == "consent":
+        return replace(line, status="decide", decision="consent", value="", source="")
+    return replace(line, status="suggested")
 
 
 def lines(
@@ -59,6 +73,21 @@ def keep(conn: sqlcipher3.Connection, job_id: int, field: Field, answer: str) ->
     """Your answer for this job's question as it is worded now, replacing a Writer draft."""
     with conn:
         conn.execute(YOURS, (job_id, field.key, answer, now(), wordings.wording(field)))
+
+
+def asked_something_else(
+    conn: sqlcipher3.Connection, job_id: int, had: dict[str, Field], fields: tuple[Field, ...]
+) -> None:
+    """Your answers to questions a page's new read changed by a symbol, which a wording ignores, or dropped, as it can
+    bring one back changed: they stay, and no longer answer. `had` is the saved form by key, and the caller's save
+    commits this."""
+    now_read = {field.key: field for field in fields}
+    changed = [key for key, field in had.items() if key not in now_read or _spelled(now_read[key]) != _spelled(field)]
+    conn.executemany(ASKED_ELSE, [(job_id, key) for key in changed])
+
+
+def _spelled(field: Field) -> list[str]:
+    return [spelled(field.label), *(spelled(choice.label) for choice in field.choices)]
 
 
 def forget(conn: sqlcipher3.Connection, job_id: int, key: str) -> None:

@@ -311,6 +311,7 @@ async function run() {
   } finally {
     running = false;
   }
+  await watch().catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((message, sender, reply) => {

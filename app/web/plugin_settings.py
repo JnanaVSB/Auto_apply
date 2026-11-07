@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app import collect
-from app.submit import fills
+from app.submit import fill_words
 from app.web import actions, plugin
 
 PAGE = "/settings/plugin"
@@ -56,8 +56,8 @@ def _view(
     added: str | None = None,
 ) -> HTMLResponse:
     conn = request.app.state.conn
-    browsers, recent = conn.execute(BROWSERS).fetchall(), fills.recent(conn)
+    browsers, recent = conn.execute(BROWSERS).fetchall(), fill_words.recent(conn)
     return page(
-        request, "plugin_settings.html", status, browsers=browsers, recent=recent, all_fills=fills.total(conn),
-        problem=problem, key=key, added=added,
+        request, "plugin_settings.html", status, browsers=browsers, recent=recent,
+        all_fills=fill_words.total(conn), problem=problem, key=key, added=added,
     )  # fmt: skip

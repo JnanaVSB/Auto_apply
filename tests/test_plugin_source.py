@@ -11,11 +11,11 @@ import pytest
 
 from app.resume import CONTROL
 from app.sources import closed_site
-from app.submit import ashby, fills, greenhouse, lever
+from app.submit import ashby, fill_words, greenhouse, lever
 from app.web import plugin
 
 PLUGIN = Path(__file__).parents[1] / "plugin"
-BACKGROUND, PAGE, POPUP, OPTIONS = "background.js", "page.js", "popup.js", "options.js"
+BACKGROUND, PAGE, WATCH, POPUP, OPTIONS = "background.js", "page.js", "watch.js", "popup.js", "options.js"
 HOSTS = {
     "https://job-boards.greenhouse.io/*",
     "https://jobs.lever.co/*",
@@ -80,7 +80,7 @@ def files(*patterns):
 
 
 def page_side():
-    """Whatever runs on a job's page: page.js and the boards, once they exist."""
+    """Whatever runs on a job's page: page.js, watch.js and the boards, once they exist."""
     return [name for name in files("*.js") if name not in (BACKGROUND, POPUP, OPTIONS)]
 
 
@@ -135,7 +135,7 @@ def test_nothing_is_open_to_pages_or_other_plugins_and_no_id_is_fixed(manifest):
 def test_the_page_part_runs_only_on_form_pages_in_the_top_frame(manifest):
     scripts = manifest["content_scripts"]
     assert [script["matches"] for script in scripts] == [[pattern] for _, pattern in FORM_PAGES.values()]
-    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", PAGE] for site in FORM_PAGES]
+    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", WATCH, PAGE] for site in FORM_PAGES]
     for script in scripts:
         assert set(script) == {"matches", "js", "run_at"} and script["run_at"] == "document_idle"
 
@@ -219,7 +219,10 @@ def test_a_failed_call_keeps_no_error_text():
 
 
 def test_each_part_has_its_own_map_of_handlers():
-    assert handlers("PAGE") == {"open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved"}
+    assert handlers("PAGE") == {
+        "open": "open", "form": "form", "file": "file", "done": "done", "moved": "moved", "watch": "watch",
+        "read": "read",
+    }  # fmt: skip
     assert handlers("POPUP") == {"status": "status", "fill": "fill"}
     assert handlers("OPTIONS") == {"pair": "pair", "paired": "paired"}
 
@@ -287,13 +290,13 @@ def test_no_reply_holds_the_ticket_or_the_key():
 # The page part
 
 
-def page_function(name):
-    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", code(PAGE), re.S | re.M)
+def page_function(name, file=PAGE):
+    found = re.search(rf"^(?:async )?function {name}\(.*?^}}$", code(file), re.S | re.M)
     assert found, name
     return found[0]
 
 
-@pytest.mark.parametrize("name", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
+@pytest.mark.parametrize("name", [PAGE, WATCH, *(f"boards/{site}.js" for site in FORM_PAGES)])
 def test_the_page_part_s_files_exist(name):
     assert (PLUGIN / name).is_file()
 
@@ -374,13 +377,15 @@ def test_the_skip_list_names_password_and_the_other_sorts():
 
 
 def test_no_message_from_the_page_carries_an_address():
-    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE))
-    assert len(messages) == 5 and code(PAGE).count("sendMessage(") == 1  # moved, open, form, file, done
+    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE) + code(WATCH))
+    assert len(messages) == 8  # moved, open, form, file, done, watch, and a read of each sort
+    assert code(PAGE).count("sendMessage(") == 1 and "sendMessage(" not in code(WATCH)
     assert [message for message in messages if re.search(r"address|location|href", message)] == []
 
 
 def test_the_page_part_never_looks_outside_its_own_frame():
-    assert [word for word in ("window.top", "parent.", "contentWindow", "contentDocument") if word in code(PAGE)] == []
+    words = ("window.top", "parent.", "contentWindow", "contentDocument")
+    assert [(name, word) for name in page_side() for word in words if word in code(name)] == []
 
 
 def test_tidy_takes_out_the_same_characters_as_the_app():
@@ -389,7 +394,7 @@ def test_tidy_takes_out_the_same_characters_as_the_app():
 
 def test_every_why_and_stop_is_one_the_app_knows():
     literals = set(re.findall(r'"([^"\n]*)"', code(PAGE)))
-    known = {*fills.LEFT, *plugin.PAGE_STOPS}
+    known = {*fill_words.LEFT, *plugin.PAGE_STOPS}
     assert known <= literals
     assert {word for word in literals if re.fullmatch(r"[a-z]+(?:-[a-z]+)+", word)} <= known | {
         "aria-label", "aria-required", "one-time-code",
@@ -422,6 +427,321 @@ def test_a_line_that_holds_a_rule_is_still_there(name, line):
 
 
 # The popup and the options page
+
+
+# The watcher. What a slip here would make unsafe is held closely, and the bookkeeping only by what comes before what:
+# the harness outside the repo is what proves these behave
+
+
+def top_level_names(name):
+    return set(re.findall(r"^(?:const|let|function|async function) (\w+)", code(name), re.M))
+
+
+def listener(event):
+    """A chrome.tabs listener's whole body, which must start at the top level or a sleeping worker never hears it."""
+    found = re.search(rf"^chrome\.tabs\.{event}\.addListener\(.*?^\}}\);$", code(BACKGROUND), re.S | re.M)
+    assert found, event
+    return found[0]
+
+
+def set_of(name, file):
+    """A top-level `new Set([...])`'s strings."""
+    found = re.search(rf"^const {name} = new Set\(\[(.*?)\]\);$", code(file), re.M)
+    assert found, name
+    return set(re.findall(r'"([\w-]+)"', found[1]))
+
+
+@pytest.mark.parametrize(
+    "word", [".click(", "dispatchEvent", "preventDefault", "stopPropagation", "stopImmediatePropagation", "submit("]
+)
+def test_the_watcher_can_t_press_block_or_delay_anything(word):
+    assert word not in code(WATCH)
+
+
+def test_the_watcher_only_defines_things_as_it_loads_before_page_js():
+    lines = [line for line in code(WATCH).splitlines() if line and not line.startswith((" ", "}", ")"))]
+    assert lines and [line for line in lines if not re.match(r"(?:const|let|function|async function) ", line)] == []
+
+
+@pytest.mark.parametrize("other", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
+def test_no_top_level_name_is_shared_with_another_page_file(other):
+    assert not top_level_names(WATCH) & top_level_names(other)  # they share one scope: a repeat would stop the file
+
+
+def test_page_js_starts_the_watcher_once_after_the_fill_and_it_can_t_report_a_stop():
+    run = page_function("run")
+    assert code(PAGE).count("watch()") == 1
+    assert run.index("finally") < run.index("watch()") < run.rindex(".catch(")
+
+
+def test_only_a_trusted_click_counts_and_that_is_looked_at_first():
+    assert [name for name in files("*.js") if "isTrusted" in code(name)] == [WATCH]
+    assert "if (!event.isTrusted) return;" in page_function("heard", WATCH).splitlines()[1]
+
+
+def test_one_click_listener_in_the_capture_phase():
+    assert [name for name in page_side() if 'addEventListener("click"' in code(name)] == [WATCH]
+    assert code(WATCH).count('addEventListener("click"') == 1
+    assert 'document.addEventListener("click", heard, true);' in page_function("watch", WATCH)
+
+
+def test_a_press_is_read_at_once_and_a_lost_message_is_quiet():
+    heard = page_function("heard", WATCH)
+    assert "await" not in heard and "async" not in heard
+    assert heard.index('state: "clicked"') < heard.index(".catch(")
+
+
+def test_a_press_must_be_on_a_control_you_can_see_that_holds_no_box():
+    heard = page_function("heard", WATCH)
+    trusted, sent = heard.index("event.isTrusted"), heard.index('state: "clicked"')
+    assert trusted < heard.index("checkVisibility(SEEN)") < sent and trusted < heard.index("HOLDS_A_BOX") < sent
+
+
+def test_a_press_is_only_a_board_s_named_submit_or_a_real_submit_of_the_form():
+    heard = page_function("heard", WATCH)
+    assert "isSubmit" in heard and heard.index("formRoot?.contains(") < heard.index('state: "clicked"')
+    submit = page_function("isSubmit", WATCH)
+    assert submit.index("BOARD.submit") < submit.index("getAttribute")
+    assert 'getAttribute("type")' in submit  # `.type` says submit for a <button> that never said so
+    assert "node.form === formRoot" in submit
+
+
+def test_no_board_names_its_submit_until_a_real_form_has_shown_it():
+    assert [name for name in files("boards/*.js") if re.search(r"\bsubmit\b", code(name))] == []
+
+
+def test_a_read_goes_through_boxes_and_skips_what_it_must():
+    read = page_function("readForm", WATCH)
+    assert "boxes(root)" in read and "list.some(" in read  # one such box in a group is enough
+    assert read.index("isSecret(box)") < read.index("continue") and read.index("DROPDOWN") < read.index("continue")
+    assert read.index("continue") < read.index("shownHere")
+    assert set_of("SECRET_BOXES", WATCH) == {"current-password", "new-password", "one-time-code"}
+    secret = re.search(r"^const isSecret = .*?;$", code(WATCH), re.S | re.M)[0]
+    assert ".split(" in secret and "SECRET_QUESTION" in secret  # autocomplete can hold a section as well
+    assert 'getAttribute("autocomplete")' in secret  # the property reads empty for words it doesn't know
+    question = re.search(r"^const SECRET_QUESTION = /(.*)/i;$", code(WATCH), re.M)[1]
+    assert [bool(re.search(question, text, re.I)) for text in ("Password", "Passcode", "PIN", "Pinterest")] == [
+        True, True, True, False,
+    ]  # fmt: skip
+    assert "shownHere" not in code(PAGE) and "innerText" not in code(WATCH)  # the fill's own read-back stays as it is
+
+
+def test_a_select_on_its_placeholder_is_empty_and_a_ticked_box_still_shows():
+    here = page_function("shownHere", WATCH)
+    assert '"SELECT"' in here and "box.checked" in here and "box.value" in here
+
+
+def test_one_watcher_at_a_time_and_only_on_the_page_it_landed_on():
+    watch = page_function("watch", WATCH)
+    assert watch.index("if (watching) return;") < watch.index("watching = true;") < watch.index("await")
+    assert watch.index("landedAt()") < watch.index('ask({ do: "watch" })')
+    assert "finally" in watch and watch.index("await quiet();") < watch.index("rootOf(anchored())")
+
+
+def test_a_look_goes_only_from_where_the_page_landed_and_a_stop_ends_it():
+    look = page_function("look", WATCH)
+    assert look.index("landedAt()") < look.index("readForm(formRoot)") < look.index('ask({ do: "read"')
+    assert "reply?.stop" in look
+
+
+def test_the_background_starts_a_watcher_only_for_a_fill_that_is_out():
+    watch = function("watch")
+    assert "||" not in watch and watch.index("ticket") < watch.index("&&") < watch.index("answered")
+    assert "await onForm(tabId, record)" in watch and "call(" not in watch
+
+
+def test_a_read_is_checked_before_it_is_sent():
+    read = function("sendRead")
+    first = read.index("call(")
+    for check in ("record?.ticket", "READ_STATES.has(state)", "Array.isArray(values)", "sender.url === record.address",
+                  "await onForm(tabId, record)"):  # fmt: skip
+        assert read.index(check) < first, check
+    assert set_of("READ_STATES", BACKGROUND) == {"reread", "clicked"}
+
+
+def test_what_is_saved_after_a_read_is_the_record_as_it_is_then():
+    read = function("sendRead")
+    after = read[read.index("call(") :]
+    assert after.index("await recordOf(tabId)") < after.index("keep(")
+    assert "...latest" in after and "...record" not in after
+
+
+def test_a_refused_key_ends_the_fill_as_a_lost_ticket_does():
+    assert "NO_FILL.has(answer.body.error)" in function("sendRead")
+    assert set_of("NO_FILL", BACKGROUND) == {"no-ticket", "no-key", "wrong-plugin"}
+
+
+def test_a_press_on_its_way_is_held_from_before_anything_is_awaited():
+    read = function("read")
+    assert "await" not in read and "async" not in read
+    assert read.index("sendRead(") < read.index("pressing.set(")
+    assert read.index('"clicked"') < read.index("pressing.set(")  # a reread holds nothing up
+    assert read.index(".catch(") < read.index("pressing.set(")  # a failed press can't stop `gone`
+    assert "pressing.delete(" in read
+
+
+@pytest.mark.parametrize(("event", "after"), [("onRemoved", "leftForm(tabId)"), ("onUpdated", "recordOf(tabId)")])
+def test_a_leaving_tab_waits_for_a_press_on_its_way_first(event, after):
+    body = listener(event)
+    assert body.index("await pressing.get(tabId);") < body.index(after)
+
+
+def test_a_tab_that_left_says_gone_with_nothing_read():
+    assert 'state: "gone", values: [], left: []' in function("leftForm")
+
+
+def test_closing_the_tab_says_so_and_forgets_its_record():
+    removed = listener("onRemoved")
+    assert removed.index("leftForm(tabId)") < removed.index("chrome.storage.session.remove(")
+
+
+def test_a_reload_isn_t_leaving():
+    updated = listener("onUpdated")
+    assert updated.index("tab.url === record.address") < updated.index("leftForm(tabId)")
+
+
+def test_leaving_never_wipes_a_ticket_the_tab_took_meanwhile():
+    updated = listener("onUpdated")
+    assert updated.index("await leftForm(tabId);") < updated.rindex("await recordOf(tabId)") < updated.index("keep(")
+    assert "latest?.ticket === record.ticket" in updated
+
+
+# The thank-you address
+
+
+def test_no_board_file_of_the_plugin_holds_a_sign():
+    assert [name for name in files("boards/*.js") if "thanks" in code(name).lower()] == []
+
+
+def test_the_only_sign_is_the_one_the_app_sent():
+    assert "answer.body.thanks" in function("open") and code(BACKGROUND).count("answer.body.thanks") == 1
+    assert "thanks" not in code(WATCH).lower() and "thanks" not in code(PAGE).lower()
+    assert "thanked" not in handlers("PAGE")  # nothing a page says can start this
+
+
+def test_a_sign_is_said_with_nothing_read_and_believed_only_if_recorded():
+    said = function("saidThanks")
+    assert 'state: "thanked", values: [], left: []' in said
+    assert said.index("answer.body.recorded") < said.index('flag(tabId, "OK")')
+    assert said.index("await recordOf(tabId);") < said.index("recorded: true")
+
+
+def test_a_press_is_timed_only_when_the_app_took_it():
+    read = function("sendRead")
+    assert read.index("answer.status !== 200") < read.index("clickedAt")
+
+
+def test_an_address_sign_needs_a_press_and_the_same_origin_and_comes_before_gone():
+    at = function("atThanksPage")
+    assert "record.thanks" in at and "record.clickedAt" in at
+    assert "originOf(tab.url) === originOf(record.address)" in at and ".endsWith(" in at
+    updated = listener("onUpdated")
+    assert updated.index("atThanksPage(record, tab)") < updated.index("saidThanks(") < updated.index("leftForm(tabId)")
+
+
+# Reading a form
+
+
+def test_a_ticket_may_only_be_for_a_fill_or_a_read():
+    assert set_of("MODES", BACKGROUND) == {"fill", "read"}
+    assert "MODES.has(answer.body.mode)" in function("open")
+
+
+def test_a_read_form_ends_the_ticket_here_and_sends_back_no_pack():
+    form = function("form")
+    branch = form[form.index('reason === "read"') : form.index("answer.status === 400")]
+    assert (
+        'flag(tabId, "OK")' in branch and 'stop: "known"' in branch and "pack" not in branch and "ticket" not in branch
+    )
+
+
+def test_page_js_doesn_t_know_a_read_from_a_fill():
+    assert "mode" not in code(PAGE) and '"read"' not in page_function("fillTheForm")
+
+
+def test_the_popup_says_a_read_in_plain_words():
+    assert '"read"' in function("status") and '"reading"' in function("status")
+    assert "Reading this form…" in code(POPUP)
+    assert "The form was read. Go back to the job's box and reload it." in code(POPUP)
+
+
+# The guide
+
+
+def guide():
+    return " ".join((PLUGIN.parent / "docs" / "submitting.md").read_text("utf-8").split())
+
+
+def test_the_guide_opens_with_what_to_read_before_a_first_fill():
+    text = guide()
+    opening, _, rest = text.partition("## Read this before your first fill")
+    first, _, _ = rest.partition("## ")
+    assert rest and "##" not in opening
+    for number, words in enumerate(
+        (
+            "Fill only jobs you would apply to",
+            "close other tabs on that same site",
+            "Load a copy of the plugin",
+            "a Chrome profile that holds only this plugin",
+            "The key sits unencrypted",
+            "Fixes don't arrive by themselves",
+        ),
+        start=1,
+    ):
+        assert f"{number}. **" in first and words in first
+
+
+@pytest.mark.parametrize("word", ["Fill in browser", ".claude", "Claude", " AI "])
+def test_the_guide_is_for_the_public(word):
+    assert word not in guide()
+
+
+def test_the_guide_says_what_a_page_can_do():
+    text = guide()
+    assert "a script on the page can change them: read them before you fill" in text
+    assert "each answer waits for you to press Use" in text
+    assert "It looks sent. If the site took it, press I submitted it." in text
+    assert "a page can also make a click of yours count as that press" in text
+    assert "a password, passcode or PIN" in text
+    assert "On Ashby nothing is noticed yet" in text and "Save draft" in text
+    assert "the saved form stays" in text
+    assert "Use works for a file too" in text
+    assert "While it watches the form, it never reads a password box" in text
+    assert "Reload this page to see how it went" in text
+    assert "if its name differs" in text
+
+
+def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on():
+    text = " ".join((PLUGIN.parent / "docs" / "adding-a-board-type.md").read_text("utf-8").split())
+    assert "Before any site is switched on" in text
+    for words in ("Take the automatic write away", "refuse `thanked` on toolbar tickets",
+                  "looks like the site's thank-you", "a value with a line break"):  # fmt: skip
+        assert words in text
+
+
+def test_a_read_of_too_few_questions_says_so():
+    assert "This read found too few of the form's questions, so the saved form stays." in code(POPUP)
+    assert '["too-few", ' in code(POPUP)
+
+
+def test_a_press_s_words_go_wherever_a_ticket_goes():
+    assert "looks" in function("noTicket")
+    for found in (function("sendRead"), function("fill"), listener("onUpdated")):
+        assert "noTicket(" in found
+
+
+@pytest.mark.parametrize("name", ["form", "done"])
+def test_a_save_after_a_call_looks_at_the_record_again(name):
+    found = function(name)
+    assert found.index('call("') < found.rindex("await recordOf(tabId);")
+
+
+def test_the_popup_says_it_looks_sent_and_that_a_read_was_lost():
+    popup = code(POPUP)
+    assert "It looks sent" not in popup and "You pressed Submit here: say what happened in the job's box." in popup
+    assert "The latest read of this form couldn't be saved." in popup and "last good one" not in popup
+    assert "Check the form before you press Submit yourself." in popup
+    assert "The site showed its thank-you page after your press of Submit, so this was recorded." in popup
 
 
 def test_the_popup_says_where_a_fill_may_have_gone_and_what_filling_shares():

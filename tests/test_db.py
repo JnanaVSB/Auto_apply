@@ -989,6 +989,48 @@ def test_version_24_adds_two_columns_to_fills_and_changes_nothing_else(tmp_path,
             assert conn.execute("SELECT filled, files FROM fills").fetchall() == [("[]", "[]")]
 
 
+def test_version_25_adds_six_columns_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    changed = ("fills", "submissions")
+    with monkeypatch.context() as version_24:
+        version_24.setattr(db, "UPGRADES", db.UPGRADES[:24])
+        version_24.setattr(db, "SCHEMA_VERSION", 24)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+                conn.execute("INSERT INTO fills (job_id, address, started_on, toolbar, state) "
+                             "VALUES (1, 'x', 'then', 0, 'sent')")  # fmt: skip
+                conn.execute("INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files) "
+                             "VALUES (1, '2026-11-05', 'then', 'by hand', 'x', '[]', '[]')")  # fmt: skip
+            before = _everything(conn)
+            old = {name: [row[1] for row in conn.execute(f"PRAGMA table_info({name})")] for name in changed}
+    with monkeypatch.context() as version_25:
+        version_25.setattr(db, "UPGRADES", db.UPGRADES[:25])
+        version_25.setattr(db, "SCHEMA_VERSION", 25)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 25
+            found, rows = _everything(conn)
+            assert [row for row in found if row[1] not in changed] == [
+                row for row in before[0] if row[1] not in changed
+            ]
+            assert {name: rows[name] for name in rows if name not in changed} == {
+                name: before[1][name] for name in before[1] if name not in changed
+            }
+            fills = [row[1] for row in conn.execute("PRAGMA table_info(fills)")]
+            submissions = [row[1] for row in conn.execute("PRAGMA table_info(submissions)")]
+            assert fills == [*old["fills"], "taken_on", "checked_on", "values_read", "clicked_on", "pdfs"]
+            assert submissions == [*old["submissions"], "checked_on"]
+            assert rows["fills"] == [
+                (*before[1]["fills"][0], None, None, None, None, None)
+            ]  # an old row keeps all it had
+            assert rows["submissions"] == [(*before[1]["submissions"][0], None)]
+            with conn:
+                conn.execute("UPDATE fills SET values_read = '{}'")
+        with closing(db.connect(path)) as conn:  # runs once: opening again changes nothing
+            assert conn.execute("SELECT values_read FROM fills").fetchall() == [("{}",)]
+
+
 def test_version_20_adds_the_export_tables_and_changes_nothing_else(tmp_path, monkeypatch):
     path = tmp_path / "upgraded"
     with monkeypatch.context() as version_19:

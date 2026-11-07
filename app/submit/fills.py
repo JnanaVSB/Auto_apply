@@ -1,31 +1,52 @@
 """A fill (Phase 7): one press of Open and fill or the plugin's toolbar. Here are the form's address, the rules for a
 fill, the `fills` row that counts it (what the daily cap and the pause read), its ticket and the one-time pass a browser
-needs to start. Tickets live in memory: stopping the dashboard ends them all, and the rows stay."""
+needs to start. Tickets live in memory: stopping the dashboard ends them all, and the rows stay. fill_words.py says
+the rows in plain words."""
 
 import hashlib
 import json
 import math
+import re
 import secrets
 import stat
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import sqlcipher3
 
 from app.collect import now
 from app.config import Config
+from app.council import runs
+from app.resume import CONTROL
 from app.sources import closed_site, is_simplify_site, posting_of
 from app.sources.boards import BOARDS
-from app.submit import MAX_FIELDS, ashby, compare, greenhouse, lever, preview, record
+from app.submit import MAX_FIELDS, Form, ashby, compare, greenhouse, lever, load, preview, record, save
+from app.submit.fill_words import (
+    BROWSER_REMOVED,
+    CHANGED_FILE,
+    GONE,
+    LEFT,
+    LOGGED_OUT,
+    NOT_SENT,
+    NOTHING_TO_FILL,
+    REPLACED,
+    SAME_FILE,
+    SUBMITTED,
+    THANKED,
+    TOO_FEW,
+    TOO_MANY_FIELDS,
+    UNEXPECTED_PAGE,
+)
 
 SITES = {"greenhouse": greenhouse, "lever": lever, "ashby": ashby}
 UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
-SIGN_DAYS = 7  # how far back the first page counts toolbar fills
+THANKS_SECONDS = 2 * 60  # how long after your press of Submit a thank-you page counts
 MAX_PDF = 10 * 1024 * 1024  # bytes
+SECRET_QUESTION = re.compile(r"password|passcode|\bpin\b", re.I)  # the same as plugin/watch.js
 PDF_NAMES = {"resume": "Resume.pdf", "cover_letter": "Cover-letter.pdf"}  # by slot: no version, and no person's name
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
@@ -40,85 +61,20 @@ NEW = """INSERT INTO fills (job_id, address, started_on, toolbar, browser, state
     VALUES (?, ?, ?, ?, ?, 'waiting')"""
 # started_on stays, so the pause doesn't move; a later button press never hides that a toolbar pressed, or which browser
 REUSE = "UPDATE fills SET toolbar = max(toolbar, ?), browser = coalesce(?, browser) WHERE id = ?"
-STARTED = "UPDATE fills SET state = 'started', browser = ? WHERE id = ?"
-# A row that had its answers stays `sent` or `filled`, whatever ended it
-ENDED = "UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ? WHERE id = ?"
+STARTED = "UPDATE fills SET state = 'started', browser = ?, taken_on = ? WHERE id = ?"
+# A row that had its answers stays `sent` or `filled`, whatever ended it. Its read and the read's time go, unless the
+# tab just left: that is how a real Submit ends, and "I submitted it" comes after
+ENDED = """UPDATE fills SET state = iif(state IN ('sent', 'filled'), state, 'ended'), stop_kind = ?1,
+    values_read = iif(?1 = 'gone', values_read, NULL), checked_on = iif(?1 = 'gone', checked_on, NULL) WHERE id = ?2"""
 ANSWERED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ? WHERE id = ?"
 REPORTED = "UPDATE fills SET state = ?, stop_kind = ?, changes = ?, filled = ? WHERE id = ?"
-HANDED = "UPDATE fills SET files = ? WHERE id = ?"
-LATEST = """SELECT started_on, toolbar, browser, state, stop_kind, changes, filled, files FROM fills WHERE job_id = ?
-    ORDER BY id DESC LIMIT 1"""
-TOOLBAR_FILLS = "SELECT count(*) FROM fills WHERE toolbar = 1 AND started_on >= ?"
-ALL_FILLS = "SELECT count(*) FROM fills JOIN jobs ON jobs.id = fills.job_id"
-RECENT = """SELECT fills.started_on, fills.toolbar, fills.browser, fills.state, fills.stop_kind, fills.changes,
-    fills.filled, fills.files, jobs.id, jobs.title, jobs.company FROM fills JOIN jobs ON jobs.id = fills.job_id
-    ORDER BY fills.id DESC LIMIT ?"""
-UNEXPECTED_PAGE, TOO_MANY_FIELDS, NOTHING_TO_FILL = "unexpected-page", "too-many-fields", "nothing-to-fill"
-BOT_CHECK, LIMIT, CANT_SET = "bot-check", "limit", "cant-set"
-BROWSER_REMOVED, REPLACED, SUBMITTED, LOGGED_OUT = "browser-removed", "replaced", "submitted", "logged-out"
-HAPPENED = {  # a row's state and stop kind, as the job's box and Settings say them
-    ("waiting", None): "no browser has opened it yet",
-    ("started", None): "opened in a browser",
-    ("sent", None): "your answers went to the browser",
-    ("sent", BROWSER_REMOVED): "your answers went to the browser, then it was removed",
-    ("sent", REPLACED): "your answers went to the browser, then a newer press ended the fill",
-    ("sent", SUBMITTED): "your answers went to the browser, then you pressed I submitted it",
-    ("sent", BOT_CHECK): (
-        "your answers went to the browser, then the fill stopped: the site wants to check you are a person. Finish it "
-        "in the open tab, then check the form."
-    ),
-    ("sent", LIMIT): (
-        "your answers went to the browser, then the fill stopped: the site says you've reached its limit on "
-        "applications. Check the open tab."
-    ),
-    ("sent", UNEXPECTED_PAGE): (
-        "your answers went to the browser, then the fill stopped: the page changed to something else. Check the open "
-        "tab and fill in the rest yourself."
-    ),
-    ("sent", CANT_SET): (
-        "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
-        "it in yourself in the open tab."
-    ),
-    ("filled", None): "the plugin filled what it could. Check the form in the open tab, then press Submit yourself.",
-    ("filled", BROWSER_REMOVED): "the plugin filled what it could, then its browser was removed",
-    ("filled", REPLACED): "the plugin filled what it could, then a newer press ended the fill",
-    ("filled", SUBMITTED): "the plugin filled what it could, then you pressed I submitted it",
-    ("stopped", BOT_CHECK): (
-        "stopped: the site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: "
-        "the plugin stops wherever this check shows."
-    ),
-    ("stopped", LIMIT): (
-        "stopped: the site says you've reached its limit on applications, so nothing was filled. Try this job again "
-        "later."
-    ),
-    ("stopped", CANT_SET): (
-        "stopped: the form wouldn't let the plugin set any box. Fill it in yourself in the open tab."
-    ),
-    ("stopped", UNEXPECTED_PAGE): (
-        "stopped: the page didn't look like this job's form, so nothing was filled. Check the tab, then press Open and "
-        "fill again."
-    ),
-    ("stopped", TOO_MANY_FIELDS): (
-        "stopped: the page had more boxes than a form has, so nothing was filled. Check the tab, then press Open and "
-        "fill again."
-    ),
-    ("stopped", NOTHING_TO_FILL): "nothing went to the browser: none of your answers could go on this form.",
-    ("ended", BROWSER_REMOVED): "ended when its browser was removed",
-    ("ended", REPLACED): "ended by a newer press",
-    ("ended", SUBMITTED): "ended when you pressed I submitted it",
-    ("ended", LOGGED_OUT): "ended when you logged out all devices",
-}
-LEFT = {  # why the plugin left a line, as the job's box says it
-    "no-box": "the plugin couldn't find this box",
-    "custom": "this drop-down is yours to pick",
-    "place": "pick this place from the site's list yourself",
-    "no-choice": "the plugin couldn't tell which choice is yours",
-    "cant-set": "the form wouldn't let the plugin set this",
-    "no-file": "the PDF couldn't be fetched",
-    "file-refused": "the box doesn't show the PDF: check it",
-    "didnt-stick": "the form shows something else here: check it",
-    "not-reached": "the fill stopped before this one",
-}
+HANDED = "UPDATE fills SET files = ?, pdfs = ? WHERE id = ?"
+READ = "UPDATE fills SET values_read = ?, checked_on = ? WHERE id = ?"
+CLICKED = "UPDATE fills SET clicked_on = ? WHERE id = ?"
+ALL_WIPED = "UPDATE fills SET values_read = NULL, checked_on = NULL"
+# Only the job's newest row: a newer press that is still waiting is left alone
+UNSENT = """UPDATE fills SET stop_kind = ?, values_read = NULL, checked_on = NULL WHERE state IN ('sent', 'filled')
+    AND id = (SELECT max(id) FROM fills WHERE job_id = ?)"""
 
 
 def form_address(job: dict) -> str | None:
@@ -174,6 +130,17 @@ def why_not(conn: sqlcipher3.Connection, job: dict, found: preview.Preview | Non
     return None
 
 
+def why_not_read(conn: sqlcipher3.Connection, job: dict) -> str | None:
+    """None if the plugin can read the job's form now, else why not: a plain sentence, or "" where the box shows no
+    button and says nothing new. Only a form the app can't read itself is read this way."""
+    address = form_address(job)
+    if address is None or posting_of(address)[0] != "ashby" or record.recorded(conn, job["id"]):
+        return ""
+    if runs.last_done(conn, job["id"]) is None:
+        return ""
+    return None if conn.execute(CONNECTED).fetchone() else CONNECT_FIRST
+
+
 class BadForm(Exception):  # noqa: N818 (a refusal)
     """The list a browser sent can't be read."""
 
@@ -184,7 +151,7 @@ class Ticket:
     job: int
     address: str  # the exact address a browser must ask from
     site: str
-    fill: int  # its row in `fills`
+    fill: int | None  # its row in `fills`; a read has none, so the row updates match nothing
     browser: int | None  # the paired browser; None for a button press until one takes it
     ends: float
     taken: bool = False
@@ -192,8 +159,13 @@ class Ticket:
     changes: list[dict] = field(default_factory=list)  # all the compare said, uncut, so a report's count stays true
     questions: dict[str, str] = field(default_factory=dict)  # each key in the pack, with the app's own saved label
     reported: bool = False  # the browser has said how it went: it says so once
-    files: dict[str, tuple[Path, str]] = field(default_factory=dict)  # each PDF the pack named, with its SHA-256 then
+    files: dict[str, tuple[Path, dict]] = field(default_factory=dict)  # each PDF in the pack, with what `pdfs` keeps
     handed: list[str] = field(default_factory=list)  # the slots given out: each goes once
+    known: frozenset[str] = frozenset()  # the keys a read may keep as they are
+    names: dict[str, str] = field(default_factory=dict)  # each file key in the pack, with the name its PDF goes by
+    read: dict = field(default_factory=dict)  # the read held on the row
+    clicked: float | None = None  # when you last pressed the site's Submit
+    mode: str = "fill"  # or "read": the plugin reads the form and fills nothing
 
 
 @dataclass
@@ -222,6 +194,7 @@ class Tickets:
         old, moment, address = self._live().get(job["id"]), now(), form_address(job)
         toolbar, unused = browser_id is not None, _unused(conn, job["id"], moment)
         with conn:
+            conn.execute(record.WIPED, (job["id"],))
             if old and old.taken:
                 conn.execute(ENDED, (REPLACED, old.fill))
             if unused is None:
@@ -235,13 +208,30 @@ class Tickets:
         )  # fmt: skip
         return None
 
+    def make_read(self, conn: sqlcipher3.Connection, job: dict) -> str | None:
+        """A ticket to read the job's form. It has no row, so no cap, pause or trail, but it is a newer press all the
+        same: it ends a running fill and wipes the job's reads. Why not (see why_not_read) if refused, else None."""
+        reason = why_not_read(conn, job)
+        if reason is not None:
+            return reason
+        old, address = self._live().get(job["id"]), form_address(job)
+        with conn:
+            conn.execute(record.WIPED, (job["id"],))
+            if old and old.taken:
+                conn.execute(ENDED, (REPLACED, old.fill))
+        self.tickets[job["id"]] = Ticket(
+            secrets.token_urlsafe(32), job["id"], address, posting_of(address)[0], None, None,
+            self.clock() + UNUSED_SECONDS, mode="read",
+        )  # fmt: skip
+        return None
+
     def take(self, conn: sqlcipher3.Connection, address: str, browser_id: int, name: str) -> Ticket | None:
         """The untaken ticket for exactly this address, once, now this browser's; a toolbar ticket only for its own
         browser. The row is saved first, so a busy database raises and uses nothing up."""
         for ticket in self._live().values():
             if ticket.address == address and not ticket.taken and ticket.browser in (None, browser_id):
                 with conn:
-                    conn.execute(STARTED, (name, ticket.fill))
+                    conn.execute(STARTED, (name, now(), ticket.fill))
                 ticket.browser, ticket.taken, ticket.ends = browser_id, True, self.clock() + RUNNING_SECONDS
                 return ticket
         return None
@@ -264,6 +254,11 @@ class Tickets:
         except ValueError:
             raise BadForm from None
         found = preview.preview(conn, data_dir, ticket.job)
+        ticket.known = frozenset(
+            line.field.key
+            for line in (found.lines if found else ())
+            if line.status != "hidden" and line.field.kind != "file" and not SECRET_QUESTION.search(line.field.label)
+        )
         passed, changes = compare.compare(found.lines if found else (), fields, SITES[ticket.site].DRAWN)
         if not passed:
             self.save_answer(conn, ticket, changes, UNEXPECTED_PAGE)
@@ -274,9 +269,41 @@ class Tickets:
         self.save_answer(conn, ticket, changes, None if answers else NOTHING_TO_FILL)
         labels = {line.field.key: line.field.label for line, _ in passed}
         ticket.questions = {answer["key"]: labels[answer["key"]] for answer in answers}
-        slots = [answer["value"]["slot"] for answer in answers if answer["kind"] == "file"]
-        ticket.files = {slot: (documents[slot][1], record.sha256(documents[slot][1])) for slot in slots}
+        slots = {answer["key"]: answer["value"]["slot"] for answer in answers if answer["kind"] == "file"}
+        ticket.files = {
+            slot: (
+                documents[slot][1],
+                {
+                    "version": runs.last_done(conn, ticket.job, slot)["version"],
+                    "sha256": record.sha256(documents[slot][1]),
+                },
+            )
+            for slot in slots.values()
+        }
+        ticket.names = {key: PDF_NAMES[slot] for key, slot in slots.items()}
         return answers
+
+    def read_form(self, conn: sqlcipher3.Connection, ticket: Ticket, items: list) -> str | None:
+        """Saves the fields a browser says the form shows as the job's form; why not if it can't, and either way that
+        uses the ticket up. BadForm if the list can't be read leaves it. Saved first: a busy database raises and uses
+        nothing up. Saved answers stay, by their keys, unless a symbol changed what they answer; questions that have
+        gone are counted, so the box says so, and with under half left the saved form stays."""
+        if len(items) > MAX_FIELDS:  # none of them is read
+            del self.tickets[ticket.job]
+            return UNEXPECTED_PAGE
+        try:
+            fields = SITES[ticket.site].form(compare.fields_from(items)).fields
+        except ValueError:
+            raise BadForm from None
+        saved = load(conn, ticket.job)
+        had = {field.key: field for field in saved[0].fields if field.kind != "hidden"} if saved else {}
+        still = [field for field in fields if field.key in had]
+        enough = bool(fields) and 2 * len(still) >= len(had)  # a page half drawn never replaces a good form
+        if enough:
+            preview.asked_something_else(conn, ticket.job, had, fields)  # `save` commits this, or rolls it back
+            save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
+        del self.tickets[ticket.job]
+        return None if enough else TOO_FEW
 
     def closed_by_record(self, conn: sqlcipher3.Connection, ticket: Ticket) -> bool:
         """Whether the job has its record, which ends the ticket: a busy database can save "I submitted it" and not end
@@ -321,15 +348,68 @@ class Tickets:
         """Saves that this PDF goes out, before it does: a busy database raises and uses nothing up."""
         handed = [*ticket.handed, slot]
         with conn:
-            conn.execute(HANDED, (_json(handed), ticket.fill))
+            conn.execute(HANDED, (_json(handed), _json({name: ticket.files[name][1] for name in handed}), ticket.fill))
         ticket.handed = handed
 
+    def reread(self, conn: sqlcipher3.Connection, ticket: Ticket, values: dict, clicked: bool) -> None:
+        """What the form holds now, kept only for keys the app knows; of a file box only whether it still shows our PDF,
+        as another file's name may hold a person's. It replaces the held read whole, or not at all: it must have
+        something filled and at least half as many as the held one, so a form reset after Submit is ignored. `clicked`
+        is your press of Submit, which counts even when the read doesn't. Saved first: a busy database raises and
+        changes nothing."""
+        read = {key: _clean(value) for key, value in values.items() if key in ticket.known}
+        read |= {key: _file_verdict(values[key], name) for key, name in ticket.names.items() if key in values}
+        count, held = sum(map(_filled, read.values())), sum(map(_filled, ticket.read.values()))
+        accepted, moment = count >= 1 and 2 * count >= held, now()
+        with conn:
+            if accepted:
+                conn.execute(READ, (_json(read), moment, ticket.fill))
+            if clicked:
+                conn.execute(CLICKED, (moment, ticket.fill))
+        if accepted:
+            ticket.read = read
+        if clicked:
+            ticket.clicked = self.clock()
+
+    def can_thank(self, ticket: Ticket) -> bool:
+        """Whether a thank-you page counts for this ticket: its site is switched on, and you pressed Submit just now."""
+        pressed = ticket.clicked is not None and self.clock() - ticket.clicked <= THANKS_SECONDS
+        return pressed and bool(SITES[ticket.site].DRAWN.thanks)
+
+    def thanked(self, conn: sqlcipher3.Connection, data_dir: Path, ticket: Ticket, job: dict) -> bool:
+        """The site's thank-you page after your press: records it as "I submitted it" would, with today's date, and says
+        if it did. A refused record changes nothing, so the box still says it looks sent."""
+        found = preview.preview(conn, data_dir, ticket.job)
+        try:
+            record.submit(conn, data_dir, job, date.today(), found.lines if found else None)
+        except record.Refused:
+            return False
+        with conn:
+            self._end(conn, [(ticket, THANKED)])
+        return True
+
+    def gone(self, conn: sqlcipher3.Connection, ticket: Ticket) -> None:
+        """The form's tab closed or moved on: the fill ends, its read stays and nothing is recorded."""
+        with conn:
+            self._end(conn, [(ticket, GONE)])
+
+    def not_sent(self, conn: sqlcipher3.Connection, job_id: int) -> None:
+        """I didn't send it: closes the job's newest fill if its answers went, with or without a ticket. Nothing is
+        recorded, and the fill still counts: it went out."""
+        with conn:
+            closed = conn.execute(UNSENT, (NOT_SENT, job_id)).rowcount
+        if closed:
+            self.tickets.pop(job_id, None)
+
     def end_browser(self, conn: sqlcipher3.Connection, browser_id: int) -> None:
-        """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser."""
+        """A removed browser's running and toolbar tickets; a button ticket nobody took stays for another browser. Every
+        read goes, as a row names its browser only in words."""
+        self._wipe_all(conn)
         self._end(conn, [(ticket, BROWSER_REMOVED) for ticket in self._live().values() if ticket.browser == browser_id])
 
     def end_all(self, conn: sqlcipher3.Connection) -> None:
-        """Every ticket, for "Log out all devices"; a button ticket nobody took never had a browser to remove."""
+        """Every ticket and read, for "Log out all devices"; a button ticket nobody took had no browser to remove."""
+        self._wipe_all(conn)
         live = self._live().values()
         self._end(conn, [(ticket, LOGGED_OUT if ticket.browser is None else BROWSER_REMOVED) for ticket in live])
 
@@ -343,6 +423,11 @@ class Tickets:
         for ticket, _ in ended:
             del self.tickets[ticket.job]
 
+    def _wipe_all(self, conn: sqlcipher3.Connection) -> None:
+        conn.execute(ALL_WIPED)
+        for ticket in self.tickets.values():
+            ticket.read = {}
+
     def _live(self) -> dict[int, Ticket]:
         """The tickets still in time; the others are forgotten, and their rows stay as they are."""
         moment = self.clock()
@@ -353,7 +438,7 @@ class Tickets:
 def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
     """The PDF the pack named, byte for byte, so a newer one can't slip in; None if it isn't a plain file in the job's
     own folder, is too big, isn't a PDF or has changed. A link can't lead out, as only real paths are compared."""
-    path, sha256 = ticket.files[slot]
+    path, handed = ticket.files[slot]
     folder = data_dir.resolve() / "documents" / str(ticket.job)
     try:
         real = path.resolve()
@@ -363,46 +448,26 @@ def named_pdf(data_dir: Path, ticket: Ticket, slot: str) -> bytes | None:
         data = real.read_bytes()
     except (OSError, RuntimeError):  # RuntimeError: a link that leads to itself
         return None
-    return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == sha256 else None
+    return data if data.startswith(b"%PDF-") and hashlib.sha256(data).hexdigest() == handed["sha256"] else None
 
 
-def latest(conn: sqlcipher3.Connection, job_id: int) -> dict | None:
-    """The job's newest fill, in plain words; None before its first."""
-    row = conn.execute(LATEST, (job_id,)).fetchone()
-    return _plain(row) if row else None
-
-
-def recent(conn: sqlcipher3.Connection, limit: int = 20) -> list[dict]:
-    """The newest fills of any job, in plain words, with each job's title and company. They outlive their browser."""
-    return [
-        _plain(row[:8]) | {"job": row[8], "title": row[9], "company": row[10]} for row in conn.execute(RECENT, (limit,))
-    ]
-
-
-def total(conn: sqlcipher3.Connection) -> int:
-    """How many fills `recent` could show."""
-    return conn.execute(ALL_FILLS).fetchone()[0]
-
-
-def toolbar_fills(conn: sqlcipher3.Connection) -> int:
-    """The toolbar fills of the last SIGN_DAYS, whatever became of them; one dated later by a moved clock counts."""
-    since = datetime.fromisoformat(now()) - timedelta(days=SIGN_DAYS)
-    return conn.execute(TOOLBAR_FILLS, (since.isoformat(timespec="seconds"),)).fetchone()[0]
-
-
-def _plain(row: tuple) -> dict:
-    started_on, toolbar, browser, state, stop_kind, changes, filled, files = row
-    moment = datetime.fromisoformat(started_on).astimezone()  # the laptop's own clock
-    return {
-        "when": f"{moment.day} {moment:%b %H:%M}", "toolbar": toolbar, "browser": browser,
-        "what": HAPPENED.get((state, stop_kind), state), "changes": json.loads(changes or "[]"),
-        "filled": json.loads(filled or "[]"),
-        "files": ", ".join(slot.replace("_", " ") for slot in json.loads(files or "[]")),
-    }  # fmt: skip
-
-
-def _json(items: list) -> str:
+def _json(items: list | dict) -> str:
     return json.dumps(items, ensure_ascii=False)
+
+
+def _clean(value: str | list[str]) -> str | list[str]:
+    return CONTROL.sub("", value) if isinstance(value, str) else [CONTROL.sub("", text) for text in value]
+
+
+def _file_verdict(value: str | list[str], name: str) -> str:
+    shown = _clean(value)
+    if not _filled(shown):
+        return ""
+    return SAME_FILE if shown == name else CHANGED_FILE
+
+
+def _filled(value: str | list[str]) -> bool:
+    return any(text.strip() for text in ([value] if isinstance(value, str) else value))
 
 
 def _unused(conn: sqlcipher3.Connection, job_id: int, moment: str) -> int | None:

@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 import sqlcipher3
-from helpers import add_job, csrf, log_in, one
+from helpers import add_job, box, csrf, log_in, one
 from test_web_phone import ORIGIN, phone_login
 from test_web_plugin import (
     FIRST_NAME,
@@ -36,7 +36,7 @@ from test_web_plugin import (
 )
 
 from app import config, submit
-from app.submit import Choice, Field, Form, fills, match, preview
+from app.submit import Choice, Field, Form, fill_words, fills, match, preview
 from app.web import actions
 from app.web import submit as form_part
 
@@ -49,7 +49,7 @@ HONEST = (
 )
 NOT_FILLED = "The form opened without filling."
 PRESS_FAILED = "That press couldn't be saved."
-FILLING = "Filling in the new tab…"
+FILLING = form_part.FILLING
 OPEN_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
 RECORD = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
@@ -76,7 +76,10 @@ WORDS = {
     ("sent", "browser-removed"): "your answers went to the browser, then it was removed",
     ("sent", "replaced"): "your answers went to the browser, then a newer press ended the fill",
     ("sent", "submitted"): "your answers went to the browser, then you pressed I submitted it",
-    ("filled", None): "the plugin filled what it could. Check the form in the open tab, then press Submit yourself.",
+    (
+        "filled",
+        None,
+    ): "the plugin filled what it could. Check the form, then press Submit yourself. A reload empties it.",
     ("filled", "browser-removed"): "the plugin filled what it could, then its browser was removed",
     ("filled", "replaced"): "the plugin filled what it could, then a newer press ended the fill",
     ("filled", "submitted"): "the plugin filled what it could, then you pressed I submitted it",
@@ -107,6 +110,13 @@ WORDS = {
         "your answers went to the browser, then the fill stopped: the form wouldn't let the plugin set any box. Fill "
         "it in yourself in the open tab."
     ),
+    ("sent", "gone"): "your answers went to the browser, then the form's tab closed or moved on",
+    ("filled", "gone"): "the plugin filled what it could, then the form's tab closed or moved on",
+    ("ended", "gone"): "ended when the form's tab closed or moved on, before your answers went out",
+    ("sent", "not-sent"): "your answers went to the browser, then you said you didn't send it",
+    ("filled", "not-sent"): "the plugin filled what it could, then you said you didn't send it",
+    ("sent", "thanked"): "your press of Submit was followed by the site's thank-you page, so it was recorded",
+    ("filled", "thanked"): "your press of Submit was followed by the site's thank-you page, so it was recorded",
 }
 ALIKE = "two choices look the same, so pick yours on the form"
 SIGN = '<p>{} in the last 7 days: check {} in <a href="/settings/plugin">Settings → Browser plugin</a></p>'
@@ -123,10 +133,6 @@ def client(client, limits):
 @pytest.fixture
 def paired(conn):
     return pair(conn, plugin=PLUGIN)
-
-
-def box(client, job):
-    return client.get(f"/jobs/{job}/form").text
 
 
 def press(client, job):
@@ -168,6 +174,7 @@ def recent_part(page):
 def test_the_button_is_drawn_as_it_must_be(client, conn, paired):
     job = ready_job(conn)
     page = box(client, job)
+    assert "can&#39;t read yes/no buttons" not in page  # only for a form the page wrote
     assert button(job) in page and HONEST in page
     assert '<p id="fill-status" role="status"></p>' in page
     assert f'<a href="{LINK}" target="_blank" rel="noopener">Open the posting</a>' in page
@@ -521,8 +528,8 @@ def test_log_out_all_blames_a_browser_only_for_a_fill_that_had_one(client, door,
     press(client, nobody)
     client.post(LOG_OUT_ALL, data={"csrf_token": csrf(client)}, follow_redirects=False)
     assert fill_rows(conn) == [(0, "Laptop Chrome", "ended", "browser-removed"), (0, None, "ended", "logged-out")]
-    assert fills.latest(conn, took)["what"] == WORDS["ended", "browser-removed"]
-    assert fills.latest(conn, nobody)["what"] == WORDS["ended", "logged-out"]
+    assert fill_words.latest(conn, took)["what"] == WORDS["ended", "browser-removed"]
+    assert fill_words.latest(conn, nobody)["what"] == WORDS["ended", "logged-out"]
     log_in(client)
     assert WORDS["ended", "logged-out"] in box(client, nobody)
 
@@ -947,16 +954,16 @@ def test_no_inside_word_reaches_a_page(client, conn, paired):
 def test_the_rows_read_back_in_plain_words(conn):
     with conn:
         job = add_job(conn, "ML Intern", apply_url=LINK)
-    assert fills.latest(conn, job) is None and fills.recent(conn) == []
+    assert fill_words.latest(conn, job) is None and fill_words.recent(conn) == []
     past_fill(conn, job, toolbar=1, browser="Laptop Chrome", state="sent", changes='[{"question": "Q", "what": "W"}]')
-    latest = fills.latest(conn, job)
+    latest = fill_words.latest(conn, job)
     assert latest["what"] == "your answers went to the browser"
     assert latest["changes"] == [{"question": "Q", "what": "W"}] and latest["filled"] == []
     assert (latest["toolbar"], latest["browser"]) == (1, "Laptop Chrome")
-    (recent,) = fills.recent(conn)
+    (recent,) = fill_words.recent(conn)
     assert (recent["job"], recent["title"], recent["company"]) == (job, "ML Intern", "Acme")
     past_fill(conn, job, state="filled", filled='["Q"]')
-    assert fills.latest(conn, job)["filled"] == ["Q"] and fills.recent(conn)[0]["filled"] == ["Q"]
+    assert fill_words.latest(conn, job)["filled"] == ["Q"] and fill_words.recent(conn)[0]["filled"] == ["Q"]
     assert latest["files"] == ""
     past_fill(conn, job, state="sent", files='["cover_letter", "resume"]')
-    assert fills.latest(conn, job)["files"] == fills.recent(conn)[0]["files"] == "cover letter, resume"
+    assert fill_words.latest(conn, job)["files"] == fill_words.recent(conn)[0]["files"] == "cover letter, resume"

@@ -15,6 +15,9 @@ const WORDS = new Map([
   ["moved", "This page has moved since it loaded, so the plugin won't fill it. Reload the tab and check its address."],
   ["reloaded", "This tab was reloaded, so the form may be empty: a reload doesn't fill again. Press Fill to start over."],
   ["filling", "Filling this tab…"],
+  ["reading", "Reading this form…"],
+  ["read", "The form was read. Go back to the job's box and reload it."],
+  ["too-few", "This read found too few of the form's questions, so the saved form stays. Check the tab, then press Read again."],
   ["known", ""],
   ["honest", "Filling shares these answers and your PDF with the site, even before you press Submit. Other plugins in this browser can read them too."],
   ["app-error", "Something went wrong. Try again."],
@@ -23,6 +26,9 @@ const WORDS = new Map([
   ["bot-check", "The site wants to check you are a person. Finish it in the open tab, then fill in the rest yourself: the plugin stops wherever this check shows."],
   ["limit", "The site says you've reached its limit on applications."],
   ["cant-set", "The form wouldn't let the plugin set any box: fill it in yourself."],
+  ["looks-sent", "You pressed Submit here: say what happened in the job's box."],
+  ["unsaved", "The latest read of this form couldn't be saved."],
+  ["recorded", "The site showed its thank-you page after your press of Submit, so this was recorded."],
 ]);
 
 const part = (id) => document.getElementById(id);
@@ -35,10 +41,15 @@ function show(id, text) {
 const words = (kind) => WORDS.get(kind) ?? WORDS.get("app-error");
 const counted = (said) => `Filled ${said.filled}, left ${said.left} for you.`;
 
-function saidWords(said) {
-  if (said.state === "filled") return `${counted(said)} Check the form, then press Submit yourself.`;
+function howItWent(said) {
+  if (said.state === "filled") return `${counted(said)} Check the form before you press Submit yourself.`;
   if (said.state === "stopped") return `${words(said.kind)} ${counted(said)}`;
   return said.problem ? words(said.problem) : "";
+}
+
+function saidWords(said) {
+  const later = [said.recorded ? words("recorded") : said.looks && words("looks-sent"), said.unsaved && words("unsaved")];
+  return [howItWent(said), ...later].filter(Boolean).join(" ");
 }
 
 function draw(answer) {

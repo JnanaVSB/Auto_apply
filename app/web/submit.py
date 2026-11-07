@@ -20,7 +20,7 @@ from app import questionnaire, sources, submit, tracker
 from app.config import ConfigError, load_config
 from app.council import answers, flow, runs
 from app.resume import CONTROL
-from app.submit import Field, FormError, fills, greenhouse, lever, match, preview, record, wordings
+from app.submit import Field, FormError, fill_words, fills, greenhouse, lever, match, preview, record, wordings
 from app.submit.match import MINE, WRITER
 from app.submit.preview import Preview
 from app.web import actions, queries
@@ -28,8 +28,14 @@ from app.web.prepare import BUSY_JOB, NO_WRITER, writer_chosen
 
 READERS = {"greenhouse": (greenhouse, "api"), "lever": (lever, "page")}  # site -> its reader, and where it reads from
 READ_FROM = {"api": "Greenhouse's public job board", "page": "Lever's application page", "browser": "the browser"}
-ASHBY = "Ashby forms are read in the browser: press Fill in browser (coming in the next part)"
+ASHBY = "Ashby forms are read in the browser: press Read the form."
+NOT_SEEN = (
+    "The plugin can't read yes/no buttons or questions that appear after an answer: do those yourself on the form. "
+    "These questions are what the page showed, and a script on the page can change them: read them before you fill."
+)
 NO_RESUME = "The form is read once the resume is prepared"
+MAX_REMEMBERED = 25  # a page writes its own form, so one read of it can't fill More answers
+SOME_REMEMBERED = "Only the first {} of this form's questions were kept in More answers: answer the rest here."
 ALREADY = "Already reading this form"
 TO_REMEMBER = ("text", "single", "multi")  # a required question no rule answers: kept in More answers to answer once
 TYPED = ("text", "location", "long_text", "single", "multi")  # the questions you answer here
@@ -49,8 +55,10 @@ CHANGED_SUGGESTION = "This suggestion changed: look at it again"
 CHANGED_QUESTION = "This question changed: look at it again"
 SAME_DRAFT = "This is the Writer's draft unchanged: only your own changed words close it"
 ON_PHONE = "Filling happens on a computer. Your answers are saved here."
-FILLING = "Filling in the new tab…"
+FILLING = "Filling in the new tab… Reload this page to see how it went."
 NOT_FILLED = "The form opened without filling."
+READING = "Reading in the new tab… Reload this page when it's done."
+NOT_READ = "The form opened without reading it."
 PRESS_FAILED = "That press couldn't be saved."
 
 
@@ -97,26 +105,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         finally:
             state.forms_reading.discard(job_id)
         submit.save(state.conn, job_id, form, read_from, unread=unread)
-        return _part(request, job, note=_remember(request, job))
-
-    def _remember(request: Request, job: dict) -> str | None:
-        """Each required question no rule answers kept in your More answers as "needs answer", so you answer it once
-        for every form; why it could not be (More answers full, or broken saved answers), else None."""
-        conn = request.app.state.conn
-        for line in preview.preview(conn, data_dir, job["id"]).lines:
-            ordinary = wordings.care(line.field, job["company"]) == wordings.ORDINARY
-            if (
-                ordinary
-                and line.decision == "unknown"
-                and not line.note
-                and line.field.required
-                and _answerable(line.field)
-            ):
-                try:
-                    questionnaire.remember(conn, line.field.label, job["company"])
-                except questionnaire.QuestionnaireError as error:
-                    return str(error)
-        return None
+        return _part(request, job, note=remember(state.conn, data_dir, job))
 
     @app.post("/jobs/{job_id:int}/form/answer")
     async def answer(request: Request, job_id: int) -> Response:
@@ -253,11 +242,37 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             request.app.state.tickets.end_job(conn, job_id)
         return _part(request, job, note=note)
 
+    @app.post("/jobs/{job_id:int}/form/unsent")
+    async def unsent(request: Request, job_id: int) -> Response:
+        """I didn't send it: closes the fill and wipes its read. Nothing is recorded and no card moves."""
+        conn, job = request.app.state.conn, _job(request, job_id)
+        if not record.recorded(conn, job_id):
+            try:
+                request.app.state.tickets.not_sent(conn, job_id)
+            except sqlcipher3.OperationalError as error:
+                return _part(request, job, failed=actions.BUSY if "locked" in str(error) else PRESS_FAILED)
+        return _part(request, job)
+
     @app.post("/jobs/{job_id:int}/form/fill")
     async def fill(request: Request, job_id: int) -> Response:
         """Open and fill: the press also opens the form in a new tab, so whatever happens here, it answers with only the
         line beside the button (hx-swap="none" still takes it, where a refusal would show nothing)."""
         return page(request, "form.html", fill_status=_pressed(request, _job(request, job_id)))
+
+    @app.post("/jobs/{job_id:int}/form/read-in-browser")
+    async def read_in_browser(request: Request, job_id: int) -> Response:
+        """Read the form, for a form only a browser can see: like Open and fill, it answers with only the line beside
+        the button."""
+        return page(request, "form.html", fill_status=_read_pressed(request, _job(request, job_id)))
+
+    def _read_pressed(request: Request, job: dict) -> str:
+        if request.state.remote:
+            return ON_PHONE
+        try:
+            reason = request.app.state.tickets.make_read(request.app.state.conn, job)
+        except sqlcipher3.OperationalError as error:
+            reason = actions.BUSY if "locked" in str(error) else PRESS_FAILED
+        return READING if reason is None else f"{reason} {NOT_READ}".strip()
 
     def _pressed(request: Request, job: dict) -> str:
         """What came of a press, once the fill is made or refused."""
@@ -308,6 +323,8 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         )
         suggested = _usable(found)
         fill_address, fill_reason = _fill_button(request, job, found)
+        read_address, read_reason = _read_button(request, job)
+        no_resume = site in (*READERS, "ashby") and not found and not runs.last_done(conn, job_id)
         longs = [  # the long questions: the Writer's to draft, its drafts, or your own answers
             (line, answers.in_words(answers.limit(line.field), ","), flags.get(line.field.key), _over_limit(line))
             for line in lines
@@ -317,8 +334,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
         return page(
             request, "form.html", job_id=job_id, found=found, note=note, failed=failed,
             readable=site in READERS,
-            waiting=NO_RESUME if site in READERS and not found and not runs.last_done(conn, job_id) else None,
-            elsewhere=ASHBY if site == "ashby" else None,
+            waiting=NO_RESUME if no_resume else None,
+            elsewhere=ASHBY if site == "ashby" and not no_resume and fills.form_address(job) else None,
+            not_seen=NOT_SEEN if found and found.read_from == "browser" else None,
             read_on=found and _day(found.read_on), read_from=found and READ_FROM[found.read_from],
             shown=[(line, record.shown(line)) for line in lines if line.status != "hidden"],
             hidden=sum(line.status == "hidden" for line in lines), decisions=match.DECISIONS,
@@ -334,9 +352,10 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             writing=latest is not None and latest["status"] == "writing",
             stopped=latest["problem"] if latest and latest["status"] in runs.FAILED else None, mine=MINE, writer=WRITER,
             max_line=MAX_LINE, max_long=MAX_LONG,
-            fill_address=fill_address, fill_reason=fill_reason, last_fill=fills.latest(conn, job_id),
-            job=job, record=recorded, heading=recorded and record.HEADING[recorded["how"]],
-            may_differ=record.MAY_DIFFER, no_copy=record.NO_COPY,
+            fill_address=fill_address, fill_reason=fill_reason, last_fill=fill_words.latest(conn, job_id),
+            read_address=read_address, read_reason=read_reason,
+            job=job, record=recorded, heading=recorded and record.heading(recorded),
+            caution=recorded and record.caution(recorded), no_copy=record.NO_COPY, another_file=record.ANOTHER_FILE,
             moved_back=back and record.MOVED_BACK.format(_day(back)),
             today=date.today().isoformat(),
             panel=record.standard(questionnaire.load(conn)[0]),
@@ -354,6 +373,38 @@ def _fill_button(request: Request, job: dict, found: Preview | None) -> tuple[st
     if request.state.remote and reason != "":
         return None, ON_PHONE
     return (fills.form_address(job), "") if reason is None else (None, reason)
+
+
+def _read_button(request: Request, job: dict) -> tuple[str | None, str]:
+    """The form's address for Read the form, or what the box says in its place ("": nothing)."""
+    reason = fills.why_not_read(request.app.state.conn, job)
+    if request.state.remote and reason != "":
+        return None, ON_PHONE
+    return (fills.form_address(job), "") if reason is None else (None, reason)
+
+
+def remember(conn: sqlcipher3.Connection, data_dir: Path, job: dict, most: int | None = None) -> str | None:
+    """Each required question no rule answers kept in your More answers as "needs answer", so you answer it once for
+    every form, up to `most`; why it could not be (`most` reached, More answers full, or broken saved answers), else
+    None."""
+    kept = 0
+    for line in preview.preview(conn, data_dir, job["id"]).lines:
+        ordinary = wordings.care(line.field, job["company"]) == wordings.ORDINARY
+        if (
+            ordinary
+            and line.decision == "unknown"
+            and not line.note
+            and line.field.required
+            and _answerable(line.field)
+        ):
+            if kept == most:
+                return SOME_REMEMBERED.format(most)
+            try:
+                questionnaire.remember(conn, line.field.label, job["company"])
+            except questionnaire.QuestionnaireError as error:
+                return str(error)
+            kept += 1
+    return None
 
 
 def _job(request: Request, job_id: int) -> dict:
@@ -397,7 +448,10 @@ def _typed(field: Field, form: dict[str, str]) -> str:
 
 
 def _suggestion(line: match.Line) -> str:
-    """A suggested answer as `_typed` keeps yours: its text, or the labels of its choices, one a line."""
+    """A suggested answer as `_typed` keeps yours: its text, the labels of its choices, one a line, or a file's label,
+    never its path."""
+    if line.field.kind == "file":
+        return line.source
     if isinstance(line.value, str):
         return line.value
     return "\n".join(line.field.labels[value] for value in line.value)

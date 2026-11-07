@@ -23,7 +23,7 @@ from app import collect, config, submit
 from app.config import Config
 from app.documents import pdf
 from app.fetch import Fetcher
-from app.submit import Field, Form, fills, match, preview
+from app.submit import Field, Form, fill_words, fills, match, preview
 from app.web import main, preparer, queries, security
 
 HELLO = "/plugin/hello"
@@ -808,7 +808,7 @@ def test_a_button_ticket_starts_once_for_the_exact_address(door, conn, data_dir,
     ticket = next(iter(held(door).values()))
     assert (response.status_code, response.json()) == (
         200,
-        {"ticket": ticket.id, "mode": "fill", "board": "greenhouse"},
+        {"ticket": ticket.id, "mode": "fill", "board": "greenhouse", "thanks": None},
     )
     assert fill_rows(conn) == [(0, "Laptop Chrome", "started", None)]
     assert refused(call(door, START), 404, "no-ticket")  # a reload finds nothing
@@ -1173,7 +1173,7 @@ BAD_KEYS = (
 BAD_VALUES = (None, 1, True, 1.5, {"a": 1}, [1], [None], ["ok", 1], [["nested"]], "x" * 20_001, ["ok", "x" * 20_001])
 BAD_LISTS = (None, 1, True, "x", {"key": "first_name"}, [1], [None], ["first_name"], [[]])
 BAD_REPORTS = (
-    *({"state": state} for state in (None, 1, True, "", "FILLED", "reread", "gone", "sent", ["filled"], {"a": 1})),
+    *({"state": state} for state in (None, 1, True, "", "FILLED", "sent", ["filled"], {"a": 1})),
     *(
         {"state": "stopped", "kind": kind}
         for kind in (None, 1, True, "", "other", "too-many-fields", "nothing-to-fill", ["limit"], {"a": 1})
@@ -1698,7 +1698,7 @@ def test_the_trail_outlives_a_report_and_remove(owner, door, conn, data_dir, pai
     assert ok(report(door, ticket, values=[VALUE]))
     assert handed_out(conn) == '["resume"]'
     owner.post(REMOVE, data={"id": str(paired), "csrf_token": csrf(owner)})
-    assert handed_out(conn) == '["resume"]' and fills.latest(conn, job)["files"] == "resume"
+    assert handed_out(conn) == '["resume"]' and fill_words.latest(conn, job)["files"] == "resume"
 
 
 def test_a_trail_survives_a_stop_too(door, conn, data_dir, paired):

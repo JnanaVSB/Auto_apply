@@ -149,6 +149,7 @@ EYE = "the wording needs your eye"
 YOURS_TO_WRITE = "this one is yours to write"
 CHANGED = "the question changed since you answered it"
 LOST = "your saved answer is no longer one of the choices"
+FILE_CHANGED = "the file changed since you said yes"
 TWO_FIT = "your saved answer fits more than one of the choices"
 DRAFT_UNDER_RULE = "only your own words close this one: edit it under Long questions"
 NO_AI_WARNING = "This form has a rule about AI: read it, and write the long answers yourself"
@@ -168,6 +169,7 @@ class Line:
     decision: str = ""  # a DECISIONS key when status is "decide"
     note: str = ""  # e.g. "split from your full name"
     askable: bool = False  # optional and left empty only because no rule answers it: you still may
+    file_label: str = ""  # a kept file's version, as `source` says who chose it
 
 
 def match(
@@ -263,9 +265,18 @@ class _Matcher:
             return Line(field, "left", source=MINE, note="you do this in the window")
         if answer == LEFT_EMPTY:
             return Line(field, "empty", source=MINE, note="you chose to leave it empty")
+        if field.kind == "file":
+            return self._kept_file(field, answer)
         texts = list(filter(str.strip, answer.splitlines()))
         lost = field.kind in ("single", "multi") and not all(_named(field, text) for text in texts)
         return self._given(field, answer, MINE, LOST if lost else TWO_FIT, own=True)
+
+    def _kept_file(self, field: Field, label: str) -> Line:
+        """A file you said yes to, by its label: a newer version asks you again."""
+        found = next((found for found in self.files.values() if found and found[0] == label), None)
+        if found:
+            return Line(field, "fill", str(found[1]), MINE, file_label=label)
+        return Line(field, "decide", source=MINE, decision="choose_file", note=FILE_CHANGED)
 
     def _site_box(self, field: Field, _: str) -> Line | None:
         if field.key in ("first_name", "last_name"):
