@@ -518,7 +518,11 @@ def test_a_read_goes_through_boxes_and_skips_what_it_must():
     assert set_of("SECRET_BOXES", WATCH) == {"current-password", "new-password", "one-time-code"}
     secret = re.search(r"^const isSecret = .*?;$", code(WATCH), re.S | re.M)[0]
     assert ".split(" in secret and "SECRET_QUESTION" in secret  # autocomplete can hold a section as well
-    assert "const SECRET_QUESTION = /password/i;" in code(WATCH)
+    assert 'getAttribute("autocomplete")' in secret  # the property reads empty for words it doesn't know
+    question = re.search(r"^const SECRET_QUESTION = /(.*)/i;$", code(WATCH), re.M)[1]
+    assert [bool(re.search(question, text, re.I)) for text in ("Password", "Passcode", "PIN", "Pinterest")] == [
+        True, True, True, False,
+    ]  # fmt: skip
     assert "shownHere" not in code(PAGE) and "innerText" not in code(WATCH)  # the fill's own read-back stays as it is
 
 
@@ -698,12 +702,21 @@ def test_the_guide_says_what_a_page_can_do():
     assert "each answer waits for you to press Use" in text
     assert "It looks sent. If the site took it, press I submitted it." in text
     assert "a page can also make a click of yours count as that press" in text
+    assert "a password, passcode or PIN" in text
     assert "On Ashby nothing is noticed yet" in text and "Save draft" in text
     assert "the saved form stays" in text
     assert "Use works for a file too" in text
     assert "While it watches the form, it never reads a password box" in text
     assert "Reload this page to see how it went" in text
     assert "if its name differs" in text
+
+
+def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on():
+    text = " ".join((PLUGIN.parent / "docs" / "adding-a-board-type.md").read_text("utf-8").split())
+    assert "Before any site is switched on" in text
+    for words in ("Take the automatic write away", "refuse `thanked` on toolbar tickets",
+                  "looks like the site's thank-you", "a value with a line break"):  # fmt: skip
+        assert words in text
 
 
 def test_a_read_of_too_few_questions_says_so():

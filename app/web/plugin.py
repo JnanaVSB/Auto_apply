@@ -17,9 +17,9 @@ from starlette.requests import ClientDisconnect
 
 from app import collect
 from app.config import ConfigError, load_config
-from app.submit import MAX_FIELDS, compare, fill_words, fills, preview
+from app.submit import MAX_FIELDS, add_problem, compare, fill_words, fills, preview
 from app.web import queries
-from app.web.submit import remember
+from app.web.submit import MAX_REMEMBERED, remember
 
 PREFIX = "/plugin/"
 HELLO = PREFIX + "hello"
@@ -282,7 +282,9 @@ def _read(request: Request, ticket: fills.Ticket, items: list, data_dir: Path) -
     stop = request.app.state.tickets.read_form(conn, ticket, items)
     if stop:
         return JSONResponse({"go": False, "reason": stop})
-    remember(conn, data_dir, queries.job(conn, ticket.job))
+    note = remember(conn, data_dir, queries.job(conn, ticket.job), MAX_REMEMBERED)
+    if note:
+        add_problem(conn, ticket.job, note)
     return JSONResponse({"go": False, "reason": "read"})
 
 

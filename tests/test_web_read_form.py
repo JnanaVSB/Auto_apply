@@ -3,6 +3,7 @@
 nothing here opens a site."""
 
 import html
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -571,7 +572,9 @@ def test_the_site_s_own_boxes_still_fill(owner, door, conn, data_dir, paired, pe
     found = lines(conn, data_dir, job)
     assert [line.status for line in found.values()] == ["fill", "fill", "fill"]
     assert preview.preview(conn, data_dir, job).open == 0
-    assert ashby.OWN_KEYS == {"_systemfield_name": "text", "_systemfield_email": "text", "_systemfield_resume": "file"}
+    assert {key: kind for key, (kind, _) in ashby.OWN_KEYS.items()} == {
+        "_systemfield_name": "text", "_systemfield_email": "text", "_systemfield_resume": "file",
+    }  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -646,6 +649,150 @@ def test_a_busy_database_changes_neither_the_form_nor_your_answer(owner, door, c
         load_form(conn, job)[0].fields[1].label == "Are you 18?"
         and lines(conn, data_dir, job)["age"].source == match.MINE
     )
+
+
+@pytest.mark.parametrize(
+    ("key", "label"),
+    [
+        ("_systemfield_name", "Type your full name to sign this binding arbitration agreement and waive your rights"),
+        ("_systemfield_email", "I agree you may sell this address; I certify I used no AI"),
+        ("_systemfield_name", "Name of your employer"),
+    ],
+)  # fmt: skip
+def test_a_site_s_own_box_under_other_words_waits_for_you(
+    owner, door, conn, data_dir, paired, person, limits, key, label
+):
+    job = ashby_job(conn, data_dir)
+    read(
+        owner,
+        door,
+        job,
+        [EMAIL if key != EMAIL["key"] else NAME, {"key": key, "label": label, "kind": "text", "required": True}],
+    )
+    assert lines(conn, data_dir, job)[key].status != "fill"
+    assert why_not(conn, data_dir, job) == fills.ANSWER_FIRST
+
+
+def test_the_resume_key_labelled_as_a_letter_waits_for_your_use(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    paper(conn, data_dir, job, "cover_letter", body=LETTER_PDF)
+    read(owner, door, job, [NAME, RESUME | {"label": "Cover letter"}])
+    assert lines(conn, data_dir, job)["_systemfield_resume"].status == "suggested"
+
+
+@pytest.mark.parametrize(
+    ("key", "kind", "label"),
+    [
+        ("_systemfield_name", "text", "Name*"), ("_systemfield_name", "text", "Full Name"),
+        ("_systemfield_name", "text", "Legal name"), ("_systemfield_name", "text", "Your name"),
+        ("_systemfield_email", "text", "Email"), ("_systemfield_email", "text", "E-mail address"),
+        ("_systemfield_email", "text", "Your email"), ("_systemfield_resume", "file", "Resume"),
+        ("_systemfield_resume", "file", "Resume/CV"), ("_systemfield_resume", "file", "CV"),
+    ],
+)  # fmt: skip
+def test_a_site_s_own_box_in_its_plain_words_is_its_own(key, kind, label):
+    assert ashby.own_box(Field(key, label, kind, True, "standard"))
+
+
+def test_a_question_dropped_and_brought_back_changed_is_your_decision(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, SYMBOL])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[2], "Yes")
+    read(owner, door, job, [NAME, EMAIL])
+    read(owner, door, job, [NAME, EMAIL, SYMBOL | {"label": "Are you < 18?"}])
+    line = lines(conn, data_dir, job)["age"]
+    assert line.source != match.MINE and "the question changed" in line.note
+
+
+def test_a_question_dropped_and_brought_back_the_same_asks_again(owner, door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [NAME, EMAIL, SYMBOL])
+    preview.keep(conn, job, load_form(conn, job)[0].fields[2], "Yes")
+    read(owner, door, job, [NAME, EMAIL])
+    read(owner, door, job, [NAME, EMAIL, SYMBOL])
+    assert lines(conn, data_dir, job)["age"].source != match.MINE
+    assert one(conn, "SELECT answer FROM form_answers WHERE field = 'age'") == ("Yes",)  # the row stays
+
+
+def test_one_read_can_t_flood_more_answers_and_says_so(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    many = [
+        {"key": f"j{number}", "label": f"Made-up question {number}", "kind": "text", "required": True}
+        for number in range(40)
+    ]
+    assert read(owner, door, job, many).json() == READ_STOP
+    assert len(questionnaire.load(conn)[0]["more"]) == form_part.MAX_REMEMBERED
+    words = "Only the first 25 of this form's questions were kept in More answers: answer the rest here."
+    assert load_form(conn, job)[3] == words
+    assert words.replace("'", "&#39;") in box(owner, job)
+
+
+def test_that_note_sits_beside_a_could_not_be_read_line(owner, door, conn, data_dir, paired, person):
+    job = ashby_job(conn, data_dir)
+    many = [
+        {"key": f"j{number}", "label": f"Made-up question {number}", "kind": "text", "required": True}
+        for number in range(40)
+    ]
+    read(owner, door, job, many)
+    read(owner, door, job, many[:38])
+    problem = load_form(conn, job)[3]
+    assert "2 of this form's questions could not be read" in problem and "Only the first 25" in problem
+
+
+def test_a_full_list_says_so_on_the_form(owner, door, conn, data_dir, paired, person, monkeypatch):
+    monkeypatch.setattr(questionnaire, "MAX_PAIRS", 1)
+    questionnaire.remember(conn, "A made-up earlier question", "Acme")
+    job = ashby_job(conn, data_dir)
+    read(owner, door, job, [WHY])
+    assert load_form(conn, job)[3] == questionnaire.FULL
+
+
+def test_a_site_that_reads_itself_has_no_such_limit(conn, data_dir, person):
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=LINK)
+    many = tuple(Field(f"j{number}", f"Made-up question {number}", "text", True, "company") for number in range(30))
+    save_form(conn, job, Form(many), "api")
+    assert form_part.remember(conn, data_dir, queries.job(conn, job)) is None
+    assert len(questionnaire.load(conn)[0]["more"]) == 30
+
+
+@pytest.mark.parametrize("label", ["Passcode", "PIN", "Your pin", "pass code word password"])
+def test_a_question_about_a_secret_is_never_in_a_read(door, conn, data_dir, paired, label):
+    job = ashby_job(conn, data_dir)
+    known = {"key": "secret", "label": label, "kind": "text", "required": False}
+    ready = ready_form(door, conn, data_dir, job, known)
+    assert ok(
+        report(
+            door,
+            ready,
+            "reread",
+            values=[{"key": "_systemfield_name", "value": "Fake"}, {"key": "secret", "value": "x"}],
+        )
+    )
+    assert "secret" not in json.loads(one(conn, "SELECT values_read FROM fills")[0])
+
+
+def test_pinterest_is_no_pin(door, conn, data_dir, paired):
+    job = ashby_job(conn, data_dir)
+    known = {"key": "pins", "label": "Pinterest", "kind": "text", "required": False}
+    ready = ready_form(door, conn, data_dir, job, known)
+    assert ok(report(door, ready, "reread", values=[{"key": "pins", "value": "Fake"}]))
+    assert json.loads(one(conn, "SELECT values_read FROM fills")[0]) == {"pins": "Fake"}
+
+
+def ready_form(door, conn, data_dir, job, extra):
+    """A running fill of a form saved with `extra` beside the name, with its answers out; its ticket."""
+    fields = (
+        Field("_systemfield_name", "Name", "text", True, "standard"),
+        Field(extra["key"], extra["label"], "text", False, "company"),
+    )
+    save_form(conn, job, Form(fields), "browser")
+    preview.keep(conn, job, fields[0], "Fake")
+    preview.keep(conn, job, fields[1], "Fake")
+    press(door, conn, data_dir, job)
+    ticket = call(door, START, ASHBY_FORM).json()["ticket"]
+    assert send(door, ticket, [NAME | {"label": "Name"}, extra]).json()["go"]
+    return ticket
 
 
 def test_your_own_answer_stays_a_fill(owner, door, conn, data_dir, paired, person):

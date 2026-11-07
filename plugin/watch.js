@@ -2,15 +2,18 @@
 // It only listens: it presses, blocks and delays nothing. It loads before page.js, so it uses page.js only when called.
 const REREAD_MS = 5000;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
-const SECRET_QUESTION = /password/i;
+// The same as the app's
+const SECRET_QUESTION = /password|passcode|\bpin\b/i;
 const HOLDS_A_BOX = "input, select, textarea, label";
 
 let watching = false;
 let formRoot;
 let lastKept;
 
+// The attribute, as the property reads empty for words it doesn't know.
 const isSecret = (box) =>
-  box.autocomplete.split(/\s+/).some((word) => SECRET_BOXES.has(word)) || SECRET_QUESTION.test(question(box));
+  (box.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((word) => SECRET_BOXES.has(word)) ||
+  SECRET_QUESTION.test(question(box));
 
 // A select on its placeholder is empty, and a ticked box with no words of its own is still ticked.
 function shownHere(key, list) {

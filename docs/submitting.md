@@ -22,7 +22,8 @@ Submit yourself: the app never sends an application for you.
 - Nothing fills without your yes for this job: Open and fill in the job's box, or Fill in the plugin's popup.
 - It draws no button inside a job's page.
 - **Open the posting** only opens the posting. It never fills.
-- While it watches the form, it never reads a password box, or a box whose question mentions a password.
+- While it watches the form, it never reads a password box, or a box whose question mentions a password, passcode or
+  PIN.
 - Passwords, bot checks and the lines under **Left for you** stay yours.
 
 ## Install
@@ -91,10 +92,10 @@ questions, and nothing of yours goes to the site. This doesn't count as a fill. 
 is open, and use Open and fill. The plugin can't read yes/no buttons, or questions that appear after an answer: do
 those yourself on the form.
 
-These questions are what the page showed, and a script on the page can change them: read them before you fill. So
-apart from your name, e-mail and resume, each answer waits for you to press Use, or Use all. Use works for a file too,
-such as a cover letter: if a newer version is made, you say yes again. If a later read finds fewer questions, the box
-says how many went. If it finds under half of them, the saved form stays, and the popup says so.
+These questions are what the page showed, and a script on the page can change them: read them before you fill. So apart
+from your name, e-mail and resume, under their plain words, each answer waits for you to press Use, or Use all. Use
+works for a file too, such as a cover letter: if a newer version is made, you say yes again. If a later read finds fewer
+questions, the box says how many went. If it finds under half of them, the saved form stays, and the popup says so.
 
 ## After you press Submit
 - **It looks sent. If the site took it, press I submitted it.** The plugin noticed a press of one of the form's own

@@ -21,6 +21,7 @@ SAVE = """INSERT INTO forms (job_id, read_on, read_from, fields, fingerprint, li
         fields = excluded.fields, fingerprint = excluded.fingerprint, limit_note = excluded.limit_note,
         problem = excluded.problem"""
 LOAD = "SELECT fields, limit_note, read_on, read_from, problem FROM forms WHERE job_id = ?"
+ADD_PROBLEM = "UPDATE forms SET problem = trim(coalesce(problem, '') || ' ' || ?) WHERE job_id = ?"
 
 
 class FormError(Exception):
@@ -87,7 +88,9 @@ class Drawn:
     undrawn_starts: tuple[str, ...] = ()  # the same, by how the key begins
     unlisted: frozenset[str] = frozenset()  # drawn keys the read doesn't list
     hidden_choices: bool = False  # a drop-down's choices are drawn only once it is opened
-    thanks: str = ""  # how the address ends once the site took an application, on the same host; "": it records nothing
+    # How the address ends once the site took an application, on the same host; "": it records nothing. Before setting
+    # one, read "Before any site is switched on" in docs/adding-a-board-type.md: all of it must be done first
+    thanks: str = ""
 
 
 def fingerprint(form: Form) -> str:
@@ -102,6 +105,12 @@ def save(conn: sqlcipher3.Connection, job_id: int, form: Form, read_from: str, u
     fields, problem = json.dumps(_fields(form), ensure_ascii=False), UNREAD.format(unread) if unread else None
     with conn:
         conn.execute(SAVE, (job_id, now(), read_from, fields, fingerprint(form), form.limit_note, problem))
+
+
+def add_problem(conn: sqlcipher3.Connection, job_id: int, words: str) -> None:
+    """One more thing the box says about the saved form, beside any it says already."""
+    with conn:
+        conn.execute(ADD_PROBLEM, (words, job_id))
 
 
 def load(conn: sqlcipher3.Connection, job_id: int) -> tuple[Form, str, str, str | None] | None:

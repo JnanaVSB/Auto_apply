@@ -6,6 +6,7 @@ the rows in plain words."""
 import hashlib
 import json
 import math
+import re
 import secrets
 import stat
 import time
@@ -45,6 +46,7 @@ UNUSED_SECONDS = 5 * 60  # a ticket no browser has taken
 RUNNING_SECONDS = 2 * 60 * 60  # a taken ticket
 THANKS_SECONDS = 2 * 60  # how long after your press of Submit a thank-you page counts
 MAX_PDF = 10 * 1024 * 1024  # bytes
+SECRET_QUESTION = re.compile(r"password|passcode|\bpin\b", re.I)  # the same as plugin/watch.js
 PDF_NAMES = {"resume": "Resume.pdf", "cover_letter": "Cover-letter.pdf"}  # by slot: no version, and no person's name
 ANSWER_FIRST = "Answer the decisions above first, then Open and fill appears."
 CONNECT_FIRST = "Connect a browser first: Settings → Browser plugin."
@@ -255,7 +257,7 @@ class Tickets:
         ticket.known = frozenset(
             line.field.key
             for line in (found.lines if found else ())
-            if line.status != "hidden" and line.field.kind != "file" and "password" not in line.field.label.lower()
+            if line.status != "hidden" and line.field.kind != "file" and not SECRET_QUESTION.search(line.field.label)
         )
         passed, changes = compare.compare(found.lines if found else (), fields, SITES[ticket.site].DRAWN)
         if not passed:
@@ -298,7 +300,7 @@ class Tickets:
         still = [field for field in fields if field.key in had]
         enough = bool(fields) and 2 * len(still) >= len(had)  # a page half drawn never replaces a good form
         if enough:
-            preview.asked_something_else(conn, ticket.job, had, still)  # `save` commits this, or rolls it back
+            preview.asked_something_else(conn, ticket.job, had, fields)  # `save` commits this, or rolls it back
             save(conn, ticket.job, Form(fields), "browser", unread=len(had) - len(still))
         del self.tickets[ticket.job]
         return None if enough else TOO_FEW

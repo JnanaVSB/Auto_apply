@@ -34,6 +34,8 @@ NOT_SEEN = (
     "These questions are what the page showed, and a script on the page can change them: read them before you fill."
 )
 NO_RESUME = "The form is read once the resume is prepared"
+MAX_REMEMBERED = 25  # a page writes its own form, so one read of it can't fill More answers
+SOME_REMEMBERED = "Only the first {} of this form's questions were kept in More answers: answer the rest here."
 ALREADY = "Already reading this form"
 TO_REMEMBER = ("text", "single", "multi")  # a required question no rule answers: kept in More answers to answer once
 TYPED = ("text", "location", "long_text", "single", "multi")  # the questions you answer here
@@ -381,9 +383,11 @@ def _read_button(request: Request, job: dict) -> tuple[str | None, str]:
     return (fills.form_address(job), "") if reason is None else (None, reason)
 
 
-def remember(conn: sqlcipher3.Connection, data_dir: Path, job: dict) -> str | None:
+def remember(conn: sqlcipher3.Connection, data_dir: Path, job: dict, most: int | None = None) -> str | None:
     """Each required question no rule answers kept in your More answers as "needs answer", so you answer it once for
-    every form; why it could not be (More answers full, or broken saved answers), else None."""
+    every form, up to `most`; why it could not be (`most` reached, More answers full, or broken saved answers), else
+    None."""
+    kept = 0
     for line in preview.preview(conn, data_dir, job["id"]).lines:
         ordinary = wordings.care(line.field, job["company"]) == wordings.ORDINARY
         if (
@@ -393,10 +397,13 @@ def remember(conn: sqlcipher3.Connection, data_dir: Path, job: dict) -> str | No
             and line.field.required
             and _answerable(line.field)
         ):
+            if kept == most:
+                return SOME_REMEMBERED.format(most)
             try:
                 questionnaire.remember(conn, line.field.label, job["company"])
             except questionnaire.QuestionnaireError as error:
                 return str(error)
+            kept += 1
     return None
 
 

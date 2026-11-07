@@ -77,6 +77,7 @@ def nothing_recorded(conn, job):
 # Shipped off
 
 
+# Before changing this, read "Before any site is switched on" in docs/adding-a-board-type.md: all of it comes first
 @pytest.mark.parametrize("site", [greenhouse, lever, ashby])
 def test_every_site_ships_off(site):
     assert site.DRAWN.thanks == ""
