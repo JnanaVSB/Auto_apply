@@ -10,8 +10,8 @@ import yaml
 from helpers import add_job, csrf, log_in, settings
 from test_web_scoring import CHOSEN, scored
 
+from app import collect, llm, score
 from app import config as settings_file
-from app import llm, score
 from app.config import ScoringSettings
 from app.resume import RESUME_FILE
 from app.scoring import queue
@@ -311,3 +311,81 @@ def test_every_scoring_button_needs_the_anti_forgery_token(client, conn, run, pa
     assert client.post(path.format(job=job), data=data).status_code == 403
     assert run.calls == [] and not app_scorer(client).running
     assert conn.execute("SELECT prepare_anyway, (SELECT count(*) FROM answer_key) FROM jobs").fetchone() == (0, 0)
+
+
+def wait_for(check):
+    for _ in range(500):
+        if check():
+            return
+        time.sleep(0.01)
+    raise AssertionError("never happened")
+
+
+def collection(conn, finished=False):
+    at = datetime.now(UTC).isoformat(timespec="seconds")
+    with conn:
+        if finished:
+            conn.execute("UPDATE collect_runs SET finished_at = ?", (at,))
+        else:
+            conn.execute("INSERT INTO collect_runs (started_at) VALUES (?)", (at,))
+
+
+def test_automatic_scoring_gives_way_to_a_writer_on_the_laptop(client, conn, run, ready):
+    run.release.clear()
+    app_scorer(client).start(automatic=True)
+    with conn:
+        conn.execute(COUNCIL.format("ollama"))
+    wait_until_idle(app_scorer(client))
+    assert app_scorer(client).state == "stopped" and scorer.GAVE_WAY in app_scorer(client).lines
+
+
+def test_scoring_you_started_keeps_the_card_while_a_writer_waits(client, conn, run, ready):
+    state = app_scorer(client)
+    run.release.clear()
+    state.start()
+    with conn:
+        conn.execute(COUNCIL.format("ollama"))
+    time.sleep(0.1)
+    assert state.holding and not state.stopping
+    run.release.set()
+    wait_until_idle(state)
+    assert state.state == "done" and not state.holding
+
+
+def test_scoring_lets_go_of_the_card_in_a_collection_and_takes_it_back_once_the_writer_is_done(
+    client, conn, run, ready, data_dir, monkeypatch
+):
+    monkeypatch.setattr(scorer.queue, "PAUSE_CHECK_SECONDS", 0.01)
+    state = app_scorer(client)
+    run.release.clear()
+    state.start()
+    wait_for(lambda: state.holding)
+    collection(conn)
+    wait_for(lambda: not state.holding)
+    assert scorer.LET_GO in state.lines
+    collect.lock(data_dir, score.SCORE_LOCK, score.BUSY).close()  # free: the Writer's check finds no scoring
+    with conn:
+        conn.execute(COUNCIL.format("ollama"))  # the Writer took the card meanwhile
+    collection(conn, finished=True)
+    time.sleep(0.1)
+    assert not state.holding  # the collection is over, the Writer isn't
+    with conn:
+        conn.execute("DELETE FROM preparations")
+    wait_for(lambda: state.holding)
+    assert scorer.BACK in state.lines
+    run.release.set()
+    wait_until_idle(state)
+    assert state.state == "done"
+
+
+def test_stop_works_while_scoring_has_let_go_of_the_card(client, conn, run, ready, monkeypatch):
+    monkeypatch.setattr(scorer.queue, "PAUSE_CHECK_SECONDS", 0.01)
+    state = app_scorer(client)
+    run.release.clear()
+    state.start()
+    wait_for(lambda: state.holding)
+    collection(conn)
+    wait_for(lambda: not state.holding)
+    client.post("/score/stop", data={"csrf_token": csrf(client)})
+    wait_until_idle(state)
+    assert state.state == "stopped" and not state.holding

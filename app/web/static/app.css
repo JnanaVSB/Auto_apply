@@ -328,6 +328,10 @@ table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
   main table { display: block; overflow-x: auto; }
 }
 .hidden-job, .hidden-job a { color: var(--muted); }
+/* A question over the page ("Scoring is currently running"): above the bottom bar, inside a phone's width */
+dialog.ask { position: fixed; inset-block-start: 30%; z-index: 35; max-inline-size: min(28rem, calc(100vw - 2rem));
+  padding: var(--space-5); border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-raised); }
 /* Status labels: a word in a pill; a problem also gets an "!" mark, so colour is never the only sign. */
 .mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: var(--radius-pill);
   background: var(--sunken); color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em;

@@ -499,4 +499,4 @@ def test_laptop_calls_wait_while_scoring_uses_the_graphics_card(
     with closing(collect.lock(data_dir, score.SCORE_LOCK, score.BUSY)):  # a scoring run
         run(conn, config)
     assert calls == ["gpt-6.1-sol"]  # the cloud Writer went; the laptop reviewers wait
-    assert runner.laptop_work(conn)
+    assert runner.laptop_work(conn) and runner.laptop_work(conn, job) and not runner.laptop_work(conn, job + 1)

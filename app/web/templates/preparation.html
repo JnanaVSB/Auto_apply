@@ -19,6 +19,10 @@
 {% macro tries(found) %}{% if found.failed %} · <a href="/failed-tries?version={{ found.id }}">{{ found.failed }} failed tr{{ "ies" if found.failed > 1 else "y" }}</a>{% endif %}{% endmacro %}
 <section class="found" id="preparation"{% if working %} hx-get="/jobs/{{ job_id }}/preparation" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <h2>Ready to Apply</h2>
+  {% if held == "giving way" %}<p class="muted" role="status">Scoring stops after its current job, then the Writer starts.</p>
+  {% elif held %}<p class="muted" role="status">Waiting: scoring you started is using the graphics card. The Writer starts when it's done.</p>
+  {{ button("write-now", "Stop scoring and write now") }}{% endif %}
+  {% if started %}<span hidden data-notify="The graphics card is free: the Writer has started on {{ started }}."></span>{% endif %}
   {% if writing_answers %}
   <p role="status">The Writer is writing this job's form answers…</p>
   {% elif working %}
@@ -141,3 +145,12 @@
   </form>
   <span class="muted">Skip is the "Not interested" button above.</span>
 </section>
+{# The question after a press, in its own place on the job's page, so the box's refresh every 3 seconds leaves it be #}
+{% if asked is not none %}<div id="scoring-ask" hx-swap-oob="true">{% if asked %}
+<dialog open class="ask" aria-labelledby="scoring-ask-text">
+  <p id="scoring-ask-text">Scoring is currently running. Do you wish to override it with your Writer and council request?</p>
+  <form method="post" action="/jobs/{{ job_id }}/write-now" hx-post="/jobs/{{ job_id }}/write-now" hx-target="#preparation" hx-swap="outerHTML" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <button type="submit" class="primary" data-ask-notify>Yes</button></form>
+  <form method="dialog" class="inline"><button data-ask-notify>No</button></form>
+</dialog>{% endif %}</div>{% endif %}

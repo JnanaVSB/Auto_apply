@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException
 
 from app import questionnaire
 from app.config import ConfigError, load_config
-from app.council import flow, runs
+from app.council import flow, runner, runs
 from app.documents import latex, pdf, tile_sets, uploads, writer_sources
 from app.documents.tiles import PREFIXES, header_text, read_tiles
 from app.resume import CONTROL, ResumeError, from_latex, read_latex
@@ -203,7 +203,7 @@ def add_routes(
                 flow.start(conn, load_config(), job_id, feedback=words, waived=waived, writer_only=alone)
                 request.app.state.preparer.wake()
         if request.state.form.get("back") == "job":  # pressed in the job's box: the box comes back
-            return box(request, job_id, prepare_problem=problem and PROBLEMS[problem])
+            return box(request, job_id, prepare_problem=problem and PROBLEMS[problem], asking=not problem)
         return RedirectResponse(f"/ready?problem={problem}" if problem else "/ready", 303)
 
     @app.post("/ready/{job_id:int}/skip")
@@ -246,7 +246,7 @@ def add_routes(
             flow.start(conn, load_config(), job_id, feedback=words, waived=waived)
             preparer.wake()
             problem = None
-        return box(request, job_id, problem, words if problem else "")
+        return box(request, job_id, problem, words if problem else "", asking=not problem)
 
     @app.post("/jobs/{job_id:int}/cover-letter")
     async def write_letter(request: Request, job_id: int) -> Response:
@@ -264,19 +264,33 @@ def add_routes(
             flow.start(conn, load_config(), job_id, runs.LETTER, waived=waived)
             preparer.wake()
             problem = None
-        return box(request, job_id, letter_problem=problem)
+        return box(request, job_id, letter_problem=problem, asking=not problem)
+
+    @app.post("/jobs/{job_id:int}/write-now")
+    async def write_now(request: Request, job_id: int) -> Response:
+        """Yes to "Scoring is currently running": scoring stops after its current job, then the Writer goes."""
+        if queries.job(request.app.state.conn, queries.known(job_id)) is None:
+            raise HTTPException(404)
+        request.app.state.scorer.cancel()
+        return box(request, job_id, asking=False)
 
     def box(
         request: Request, job_id: int, change_problem: str | None = None, typed: str = "",
-        letter_problem: str | None = None, prepare_problem: str | None = None,
+        letter_problem: str | None = None, prepare_problem: str | None = None, asking: bool | None = None,
     ) -> HTMLResponse:  # fmt: skip
+        """The job's box. `asking`: after a press that queued the Writer, whether to ask about a running scoring run
+        (None: the box's own refresh, which leaves the question where it is)."""
         conn, current = request.app.state.conn, scoring()
         job = queries.job(conn, queries.known(job_id))
         if job is None:
             raise HTTPException(404)
         queued = conn.execute("SELECT prepare_requested_on FROM jobs WHERE id = ?", (job_id,)).fetchone()[0]
         chosen, own = writer_sources.of_job(conn, job_id)
-        preparer = request.app.state.preparer
+        preparer, scorer = request.app.state.preparer, request.app.state.scorer
+        held = scorer.holding and runner.laptop_work(conn, job_id)  # this job's Writer waits for the graphics card
+        giving_way = scorer.automatic or scorer.stopping
+        started = not held and job_id in preparer.waited and runner.laptop_work(conn, job_id)
+        (preparer.waited.add if held else preparer.waited.discard)(job_id)
         free, doubts = not _busy(conn, job_id), _doubts(conn, current, job)
         missing = writer_sources.unconfirmed(writer_sources.offered(conn, current.resume), chosen)
         writer, answers = writer_chosen(), runs.latest(conn, job_id, runs.ANSWERS)
@@ -289,6 +303,8 @@ def add_routes(
             can_letter=free and not missing and writer, missing=missing, doubts=doubts,
             confirm=" ".join(DOUBTS[doubt] for doubt in doubts) + ANYWAY, **drafts.council(conn, job_id),
             writing_answers=answers is not None and answers["status"] == "writing",
+            held=held and ("giving way" if giving_way else "yours"), started=job["title"] if started else None,
+            asked=None if asking is None else bool(asking and held and not giving_way),
         )  # fmt: skip
 
     @app.post("/jobs/{job_id:int}/sources")

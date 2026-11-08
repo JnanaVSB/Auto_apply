@@ -648,3 +648,66 @@ def test_the_top_bar_shows_the_line_up_spend_and_a_pause(client, conn, job, data
     with conn:
         conn.execute("UPDATE steps SET cost = 15, day = ?", (drafts.spending.today(),))
     assert "Paused: today&#39;s limit reached" in client.get("/ready").text
+
+
+ASK = "Scoring is currently running. Do you wish to override it with your Writer and council request?"
+CLOUD_WRITER = '{"service": "anthropic", "model": "claude-opus-5-5"}'
+GIVING_WAY = "Scoring stops after its current job, then the Writer starts."
+
+
+def test_a_press_while_your_scoring_holds_the_graphics_card_asks_whether_to_override(client, conn, job):
+    version(conn, job, status="writing")  # the Writer on this laptop, waiting
+    client.app.state.scorer.holding = True  # a Score now you started
+    text = client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client), "back": "job"}).text
+    assert ASK in text and '<div id="scoring-ask" hx-swap-oob="true">' in text
+    assert "Waiting: scoring you started is using the graphics card." in text and ">Stop scoring and write now<" in text
+    text = client.get(f"/jobs/{job}/preparation").text  # the box's own refresh leaves the question where it is
+    assert "scoring-ask" not in text and "Waiting: scoring you started" in text
+    assert '<div id="scoring-ask"></div>' in client.get(f"/jobs/{job}").text  # its place on the job's page
+
+
+@pytest.mark.parametrize(
+    ("change", "line"),
+    [
+        (lambda state: setattr(state, "automatic", True), GIVING_WAY),
+        (lambda state: setattr(state, "holding", False), None),  # scoring let go of the card, or isn't running
+    ],
+)
+def test_no_question_when_scoring_gives_way_or_holds_nothing(client, conn, job, change, line):
+    version(conn, job, status="writing")
+    state = client.app.state.scorer
+    state.holding = True
+    change(state)
+    text = client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client), "back": "job"}).text
+    assert ASK not in text and "Waiting: scoring you started" not in text
+    assert (line in text) if line else "Scoring stops" not in text
+
+
+def test_a_writer_online_never_waits_for_the_graphics_card(client, conn, job):
+    with conn:
+        conn.execute(VERSION, (job, 1, CLOUD_WRITER, "writing", None, None, "[]"))
+    client.app.state.scorer.holding = True
+    text = client.post(f"/ready/{job}/prepare", data={"csrf_token": csrf(client), "back": "job"}).text
+    assert ASK not in text and "Waiting: scoring" not in text
+
+
+def test_yes_stops_scoring_and_closes_the_question(client, conn, job):
+    version(conn, job, status="writing")
+    state = client.app.state.scorer
+    state.holding = True
+    assert client.post(f"/jobs/{job}/write-now", data={}).status_code == 403  # the anti-forgery token
+    assert not state._stop.is_set()
+    text = client.post(f"/jobs/{job}/write-now", data={"csrf_token": csrf(client)}).text
+    assert state._stop.is_set() and '<div id="scoring-ask" hx-swap-oob="true"></div>' in text
+    assert client.post("/jobs/999/write-now", data={"csrf_token": csrf(client)}).status_code == 404
+
+
+def test_the_box_says_once_when_the_waiting_writer_starts(client, conn, job):
+    version(conn, job, status="writing")
+    state = client.app.state.scorer
+    state.holding = True
+    assert "data-notify" not in client.get(f"/jobs/{job}/preparation").text
+    state.holding = False  # scoring is done, or let go for a collection
+    text = client.get(f"/jobs/{job}/preparation").text
+    assert 'data-notify="The graphics card is free: the Writer has started on Robot Learning Intern."' in text
+    assert "data-notify" not in client.get(f"/jobs/{job}/preparation").text  # only once

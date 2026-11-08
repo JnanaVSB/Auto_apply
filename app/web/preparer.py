@@ -25,6 +25,7 @@ class Preparer:
     notice: str | None = None  # why the last pass could not run; shown in the job's box
     waiting: str | None = None  # why automatic preparation waits
     state: runner.State = field(default_factory=runner.State)  # services paused, until you save keys or settings
+    waited: set[int] = field(default_factory=set)  # jobs whose box showed the wait for the graphics card
     _again: bool = False
     _thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
