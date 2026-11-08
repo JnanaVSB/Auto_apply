@@ -115,6 +115,7 @@ class ScoringSettings(BaseModel):
     minutes_per_day: Annotated[int, Field(ge=1, le=1440, strict=True)] = 120  # automatic AI scoring time per day
     ready_threshold: Annotated[int, Field(ge=0, le=100, strict=True)] = 70  # AI score from which a job is ready
     automatic: bool = True  # while the dashboard is open, score whenever there is something to do
+    cloud_ok: str = ""  # the one address you ticked the box for; set only by the Scoring model page
 
 
 class AIRole(BaseModel):
@@ -123,7 +124,7 @@ class AIRole(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     service: Literal["ollama", "openai-compatible", "anthropic"] = "ollama"
-    model: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")]
+    model: Annotated[str, Field(pattern=r"^@?[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$")]  # @: Cloudflare's, as @cf/...
     address: str = ""  # Ollama and Anthropic have defaults; an OpenAI-compatible service needs its own
     key_name: Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")] | None = None  # the key's name in the keychain
     thinking: Literal["off", "low", "medium", "high", "xhigh"] = "off"  # xhigh: Anthropic and OpenAI only

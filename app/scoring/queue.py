@@ -10,9 +10,10 @@ from typing import NamedTuple
 
 import sqlcipher3
 
-from app import llm
+from app import llm, questionnaire
 from app.config import Config
-from app.resume import Resume
+from app.documents import privacy, tile_sets
+from app.resume import Resume, read_latex
 from app.scoring import stage_a, stage_b
 
 AGE_GROUPS = (7, 30, 90)  # days since posting: 0-7 first, then 8-30, then 31-90; older jobs only when asked for
@@ -113,6 +114,7 @@ def run(
         wait_for_collections(conn, stop, out)
 
     settings, role = config.scoring, config.ai.evaluator
+    shield = None if role.service == "ollama" else _shield(conn, config)
     stage_a.run(conn, checker, setup, settings, pause_or_stop, out, only=job_ids)
     ids = waiting(conn, role.model, setup, resume.fingerprint) if job_ids is None else job_ids
     daily = job_ids is None  # the queue's own run: its time counts towards the scoring time per day
@@ -130,7 +132,7 @@ def run(
             continue
         title, description, keywords, job_skills, shared, meaning = row
         quick = stage_a.Check(json.loads(keywords), job_skills, json.loads(shared), meaning, False, None)
-        result = stage_b.score_job(role, resume.text, title, description, quick, settings, ask=ask)
+        result = stage_b.score_job(role, resume.text, title, description, quick, settings, ask=ask, shield=shield)
         if held and result.failed != held[-1][1].failed:
             _save(conn, held, role.model, resume.fingerprint, daily)
             held = []
@@ -156,6 +158,18 @@ def run(
     if ids:
         out(_summary(tally, settings.ready_threshold, len(ids), used_today(conn), limit))
     return tally
+
+
+def _shield(conn: sqlcipher3.Connection, config: Config) -> privacy.Shield:
+    """Before anything leaves this computer: the gate, then the privacy filter for your whole resume, built as the
+    Writer's is (your Questionnaire's contact details, your resume's header, your confirmed entries' links)."""
+    stage_b.gate(config.ai.evaluator, config.scoring)
+    contact = questionnaire.load(conn)[0]["contact"]
+    tiles = tile_sets.tiles(conn, tile_sets.latest_id(conn))  # none confirmed yet: no entries
+    try:
+        return privacy.shield(contact, [read_latex(config.data_dir)], tiles)
+    except privacy.PrivacyError as error:  # no full name in the Questionnaire
+        raise llm.StopScoring(str(error)) from None
 
 
 def _save(

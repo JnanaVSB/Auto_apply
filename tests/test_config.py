@@ -275,7 +275,8 @@ def test_an_export_folder_that_isnt_text_is_refused(tmp_path, value):
 
 
 def test_scoring_settings_have_defaults_and_limits(tmp_path):
-    assert load_config(write(tmp_path, "data_dir: data\n")).scoring.meaning_threshold == 0.5
+    scoring = load_config(write(tmp_path, "data_dir: data\n")).scoring
+    assert (scoring.meaning_threshold, scoring.cloud_ok) == (0.5, "")  # no address ticked until you tick one
     with pytest.raises(ConfigError, match="scoring.skills_threshold: Input should be less than or equal to 1"):
         load_config(write(tmp_path, "data_dir: data\nscoring:\n  skills_threshold: 1.5\n"))
 
@@ -323,6 +324,19 @@ AI_ROLE = "data_dir: data\nai:\n  evaluator:\n"
 def test_ai_role_settings_are_checked(tmp_path, role, problem):
     with pytest.raises(ConfigError, match=problem):
         load_config(write(tmp_path, AI_ROLE + role))
+
+
+@pytest.mark.parametrize(
+    ("model", "ok"),
+    [("@cf/meta/llama-3.1-8b-instruct", True), ("@@x", False), ("a@b", False), ("@", False), ("@/x", False)],
+)
+def test_a_model_name_may_start_with_one_at_sign_as_cloudflares_do(tmp_path, model, ok):
+    role = f'    service: openai-compatible\n    model: "{model}"\n    address: https://example.org/v1\n'
+    if ok:
+        assert load_config(write(tmp_path, AI_ROLE + role)).ai.evaluator.model == model
+    else:
+        with pytest.raises(ConfigError, match="String should match pattern"):
+            load_config(write(tmp_path, AI_ROLE + role))
 
 
 def test_ai_roles_have_safe_defaults(tmp_path):

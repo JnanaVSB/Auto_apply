@@ -1,20 +1,30 @@
 """The scoring queue with a stand-in meaning model and a stand-in AI, made-up jobs and a fixed date."""
 
+import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from helpers import add_job
 from test_stage_a import RESUME, FakeMeaning
+from test_tiles import RESUME_CLS
 
-from app import llm
-from app.config import Config, ScoringSettings
+from app import llm, questionnaire
+from app.config import AIRole, AISettings, Config, ScoringSettings
+from app.documents import privacy, tile_sets
+from app.documents.tiles import Tile
 from app.resume import Resume
-from app.scoring import queue, stage_a
+from app.scoring import queue, stage_a, stage_b
 
 TODAY = "2026-10-28"
 CONFIG = Config(data_dir="data", scoring=ScoringSettings(minutes_per_day=1))
 SETUP = "setup-fp"
 MY_RESUME = Resume(RESUME, "resume-fp")
+OWN = AIRole(service="openai-compatible", model="my-model", address="https://scoring.example.net/v1")
+CONTACT = {"full_name": "Alex Example", "email": "alex@example.com",
+           "linkedin": "https://www.linkedin.com/in/alex-example-fake"}  # fmt: skip
+PAPER = Tile("pub-0001", "publication", "Publications", {"name": "Fake Paper. 2025.",
+             "link": "https://example.org/fake-paper"})  # fmt: skip
 
 
 @pytest.fixture(autouse=True)
@@ -42,10 +52,26 @@ def posted(days_ago):
     return (datetime.fromisoformat(TODAY) - timedelta(days=days_ago)).date().isoformat()
 
 
-def run(conn, ai, **options):
+class Sent:
+    """A stand-in for your own address: records each text sent, and answers with your name's placeholder."""
+
+    def __init__(self):
+        self.texts = []
+
+    def __call__(self, role, system, user, shape, *, retry):
+        self.texts.append(user)
+        return '{"score": 90, "reasons": ["[my name] fits."]}'
+
+
+def run(conn, ai, config=CONFIG, resume=MY_RESUME, **options):
     lines = []
-    tally = queue.run(conn, CONFIG, checker(), SETUP, MY_RESUME, ask=ai, out=lines.append, **options)
+    tally = queue.run(conn, config, checker(), SETUP, resume, ask=ai, out=lines.append, **options)
     return tally, lines
+
+
+def own_address(data_dir, ticked=OWN.address):
+    (data_dir / "resume.tex").write_text(RESUME_CLS, encoding="utf-8")
+    return Config(data_dir=data_dir, scoring=ScoringSettings(cloud_ok=ticked), ai=AISettings(evaluator=OWN))
 
 
 def test_newest_first_then_strongest_match_and_nothing_older_than_90_days(conn):
@@ -246,3 +272,33 @@ def test_a_failed_new_try_is_not_repeated_until_the_resume_or_ad_changes(conn):
     ai = FakeAI()
     queue.run(conn, CONFIG, checker(), SETUP, new_resume, ask=ai, out=lambda line: None)
     assert ai.titles == ["RL Intern"]  # its ad changed: tried again
+
+
+def test_your_own_address_gets_your_resume_with_your_questionnaire_header_and_entry_details_hidden(conn, tmp_path):
+    add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
+    tile_sets.confirm(conn, [PAPER], "fp")
+    text = "Alex Example, alex@example.com, (555) 010-0199, example.com/alex. Paper: https://example.org/fake-paper"
+    ai = Sent()
+    run(conn, ai, own_address(tmp_path), Resume(text, "resume-fp"))
+    resume = ai.texts[0].split("<job>")[0]
+    assert not re.search("alex|555|example", resume, re.I)  # the header's phone and link, the entry's link
+    assert stage_b.OTHER_LINK not in resume  # each link is one of yours, so each got its own placeholder
+    assert json.loads(conn.execute("SELECT reasons FROM ai_scores").fetchone()[0]) == ["Alex Example fits."]
+
+
+def test_your_own_address_needs_your_full_name_first_and_is_sent_nothing_without_it(conn, tmp_path):
+    add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+    ai = Sent()
+    with pytest.raises(llm.StopScoring, match=re.escape(privacy.NO_NAME)):
+        run(conn, ai, own_address(tmp_path))
+    assert ai.texts == []
+
+
+def test_an_address_you_never_ticked_stops_the_run_before_anything_is_done(conn, tmp_path):
+    add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
+    ai = Sent()
+    with pytest.raises(llm.StopScoring, match="isn't ticked for this address"):
+        run(conn, ai, own_address(tmp_path, ticked=""))
+    assert ai.texts == [] and conn.execute("SELECT count(*) FROM stage_a").fetchone()[0] == 0
