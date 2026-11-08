@@ -49,6 +49,15 @@ class Busy(LLMError):  # noqa: N818
     council waits and sends it again, never at full price."""
 
 
+class Limited(Busy):  # noqa: N818
+    """Your own address says too many requests (status 429): not charged. `wait` is the seconds it asked for
+    (Retry-After), else None; scoring's queue decides between waiting and stopping for the day."""
+
+    def __init__(self, message: str, wait: float | None = None) -> None:
+        super().__init__(message)
+        self.wait = wait
+
+
 class Expired(LLMError):  # noqa: N818
     """Anthropic didn't answer a batch request in time (24 hours), or no longer has its batch: send it again."""
 

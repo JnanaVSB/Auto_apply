@@ -129,7 +129,7 @@ def test_anthropic_service(keys):
         (GROQ, httpx.Response(401), llm.StopScoring, "refused the key"),
         (CLAUDE, httpx.Response(404), llm.StopScoring, "does not know the model 'claude-sonnet-5-5'"),
         *((role, httpx.Response(status), llm.Busy, "busy or failing") for role, status in (
-            (CLAUDE, 529), (CLAUDE, 500), (GROQ, 429), (GROQ, 503),
+            (CLAUDE, 529), (CLAUDE, 500), (CLAUDE, 429), (GROQ, 503),
         )),  # not charged: the council waits and sends it again
         (GROQ, httpx.Response(400, text="maximum context length exceeded"), llm.TooLong, "longer than the model"),
         (CLAUDE, httpx.Response(400, text="prompt is too long"), llm.TooLong, "longer than the model"),
@@ -149,6 +149,33 @@ def test_cloud_problems_never_show_the_key(keys, role, reply, error, message):
     with pytest.raises(error, match=message) as raised:
         llm.ask(role, "rules", "texts", SHAPE, transport=transport)
     assert FAKE_KEY not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("headers", "wait"),
+    [
+        ([("Retry-After", "30")], 30),
+        ([("Retry-After", "999999")], 999999),
+        ([], None),
+        *(([("Retry-After", odd)], None) for odd in (
+            "Wed, 21 Oct 2026 07:28:00 GMT", "-5", "abc", "1.5", "", "1" * 50, "1234567",
+        )),
+        ([(b"Retry-After", b"\xb2")], None),  # a superscript two: a digit to Python, not a number of seconds
+    ],
+)  # fmt: skip
+def test_too_many_requests_from_your_own_address_is_limited_with_its_wait(keys, headers, wait):
+    transport, _ = fake(httpx.Response(429, headers=headers, text=f"slow down, key {FAKE_KEY}"))
+    with pytest.raises(llm.Limited, match=r"^api\.groq\.com says too many requests for now \(status 429\)$") as raised:
+        llm.call(GROQ, "rules", "texts", SHAPE, transport=transport)
+    assert raised.value.wait == wait and isinstance(raised.value, llm.Busy)  # the council and Writer wait, as today
+    assert FAKE_KEY not in str(raised.value) and "[KEY]" in raised.value.reply
+
+
+def test_too_many_requests_from_openai_stays_busy_not_limited(keys):
+    transport, _ = fake(httpx.Response(429, headers={"Retry-After": "30"}))
+    with pytest.raises(llm.Busy, match="busy or failing") as raised:
+        llm.call(OPENAI, "rules", "texts", SHAPE, transport=transport)
+    assert not isinstance(raised.value, llm.Limited)
 
 
 def test_missing_key_is_named_and_nothing_is_sent():
@@ -215,6 +242,8 @@ def test_ollama_lists_its_downloaded_models(reply, names):
 
 OPENAI = AIRole(service="openai-compatible", model="gpt-6.1-sol", address="https://api.openai.com/v1", key_name="groq")
 OWN = AIRole(service="openai-compatible", model="my-model", address="http://192.168.1.5:8000/v1")  # no key
+OPENROUTER = AIRole(service="openai-compatible", model="meta-llama/llama-3.3-70b-instruct",
+                    address="https://openrouter.ai/api/v1", key_name="groq")  # fmt: skip
 OPENAI_ANSWER = {
     "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1200, "prompt_tokens_details": {"cached_tokens": 200}, "completion_tokens": 300},
@@ -337,6 +366,15 @@ def test_only_openai_is_told_to_keep_nothing(keys):
         llm.call(role, "rules", "texts", SHAPE, transport=transport)
     assert [json.loads(request.content).get("store") for request in requests] == [False, None, None]
     assert all("service_tier" not in json.loads(request.content) for request in requests)  # normal price
+
+
+def test_only_openrouter_is_asked_for_hosts_that_collect_and_keep_nothing(keys):
+    transport, requests = fake(*[httpx.Response(200, json=OPENAI_ANSWER)] * 4)
+    for role in (OPENROUTER, OPENAI, GROQ, OWN):
+        llm.call(role, "rules", "texts", SHAPE, transport=transport)
+    bodies = [json.loads(request.content) for request in requests]
+    assert [body.get("provider") for body in bodies] == [{"data_collection": "deny", "zdr": True}, None, None, None]
+    assert "store" not in bodies[0]  # OpenAI's own setting, which other hosts may refuse
 
 
 def test_half_price_is_flex_for_openai_only_and_never_sent_to_anthropic_directly(keys):
