@@ -16,6 +16,7 @@ from app.web import plugin
 
 PLUGIN = Path(__file__).parents[1] / "plugin"
 BACKGROUND, PAGE, WATCH, POPUP, OPTIONS = "background.js", "page.js", "watch.js", "popup.js", "options.js"
+DROPDOWN = "dropdown.js"
 HOSTS = {
     "https://job-boards.greenhouse.io/*",
     "https://jobs.lever.co/*",
@@ -50,7 +51,7 @@ HONEST = (
 LINES_THAT_HOLD_A_RULE = (
     (BACKGROUND, "if (record?.ticket && here && record.answered) {"),
     (BACKGROUND, "JOB_PAGE.test(answer.body.job) ? `${DASHBOARD}${answer.body.job}` : undefined"),
-    (PAGE, "const why = setLine(line, boxes(root).get(line.key));"),
+    (PAGE, "const why = await setLine(line, boxes(root).get(line.key), root);"),
     (PAGE, 'if (!box.matches(TEXT_BOX)) return "cant-set";'),
     (PAGE, """if (line.kind === "consent") return box.matches('input[type="checkbox"]') ? tick(box) : "cant-set";"""),
 )
@@ -135,7 +136,7 @@ def test_nothing_is_open_to_pages_or_other_plugins_and_no_id_is_fixed(manifest):
 def test_the_page_part_runs_only_on_form_pages_in_the_top_frame(manifest):
     scripts = manifest["content_scripts"]
     assert [script["matches"] for script in scripts] == [[pattern] for _, pattern in FORM_PAGES.values()]
-    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", WATCH, PAGE] for site in FORM_PAGES]
+    assert [script["js"] for script in scripts] == [[f"boards/{site}.js", WATCH, DROPDOWN, PAGE] for site in FORM_PAGES]
     for script in scripts:
         assert set(script) == {"matches", "js", "run_at"} and script["run_at"] == "document_idle"
 
@@ -168,10 +169,12 @@ def test_the_page_side_makes_no_network_call(word):
     assert [name for name in page_side() if word in code(name)] == []
 
 
-def test_the_only_events_made_are_input_and_change():
+def test_the_only_events_made_are_input_and_change_and_a_press_on_an_option():
     for name in files("*.js"):
+        press = (("MouseEvent", '"mousedown"'), ("MouseEvent", '"click"'))
+        allowed = press if name == DROPDOWN else (("Event", '"input"'), ("Event", '"change"'))
         for event, first in re.findall(r"new\s+(\w*Event)\(\s*([^,)\s]*)", code(name)):
-            assert (event, first) in (("Event", '"input"'), ("Event", '"change"')), name
+            assert (event, first) in allowed, name
 
 
 def test_a_click_is_made_once_and_never_finds_a_button():
@@ -296,7 +299,7 @@ def page_function(name, file=PAGE):
     return found[0]
 
 
-@pytest.mark.parametrize("name", [PAGE, WATCH, *(f"boards/{site}.js" for site in FORM_PAGES)])
+@pytest.mark.parametrize("name", [PAGE, WATCH, DROPDOWN, *(f"boards/{site}.js" for site in FORM_PAGES)])
 def test_the_page_part_s_files_exist(name):
     assert (PLUGIN / name).is_file()
 
@@ -377,9 +380,9 @@ def test_the_skip_list_names_password_and_the_other_sorts():
 
 
 def test_no_message_from_the_page_carries_an_address():
-    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE) + code(WATCH))
+    messages = re.findall(r"\bask\(\{[^}]*\}", code(PAGE) + code(WATCH) + code(DROPDOWN))
     assert len(messages) == 8  # moved, open, form, file, done, watch, and a read of each sort
-    assert code(PAGE).count("sendMessage(") == 1 and "sendMessage(" not in code(WATCH)
+    assert code(PAGE).count("sendMessage(") == 1 and "sendMessage(" not in code(WATCH) + code(DROPDOWN)
     assert [message for message in messages if re.search(r"address|location|href", message)] == []
 
 
@@ -393,11 +396,11 @@ def test_tidy_takes_out_the_same_characters_as_the_app():
 
 
 def test_every_why_and_stop_is_one_the_app_knows():
-    literals = set(re.findall(r'"([^"\n]*)"', code(PAGE)))
+    literals = set(re.findall(r'"([^"\n]*)"', code(PAGE) + code(DROPDOWN)))
     known = {*fill_words.LEFT, *plugin.PAGE_STOPS}
     assert known <= literals
     assert {word for word in literals if re.fullmatch(r"[a-z]+(?:-[a-z]+)+", word)} <= known | {
-        "aria-label", "aria-required", "one-time-code",
+        "aria-controls", "aria-disabled", "aria-label", "aria-readonly", "aria-required", "one-time-code",
     }  # fmt: skip
 
 
@@ -429,6 +432,116 @@ def test_a_line_that_holds_a_rule_is_still_there(name, line):
 # The popup and the options page
 
 
+# Custom drop-downs: only what a slip would make unsafe is pinned here. The harness outside the repo is what proves
+# they behave
+
+
+def test_only_the_one_function_presses_and_only_with_these_two_events():
+    press = page_function("press", DROPDOWN)
+    down, click = press.index('new MouseEvent("mousedown"'), press.index('new MouseEvent("click"')
+    asked = press.index("if (!allowed(option, box, root)) return false;")
+    assert down < asked < click  # the page's own mousedown can move the option
+    assert code(DROPDOWN).count("dispatchEvent") == code(DROPDOWN).count("MouseEvent") == 2
+    assert [name for name in files("*.js") if "MouseEvent" in code(name)] == [DROPDOWN]
+    assert sorted(name for name in files("*.js") if "dispatchEvent" in code(name)) == [DROPDOWN, PAGE]
+
+
+def test_an_option_is_pressed_only_after_each_check():
+    choose = page_function("choose", DROPDOWN)
+    assert code(DROPDOWN).count("press(") == 2  # where it's written, and here
+    pressed = choose.index("press(option, box, root)")
+    for check in ("stopHere(landedAt(), box)", "only(", "allowed(option, box, root)"):
+        assert choose.index(check) < pressed, check
+    allowed = page_function("allowed", DROPDOWN)
+    for check in ("option.isConnected", "optionsOf(box, root).includes(option)", "wouldPress(option)",
+                  ".checkVisibility(SEEN)", '"aria-disabled"'):  # fmt: skip
+        assert check in allowed, check
+    assert code(DROPDOWN).count("allowed(option, box, root)") == 3  # where it's written, before mousedown, before click
+    assert 'if (stopHere(landedAt(), box)) return "cant-set";' in choose
+    assert 'if (!option) return "no-choice";' in choose
+
+
+def test_every_option_is_counted_before_any_is_judged():
+    choose = page_function("choose", DROPDOWN)
+    assert "only(optionsOf(box, root), (found) => found.textContent, line.value)" in choose
+    assert choose.index("only(") < choose.index("allowed(option, box, root)") and "filter(" not in choose
+
+
+def test_nothing_a_click_would_also_press_may_be_or_hold_the_option():
+    presses = re.search(r'^const PRESSES = "(.*)";$', code(DROPDOWN), re.M)[1]
+    assert set(presses.split(", ")) == {
+        "a", "area", "button", "input", "label", "select", "summary", "textarea", "[role=button]", "[role=link]",
+    }  # fmt: skip
+    assert "option.closest(PRESSES)" in page_function("wouldPress", DROPDOWN)
+    assert "matches(PRESSES)" not in code(DROPDOWN)
+
+
+def test_no_shadow_part_may_sit_round_the_option_open_or_closed():
+    walk = page_function("wouldPress", DROPDOWN)
+    assert "for (let node = option; node; node = node.parentElement)" in walk
+    assert "chrome.dom.openOrClosedShadowRoot(node)" in walk and ".shadowRoot" not in walk
+
+
+@pytest.mark.parametrize(
+    ("words", "place"),
+    [
+        ("Country", True),
+        ("country", True),
+        ("Country*", True),
+        (" * State", True),
+        ("Location (City)", True),
+        ("City", True),
+        ("Province", True),
+        ("Region", True),
+        ("Are you allowed to work in this country?", False),
+        ("What country do you live in?", False),
+        ("Statement of purpose", False),
+        ("Regional office preference", False),
+        ("question_7", False),
+    ],
+)
+def test_a_place_is_only_named_at_the_start(words, place):
+    pattern = re.search(r"^const PLACE = /(.*)/i;$", code(DROPDOWN), re.M)[1]
+    assert bool(re.search(pattern, words, re.I)) is place
+
+
+def test_a_drop_down_is_left_before_anything_is_written_and_cleaned_up_after():
+    pick = page_function("pick", DROPDOWN)
+    written = pick.index("box.focus();")
+    checks = ('line.kind !== "single"', "closed(box)", '"aria-readonly"', "shown === undefined", "PLACE.test(line.key)",
+              "PLACE.test(question(box))", "same(line.value, shown)")  # fmt: skip
+    for check in checks:
+        assert pick.index(check) < written, check
+    after = pick[pick.index("finally") :]
+    assert 'if (why) setText(box, "");' in after and after.index("setText(") < after.index("box.blur();")
+
+
+def test_the_only_list_is_the_one_the_box_names():
+    options = page_function("optionsOf", DROPDOWN)
+    assert 'box.getAttribute("aria-controls")' in options
+    assert 'list.querySelectorAll("[role=option]")' in options
+    assert code(DROPDOWN).count("[role=option]") == 1 and "document.querySelector" not in code(DROPDOWN)
+    assert "list !== root && root.contains(list) && !list.contains(box)" in options  # never html, body or the form
+
+
+def test_the_stop_is_asked_after_the_wait():
+    choose = page_function("choose", DROPDOWN)
+    waited, looked = choose.index("await menuShown(box, root);"), choose.index("optionsOf(box, root)")
+    assert waited < choose.index("stopHere(") < looked
+
+
+def test_a_read_of_a_drop_down_is_what_it_shows_as_picked():
+    picked = page_function("shownPick", DROPDOWN)
+    assert "BOARD.dropdown" in picked and ".value" not in picked
+    assert "control !== root && root.contains(control)" in picked  # a part round the form isn't one drop-down's
+    assert 'control.querySelectorAll("input, select, textarea").length !== 1) return undefined;' in picked
+
+
+def test_only_greenhouse_says_how_a_pick_shows_and_the_words_live_in_its_file():
+    assert [name for name in files("boards/*.js") if "dropdown" in code(name)] == ["boards/greenhouse.js"]
+    assert [name for name in page_side() if "select__" in code(name)] == ["boards/greenhouse.js"]
+
+
 # The watcher. What a slip here would make unsafe is held closely, and the bookkeeping only by what comes before what:
 # the harness outside the repo is what proves these behave
 
@@ -458,14 +571,20 @@ def test_the_watcher_can_t_press_block_or_delay_anything(word):
     assert word not in code(WATCH)
 
 
-def test_the_watcher_only_defines_things_as_it_loads_before_page_js():
-    lines = [line for line in code(WATCH).splitlines() if line and not line.startswith((" ", "}", ")"))]
+@pytest.mark.parametrize("name", [WATCH, DROPDOWN])
+def test_a_file_before_page_js_only_defines_things(name):
+    lines = [line for line in code(name).splitlines() if line and not line.startswith((" ", "}", ")"))]
     assert lines and [line for line in lines if not re.match(r"(?:const|let|function|async function) ", line)] == []
 
 
+@pytest.mark.parametrize("name", [WATCH, DROPDOWN])
 @pytest.mark.parametrize("other", [PAGE, *(f"boards/{site}.js" for site in FORM_PAGES)])
-def test_no_top_level_name_is_shared_with_another_page_file(other):
-    assert not top_level_names(WATCH) & top_level_names(other)  # they share one scope: a repeat would stop the file
+def test_no_top_level_name_is_shared_with_another_page_file(name, other):
+    assert not top_level_names(name) & top_level_names(other)  # they share one scope: a repeat would stop the file
+
+
+def test_the_two_files_before_page_js_share_no_name():
+    assert not top_level_names(WATCH) & top_level_names(DROPDOWN)
 
 
 def test_page_js_starts_the_watcher_once_after_the_fill_and_it_can_t_report_a_stop():
@@ -513,8 +632,8 @@ def test_no_board_names_its_submit_until_a_real_form_has_shown_it():
 def test_a_read_goes_through_boxes_and_skips_what_it_must():
     read = page_function("readForm", WATCH)
     assert "boxes(root)" in read and "list.some(" in read  # one such box in a group is enough
-    assert read.index("isSecret(box)") < read.index("continue") and read.index("DROPDOWN") < read.index("continue")
-    assert read.index("continue") < read.index("shownHere")
+    assert read.index("isSecret") < read.index("continue") < read.index("shownHere")
+    assert "if (value !== undefined) values.push(" in read  # a box that can't say what it shows isn't called empty
     assert set_of("SECRET_BOXES", WATCH) == {"current-password", "new-password", "one-time-code"}
     secret = re.search(r"^const isSecret = .*?;$", code(WATCH), re.S | re.M)[0]
     assert ".split(" in secret and "SECRET_QUESTION" in secret  # autocomplete can hold a section as well
@@ -709,6 +828,11 @@ def test_the_guide_says_what_a_page_can_do():
     assert "While it watches the form, it never reads a password box" in text
     assert "Reload this page to see how it went" in text
     assert "if its name differs" in text
+    assert "A custom drop-down is one of these for now" not in text
+    assert "only when exactly one choice has the answer's whole words" in text
+    assert "a question that starts with a country, place or state" in text
+    assert "Stay on the form's tab while it fills" in text
+    assert "the site may have seen your answer typed in" in text
 
 
 def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on():
@@ -717,6 +841,12 @@ def test_the_developer_guide_holds_what_must_come_before_a_site_is_switched_on()
     for words in ("Take the automatic write away", "refuse `thanked` on toolbar tickets",
                   "looks like the site's thank-you", "a value with a line break"):  # fmt: skip
         assert words in text
+
+
+def test_the_developer_guide_says_what_a_board_needs_for_its_drop_downs():
+    text = " ".join((PLUGIN.parent / "docs" / "adding-a-board-type.md").read_text("utf-8").split())
+    assert "A site's drop-downs" in text and "`dropdown`" in text
+    assert all(f"`{word}`" in text for word in ("control", "picked", "empty"))
 
 
 def test_a_read_of_too_few_questions_says_so():

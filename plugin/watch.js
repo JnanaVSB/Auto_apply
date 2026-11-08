@@ -1,5 +1,6 @@
 // The watcher: once a fill's answers are out, it reads the form again and notices your press of Submit.
-// It only listens: it presses, blocks and delays nothing. It loads before page.js, so it uses page.js only when called.
+// It only listens: it presses, blocks and delays nothing. It loads before dropdown.js and page.js, so it uses them only
+// when called.
 const REREAD_MS = 5000;
 const SECRET_BOXES = new Set(["current-password", "new-password", "one-time-code"]);
 // The same as the app's
@@ -15,21 +16,23 @@ const isSecret = (box) =>
   (box.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((word) => SECRET_BOXES.has(word)) ||
   SECRET_QUESTION.test(question(box));
 
-// A select on its placeholder is empty, and a ticked box with no words of its own is still ticked.
-function shownHere(key, list) {
+// A select on its placeholder is empty, and a ticked box with no words of its own is still ticked. A drop-down that
+// can't say what it shows gives undefined.
+function shownHere(key, list, root) {
+  if (list[0].matches(DROPDOWN)) return shownPick(list[0], root);
   if (list[0].tagName === "SELECT" && !list[0].value) return "";
   const kind = kindOf(key, list[0]);
-  if (!isGroup({ kind }, list)) return shownValue({ kind, value: "ticked" }, list);
+  if (!isGroup({ kind }, list)) return shownValue({ kind, value: "ticked" }, list, root);
   const ticked = list.filter((box) => box.checked).map((box) => ownLabel(box).trim() || box.value || "ticked");
   return kind === "multi" ? ticked : (ticked[0] ?? "");
 }
 
-// A custom drop-down's text box doesn't hold the pick, so "empty" would be false.
 function readForm(root) {
   const values = [];
   for (const [key, list] of boxes(root)) {
-    if (list.some((box) => isSecret(box) || box.matches(DROPDOWN))) continue;
-    values.push({ key, value: cut(shownHere(key, list)) });
+    if (list.some(isSecret)) continue;
+    const value = shownHere(key, list, root);
+    if (value !== undefined) values.push({ key, value: cut(value) });
   }
   return values;
 }

@@ -336,8 +336,10 @@ class Tickets:
         state = "filled" if stop is None else "sent" if ticket.answered else "stopped"
         questions = ticket.questions.items()
         lines = [{"question": question, "what": LEFT[left[key]]} for key, question in questions if key in left]
-        changes = compare.at_most(lines + ticket.changes)
         done = [question for key, question in questions if key in filled and key not in left]
+        # a pick that read back no longer says its choices weren't checked
+        stale = [{"question": question, "what": compare.CHOICES_UNCHECKED} for question in done]
+        changes = compare.at_most(lines + [change for change in ticket.changes if change not in stale])
         with conn:
             conn.execute(REPORTED, (state, stop, _json(changes), _json(done), ticket.fill))
         ticket.reported = True

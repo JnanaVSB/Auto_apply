@@ -110,6 +110,12 @@ on a real `type=submit` control of the form. A site where that can't work, such 
 noticed until its file in `plugin/boards/` names the control as `submit`, a selector inside the form. Take that only
 from a real form you saw yourself, never from a button's words: a page chooses those.
 
+## A site's drop-downs
+The plugin leaves every custom drop-down for you until the site's file in `plugin/boards/` says how it shows a pick, as
+`dropdown`: selectors for the part round the text box (`control`), the words of a pick (`picked`) and the words shown
+with nothing picked (`empty`). The drop-down must open when its text changes, and its text box must name its list with
+`aria-controls`. Take these only from a real form you saw yourself.
+
 ## A site's thank-you address
 The app can record an application by itself once it knows the address a site thanks you at. Every site ships with this
 off. To switch a site on, set `thanks` on `DRAWN` in the site's own file in `app/submit/`, to how the address ends after
