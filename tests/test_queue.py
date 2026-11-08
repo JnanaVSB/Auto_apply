@@ -117,7 +117,7 @@ def test_the_day_stops_when_its_scoring_time_is_used_up(conn, monkeypatch):
     for number in range(3):
         add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
     with conn:
-        conn.execute("INSERT INTO scoring_days VALUES (?, 59)", (TODAY,))  # 1 second left of 1 minute
+        conn.execute("INSERT INTO scoring_days (day, seconds) VALUES (?, 59)", (TODAY,))  # 1 second left of 1 minute
     ticks = iter(range(0, 1000, 5))  # every job takes 5 seconds
     monkeypatch.setattr(queue.stage_b.time, "monotonic", lambda: next(ticks))
     tally, lines = run(conn, FakeAI())
@@ -129,7 +129,7 @@ def test_the_day_stops_when_its_scoring_time_is_used_up(conn, monkeypatch):
 def test_score_these_takes_any_age_and_does_not_use_the_days_time(conn):
     old = add_job(conn, "RL Lead", description="Taxes.", date_posted=posted(400))
     with conn:
-        conn.execute("INSERT INTO scoring_days VALUES (?, 600)", (TODAY,))  # the day's time is used up
+        conn.execute("INSERT INTO scoring_days (day, seconds) VALUES (?, 600)", (TODAY,))  # the day's time is used up
     ai = FakeAI()
     tally, _ = run(conn, ai, job_ids=[old])
     assert ai.titles == ["RL Lead"] and tally.scored == 1
@@ -220,7 +220,7 @@ def test_held_failures_are_saved_when_the_days_time_is_used_up(conn, monkeypatch
     for number in range(3):
         add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
     with conn:
-        conn.execute("INSERT INTO scoring_days VALUES (?, 57)", (TODAY,))  # 3 seconds left of 1 minute
+        conn.execute("INSERT INTO scoring_days (day, seconds) VALUES (?, 57)", (TODAY,))  # 3 seconds left of 1 minute
     ticks = iter(range(0, 1000, 5))  # every job takes 5 seconds
     monkeypatch.setattr(queue.stage_b.time, "monotonic", lambda: next(ticks))
     tally, lines = run(conn, lambda *args, **kwargs: "not JSON")

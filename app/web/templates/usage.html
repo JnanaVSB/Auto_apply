@@ -5,10 +5,10 @@
 <p>Today: ${{ "%.2f" | format(spent.today) }} of your ${{ "%.2f" | format(limits.daily) }} daily limit.
   This month: ${{ "%.2f" | format(spent.month) }} of ${{ "%.2f" | format(limits.monthly) }}.
   <a href="/settings/writer">Change the limits</a> · <a href="/failed-tries">Failed tries</a></p>
-<p class="hint">Every AI call the Writer and the council made. Laptop calls are free; cloud calls went to a paid
-  service or your own address. Dollars include what is set aside for a call still waiting; "at least" means some calls
-  went to your own address without a price, so they were not counted. Compare with your Anthropic and OpenAI
-  dashboards now and then: their bills can differ slightly.</p>
+<p class="hint">Every AI call the Writer and the council made, and every paid one that scored a job. Laptop calls
+  are free; cloud calls went to a paid service or your own address. Dollars include what is set aside for a call
+  still waiting; "at least" means some calls went to your own address without a price, so they were not counted.
+  Compare with your Anthropic and OpenAI dashboards now and then: their bills can differ slightly.</p>
 <nav class="actions">
   {% for period in periods %}<a class="button"{% if period == by %} aria-current="page"{% endif %} href="/usage?by={{ period }}">{{ period.title() }}</a>{% endfor %}
 </nav>
@@ -25,6 +25,6 @@
   </tbody>
 </table>
 {% else %}
-<p>No AI calls yet: they appear here once the Writer has prepared a job.</p>
+<p>No AI calls yet: they appear here once the Writer has prepared a job, or a paid service has scored one.</p>
 {% endif %}
 {% endblock %}

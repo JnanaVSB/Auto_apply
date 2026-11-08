@@ -169,7 +169,10 @@ COUNCIL = """INSERT INTO preparations (job_id, kind, version, sources, writer, c
             ),
             False,
         ),  # fmt: skip
-        (lambda s, c, conf: c.execute("INSERT INTO scoring_days VALUES (?, 7200)", (queue.today(),)), False),
+        (
+            lambda s, c, conf: c.execute("INSERT INTO scoring_days (day, seconds) VALUES (?, 7200)", (queue.today(),)),
+            False,
+        ),
         (lambda s, c, conf: (conf.data_dir / RESUME_FILE).unlink(), False),
         (lambda s, c, conf: c.execute("UPDATE jobs SET status = 'no longer available'"), False),  # nothing to do
         (lambda s, c, conf: c.execute(COUNCIL.format("ollama")), False),  # the council's laptop work goes first

@@ -219,6 +219,14 @@ def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, mo
     assert 'href="/usage"' in text  # in the menu
 
 
+def test_the_usage_page_counts_paid_scoring_too(client, conn, monkeypatch):
+    with conn:
+        conn.execute("INSERT INTO scoring_days (day, calls, input_tokens, cost) VALUES ('2026-10-30', 2, 4000, 0.25)")
+    monkeypatch.setattr(drafts.spending, "today", lambda: "2026-10-30")
+    text = client.get("/usage").text
+    assert "Today: $0.25 of your $15.00 daily limit." in text and "<td>2026-10-30</td><td>0</td><td>2</td>" in text
+
+
 TRY = """INSERT INTO failed_tries (step_id, try_number, output_tokens, cost, reason, reply, reply_length, saved_on)
     SELECT id, ?, 8192, ?, ?, ?, ?, '2026-10-30T10:05:00+00:00' FROM steps WHERE preparation_id = ?"""
 

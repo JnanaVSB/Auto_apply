@@ -679,6 +679,40 @@ def test_version_9_adds_scoring_and_keeps_every_job(tmp_path, monkeypatch):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
+def test_version_26_adds_paid_scorings_money_to_its_days_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_25:
+        version_25.setattr(db, "UPGRADES", db.UPGRADES[:25])
+        version_25.setattr(db, "SCHEMA_VERSION", 25)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+                conn.execute("INSERT INTO scoring_days (day, seconds) VALUES ('2026-11-07', 12.5)")
+            before = _everything(conn)
+            old = [row[1] for row in conn.execute("PRAGMA table_info(scoring_days)")]
+    with monkeypatch.context() as version_26:
+        version_26.setattr(db, "UPGRADES", db.UPGRADES[:26])
+        version_26.setattr(db, "SCHEMA_VERSION", 26)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 26
+            found, rows = _everything(conn)
+            assert [row for row in found if row[1] != "scoring_days"] == [
+                row for row in before[0] if row[1] != "scoring_days"
+            ]
+            assert {name: rows[name] for name in rows if name != "scoring_days"} == {
+                name: before[1][name] for name in before[1] if name != "scoring_days"
+            }
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(scoring_days)")]
+            assert columns == [*old, "calls", "input_tokens", "cached_tokens", "output_tokens", "cost", "reserved",
+                               "uncounted"]  # fmt: skip
+            assert rows["scoring_days"] == [("2026-11-07", 12.5, 0, 0, 0, 0, 0, 0, 0)]  # an old day keeps its time
+            for wrong in ("cost = -1", "reserved = -0.5", "calls = -1", "uncounted = 2"):
+                with pytest.raises(sqlcipher3.IntegrityError), conn:
+                    conn.execute(f"UPDATE scoring_days SET {wrong}")  # noqa: S608 (fixed SQL)
+        assert sorted(path.glob(f"{db.DB_FILE}.bak-v25")), "a backup is made before the upgrade"
+
+
 def _scored_job(conn) -> None:
     """One job with a quick check and an AI score, both up to date."""
     conn.execute(
