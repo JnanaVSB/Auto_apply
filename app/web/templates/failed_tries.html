@@ -3,7 +3,7 @@
 {% block content %}
 <h1>Failed tries</h1>
 <p class="hint">Every try of the Writer that failed, with what came back, to work out what went wrong. Replies show
-  your details as the Writer saw them, as placeholders like [ME]; they are kept only in your encrypted database.
+  your details as the Writer saw them, as placeholders like [my name]; they are kept only in your encrypted database.
   {% if version %}<a href="/failed-tries">Show every version's</a>{% endif %}</p>
 {% set also %}{% if version %}&version={{ version }}{% endif %}{% endset %}
 {% if rows %}

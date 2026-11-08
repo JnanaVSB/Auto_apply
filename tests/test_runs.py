@@ -10,7 +10,7 @@ import pytest
 from helpers import add_job, one
 from test_privacy import CONTACT
 from test_tiles import RESUME_CLS
-from test_writer import LAB, PROFILE, answer, bullet
+from test_writer import LAB, PROFILE, answer, bullet, labelled
 
 from app import llm, questionnaire
 from app.config import PROJECT_DIR, AIRole, AISettings, Config, SpendingSettings
@@ -205,7 +205,7 @@ def test_each_press_is_a_new_version_and_a_change_of_entries_makes_the_last_one_
 
 def test_a_good_draft_becomes_a_pdf_with_your_details_put_back(conn, data_dir, job, writer_answers, built):
     writer_answers[1].append(answer(
-        ("E2", [bullet("Shared the code at [LINK].", 2), bullet("Trained a robot arm with PPO.", 0)], []),
+        ("E2", [bullet("Shared the code at [github link].", 2), bullet("Trained a robot arm with PPO.", 0)], []),
         ("E4", [], ["Rust", "Python"]),
     ))  # fmt: skip
     prepare(conn, config(data_dir), job)
@@ -219,9 +219,9 @@ def test_a_good_draft_becomes_a_pdf_with_your_details_put_back(conn, data_dir, j
 
 
 def test_a_rebuilt_pdf_puts_back_what_each_placeholder_stood_for(conn, data_dir, job, writer_answers):
-    writer_answers[1].append(answer(("E2", [bullet("Shared the code at [LINK].", 2)], [])))
+    writer_answers[1].append(answer(("E2", [bullet("Shared the code at [github link].", 2)], [])))
     prepare(conn, config(data_dir), job)
-    linkedin = "https://linkedin.com/in/alex-example"  # now [LINK]: your links are numbered from the Questionnaire's
+    linkedin = "https://linkedin.com/in/alex-example"  # a new link of yours: the draft's still stands for its own
     questionnaire.save(conn, questionnaire.check({"contact": CONTACT | {"linkedin": linkedin}}))
     _, source, note = runs.pdf_source(conn, config(data_dir), version(conn)["id"])
     assert "Shared the code at https://github.com/alex-example." in source and note is None
@@ -233,6 +233,30 @@ def test_a_rebuilt_pdf_puts_back_what_each_placeholder_stood_for(conn, data_dir,
         "PDF built, but a bullet still shows a link you have changed since: update that entry on the Resume Profile "
         "page, then press Prepare for a fresh version."
     )
+
+
+def test_a_draft_from_before_its_details_were_kept_is_put_back_in_the_old_names(conn, data_dir, job):
+    restore, note = runs.put_back(conn, config(data_dir), labelled(*PROFILE), {"entries": [], "notes": ""}, CONTACT)
+    assert restore("Code at [LINK] by [ME].") == "Code at https://github.com/alex-example by Alex Example."
+    assert restore("[github link]") == "[github link]" and note is None  # today's names came after such drafts
+
+
+@pytest.mark.parametrize(
+    ("placeholder", "value", "kind"),
+    [
+        *((placeholder, "https://github.com/alex-old", "a link")
+          for placeholder in ("[LINK-2]", "[github link]", "[GitHub Link 2]", "[website link]")),
+        ("[ME-3]", "Alexandra Old", "your name"),
+        ("[my name 3]", "Alexandra Old", "your name"),
+        ("[my email]", "old@example.com", "an email address"),
+        ("[PHONE]", "480-555-0177", "a phone number"),
+    ],
+)  # fmt: skip
+def test_a_detail_changed_since_is_named_by_its_kind_in_old_and_new_names(conn, data_dir, job, placeholder, value,
+                                                                          kind):  # fmt: skip
+    draft = {"entries": [], "notes": "", "details": {placeholder: value}}
+    restore, note = runs.put_back(conn, config(data_dir), labelled(*PROFILE), draft, CONTACT)
+    assert restore(f"By {placeholder}.") == f"By {value}." and note == runs.DETAIL_CHANGED.format(kind)
 
 
 def test_a_failed_build_keeps_the_draft_and_says_why(conn, data_dir, job, writer_answers, monkeypatch):

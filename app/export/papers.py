@@ -59,7 +59,7 @@ def job_description(job: dict) -> tuple[str, list] | None:
 
 def council_notes(conn: sqlcipher3.Connection, job_id: int, versions: list[tuple[str, dict | None]]) -> tuple | None:
     """The scores, the quick check and each version's last round, as the job's page words them; None with nothing to
-    say. Placeholders such as [ME] stay as they are, so this paper holds fewer of your details."""
+    say. Placeholders such as [my name] stay as they are, so this paper holds fewer of your details."""
     sections = [*_scores(conn, job_id), *_quick(conn, job_id)]
     for label, version in versions:
         if version is not None:

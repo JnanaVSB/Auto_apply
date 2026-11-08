@@ -5,6 +5,7 @@ address. Values are never logged."""
 
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from functools import cache
 from itertools import pairwise
@@ -33,7 +34,18 @@ ALONE = re.compile(
 )
 STREET_WORDS = "Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl|Parkway|Pkwy"
 STREET = re.compile(rf"\b\d{{1,6}}\s+(?:[A-Z][\w.'-]*\s+){{1,4}}(?:{STREET_WORDS})\b")  # e.g. 12 Fake Hill Rd
-PLACEHOLDER = re.compile(r"\[(?:ME|EMAIL|PHONE|ADDRESS|LINK)(?:-[0-9]+)?\]")
+# Today's names in any capitals ([My Name] is [my name]), and the names before 8E ([ME], [LINK-2]) as drafts keep them
+PLACEHOLDER = re.compile(
+    r"\[(?:(?:ME|EMAIL|PHONE|ADDRESS|LINK)(?:-[0-9]+)?"
+    r"|(?i:(?:my (?:name|email|phone|street address)|(?:linkedin|github|google scholar|website) link)(?: [0-9]+)?))\]"
+)
+OLD_NAMES = {"my name": "ME", "my email": "EMAIL", "my phone": "PHONE", "my street address": "ADDRESS", "link": "LINK"}
+# A link is named by the site in its own address, never by the text shown for it; any other is a website link
+SITES = {
+    "linkedin link": re.compile(r"(?:[\w-]+\.)*linkedin\.com"),
+    "github link": re.compile(r"(?:[\w-]+\.)*github\.(?:com|io)"),
+    "google scholar link": re.compile(r"scholar\.google\.(?:com?\.)?[a-z]{2,3}"),
+}
 LINKS = ("linkedin", "github", "portfolio", "scholar", "other_link")
 NO_NAME = "Fill in your full name in the Questionnaire first: the privacy filter needs it to hide your name."
 # The name at the top of a source: \name{..} or \author{..}, else its first big line, as in {\Huge Alex Example}
@@ -75,18 +87,21 @@ class Shield:
     def details(self, text: str) -> dict[str, str]:
         """The placeholders in `text` and the exact text each stands for: kept with a draft, so it is always put back
         as it was written, even after your details change and the placeholders are numbered differently."""
-        real = {placeholder: value for _, value, placeholder in self.values}
-        return {found: real[found] for found in PLACEHOLDER.findall(text) if found in real}
+        real = {placeholder.lower(): value for _, value, placeholder in self.values}
+        return {found: real[found.lower()] for found in PLACEHOLDER.findall(text) if found.lower() in real}
 
 
 def restore(text: str, details: dict[str, str]) -> str:
-    """Only on this computer: each placeholder back to its exact text (an unknown one is left as it is)."""
-    return PLACEHOLDER.sub(lambda match: details.get(match[0], match[0]), text)
+    """Only on this computer: each placeholder back to its exact text, whatever its capitals (an unknown one is left as
+    it is)."""
+    known = {placeholder.lower(): value for placeholder, value in details.items()}
+    return PLACEHOLDER.sub(lambda match: known.get(match[0].lower(), match[0]), text)
 
 
-def shield(contact: dict, sources: list[str], tiles: list[Tile]) -> Shield:
+def shield(contact: dict, sources: list[str], tiles: list[Tile], old_names: bool = False) -> Shield:
     """The placeholders for your questionnaire's contact details, the headers of every source the Writer uses (your
-    resume.tex and any uploaded files, as LaTeX; app/documents/writer_sources.py), and your tiles' links."""
+    resume.tex and any uploaded files, as LaTeX; app/documents/writer_sources.py), and your tiles' links.
+    `old_names`: the names before 8E, for a draft from before the details were kept with it."""
     name = " ".join(str(contact.get("full_name") or "").split())
     if not name:
         raise PrivacyError(NO_NAME)
@@ -95,6 +110,7 @@ def shield(contact: dict, sources: list[str], tiles: list[Tile]) -> Shield:
     links += [link for link in HREF.findall(header) if not link.startswith("mailto:")]
     emails = [contact.get("email") or "", *EMAIL.findall(header)]
     phones = [contact.get("phone") or "", *(match[0] for match in PHONE.finditer(header) if _is_phone(match[0]))]
+    street = " ".join(str(contact.get("street") or "").split())
     names = _names(name, str(contact.get("preferred_name") or ""))
     names += [form for other in map(_header_name, sources) if other for form in _names(other, "")]
     # Each spelling of your name in your sources gets its own placeholder, so it comes back exactly as written
@@ -102,11 +118,11 @@ def shield(contact: dict, sources: list[str], tiles: list[Tile]) -> Shield:
     texts = unicodedata.normalize("NFC", "\n".join([*map(plain_text, sources), *tile_texts]))
     names += [match[0] for form in names if form for match in _name_pattern(form).finditer(texts)]
     kinds = (  # emails and links before names, so a name inside an address never breaks the address up
-        _numbered("EMAIL", emails, lambda email: re.compile(re.escape(email), re.I), str.lower),
-        _numbered("LINK", links, _link_pattern, _link_core),
-        _numbered("PHONE", phones, _phone_pattern, lambda phone: _digits(phone)[-10:]),
-        _numbered("ADDRESS", [" ".join(str(contact.get("street") or "").split())], _name_pattern, str.lower),
-        _numbered("ME", names, _name_pattern, lambda form: " ".join(form.split())),
+        _numbered("my email", emails, lambda email: re.compile(re.escape(email), re.I), str.lower, old_names),
+        _numbered("link", links, _link_pattern, _link_core, old_names),
+        _numbered("my phone", phones, _phone_pattern, lambda phone: _digits(phone)[-10:], old_names),
+        _numbered("my street address", [street], _name_pattern, str.lower, old_names),
+        _numbered("my name", names, _name_pattern, lambda form: " ".join(form.split()), old_names),
     )
     # Longest first; at equal length the later one, so a spelling found in your sources goes before the general form
     return Shield(tuple(value for kind in kinds for value in sorted(kind[::-1], key=lambda value: -len(value[1]))))
@@ -125,14 +141,23 @@ def last_check(text: str) -> None:
         raise PrivacyStop("a street address")
 
 
-def _numbered(kind: str, found: list[str], pattern, same) -> list[tuple[re.Pattern, str, str]]:
-    """[KIND], [KIND-2], ... for each different value, in the order found; empty values and repeats left out."""
-    seen, values = set(), []
+def _numbered(kind: str, found: list[str], pattern, same, old: bool) -> list[tuple[re.Pattern, str, str]]:
+    """[my email], [my email 2], ... for each different value, in the order found, a link named by its site and each
+    name numbered on its own ([EMAIL], [EMAIL-2] and [LINK-3] with the old names); empty values and repeats left out."""
+    seen, values, counts = set(), [], Counter()
     for value in (text.strip() for text in found):
         if value and same(value) and same(value) not in seen:
             seen.add(same(value))
-            values.append((pattern(value), value, f"[{kind}]" if not values else f"[{kind}-{len(values) + 1}]"))
+            name = OLD_NAMES[kind] if old else _site(value) if kind == "link" else kind
+            counts[name] += 1
+            number = f"{'-' if old else ' '}{counts[name]}" if counts[name] > 1 else ""
+            values.append((pattern(value), value, f"[{name}{number}]"))
     return values
+
+
+def _site(link: str) -> str:
+    host = re.match(r"[^/:?#]*", _link_core(link))[0]
+    return next((name for name, hosts in SITES.items() if hosts.fullmatch(host)), "website link")
 
 
 def _names(name: str, preferred: str) -> list[str]:

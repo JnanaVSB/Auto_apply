@@ -14,34 +14,75 @@ CONTACT = {
     "full_name": "Alex Example", "preferred_name": "Lex", "email": "alex@example.com", "phone": "+1 (555) 010-0199",
     "street": "12 Fake Hill Rd", "github": "https://github.com/alex-example", "linkedin": "",
 }  # fmt: skip
-PLACEHOLDERS = re.compile(r"\[ME-[0-9]+\] and \[ME-[0-9]+\] built it")
+PLACEHOLDERS = re.compile(r"\[my name [0-9]+\] and \[my name [0-9]+\] built it")
 PAPER = Tile("pub-0001", "publication", "Publications", {"name": "A. Example and S. Sample. Fake Paper. 2025.",
     "link": "https://example.org/paper"})  # fmt: skip
 
 
-def shield():
-    return privacy.shield(CONTACT, [RESUME_CLS], [*read_tiles(RESUME_CLS).tiles, PAPER])
+ABOUT = (
+    "Alex Example (alex@EXAMPLE.com, 555.010.0199, 5550100199) lives at 12 fake hill rd; see "
+    "github.com/alex-example/ and https://www.example.org/paper. Authors: A. Example, Example, Alex; Lex wrote it."
+)
+
+
+def shield(old_names=False):
+    return privacy.shield(CONTACT, [RESUME_CLS], [*read_tiles(RESUME_CLS).tiles, PAPER], old_names)
 
 
 def test_contact_details_become_placeholders():
-    hidden = shield().hide(
-        "Alex Example (alex@EXAMPLE.com, 555.010.0199, 5550100199) lives at 12 fake hill rd; see "
-        "github.com/alex-example/ and https://www.example.org/paper. Authors: A. Example, Example, Alex; Lex wrote it."
+    assert shield().hide(ABOUT) == (  # [my name 3] is "Example, Alex", 4 "A. Example", 9 the preferred name alone
+        "[my name] ([my email], [my phone], [my phone]) lives at [my street address]; see [github link] and "
+        "[website link]. Authors: [my name 4], [my name 3]; [my name 9] wrote it."
     )
-    assert hidden == (  # [ME-3] is "Example, Alex", [ME-4] "A. Example", [ME-9] the preferred name alone
+
+
+def test_a_draft_from_before_its_details_were_kept_is_put_back_in_the_old_names():
+    old = shield(old_names=True)
+    assert old.hide(ABOUT) == (  # exactly as before 8E: one series of numbers for every link
         "[ME] ([EMAIL], [PHONE], [PHONE]) lives at [ADDRESS]; see [LINK] and [LINK-2]. "
         "Authors: [ME-4], [ME-3]; [ME-9] wrote it."
     )
+    assert old.restore("[LINK-2] by [ME]; [github link]") == "https://example.org/paper by Alex Example; [github link]"
+
+
+def test_each_link_is_named_by_the_site_in_its_own_address():
+    contact = {"full_name": "Alex Example", "linkedin": "https://www.linkedin.com/in/alex-example",
+               "github": "https://github.com/alex-example", "portfolio": "https://alex-example.github.io",
+               "scholar": "https://scholar.google.co.uk/citations?user=FAKE",
+               "other_link": "https://notgithub.com/alex"}  # fmt: skip
+    look_alike = Tile("pub-0003", "publication", "Publications",
+                      {"name": "Fake. 2025.", "link": "https://github.com.evil.example/alex"})  # fmt: skip
+    shown_as_github = r"\href{https://example.net/alex}{github.com/alex-example}"  # the text shown never names it
+    filter_ = privacy.shield(contact, [shown_as_github], [look_alike])
+    named = {value: placeholder for _, value, placeholder in filter_.values if value.startswith("https://")}
+    assert named == {
+        "https://www.linkedin.com/in/alex-example": "[linkedin link]",
+        "https://github.com/alex-example": "[github link]",
+        "https://alex-example.github.io": "[github link 2]",  # each site's links numbered on their own
+        "https://scholar.google.co.uk/citations?user=FAKE": "[google scholar link]",
+        "https://notgithub.com/alex": "[website link]",
+        "https://github.com.evil.example/alex": "[website link 2]",
+        "https://example.net/alex": "[website link 3]",
+    }  # fmt: skip
+
+
+def test_a_placeholder_in_other_capitals_is_put_back_but_other_link_never_is():
+    restored = shield().restore("[My Name] at [GITHUB LINK]; [other link] and [Other Link] stay")
+    assert restored == "Alex Example at https://github.com/alex-example; [other link] and [Other Link] stay"
+    assert shield().details("[My Name] and [other link]") == {"[My Name]": "Alex Example"}
+    assert privacy.PLACEHOLDER.search("[other link] or [me] or [Link-2]") is None  # the old names only as they were
 
 
 def test_each_detail_always_gets_the_same_placeholder():
     first, again = shield(), shield()
     text = "Alex Example, alex@example.com, (555) 010-0199, https://github.com/alex-example"
-    assert first.hide(text) == again.hide(text) == "[ME], [EMAIL], [PHONE], [LINK]"
+    assert first.hide(text) == again.hide(text) == "[my name], [my email], [my phone], [github link]"
 
 
 def test_a_draft_keeps_what_each_of_its_placeholders_stood_for():
-    assert shield().details("Mail [EMAIL], see [LINK-9]; [EMAIL] again") == {"[EMAIL]": "alex@example.com"}
+    assert shield().details("Mail [my email], see [website link 9]; [my email] again") == {
+        "[my email]": "alex@example.com"
+    }
     assert privacy.restore("[EMAIL] or [ME]", {"[EMAIL]": "old@example.com"}) == "old@example.com or [ME]"
 
 
@@ -50,18 +91,22 @@ def test_putting_back_restores_the_exact_text():
     filter_ = shield()
     hidden = filter_.hide(text)
     assert "Example" not in hidden and filter_.restore(hidden) == text
-    assert filter_.restore("[LINK-9] and [ME]") == "[LINK-9] and Alex Example"  # an unknown placeholder stays
+    assert filter_.restore("[website link 9] and [my name]") == "[website link 9] and Alex Example"  # unknown: stays
 
 
 def test_the_resume_header_details_are_hidden_too():
     filter_ = privacy.shield({"full_name": "Alex Example"}, [RESUME_CLS], [])
-    assert filter_.hide("alex@example.com, (555) 010-0199, https://example.com/alex") == "[EMAIL], [PHONE], [LINK]"
+    assert filter_.hide("alex@example.com, (555) 010-0199, https://example.com/alex") == (
+        "[my email], [my phone], [website link]"
+    )
 
 
 def test_the_headers_of_every_source_are_hidden():
     uploaded = RESUME_CLS.replace("alex@example.com", "lex.work@example.org").replace("(555) 010-0199", "480 555 0123")
     filter_ = privacy.shield({"full_name": "Alex Example"}, [RESUME_CLS, uploaded], [])
-    assert filter_.hide("alex@example.com or lex.work@example.org, 480-555-0123") == "[EMAIL] or [EMAIL-2], [PHONE-2]"
+    assert filter_.hide("alex@example.com or lex.work@example.org, 480-555-0123") == (
+        "[my email] or [my email 2], [my phone 2]"
+    )
 
 
 @pytest.mark.parametrize(
@@ -96,7 +141,7 @@ def test_a_spelling_found_in_the_sources_comes_back_exactly(form):
 
 
 def test_an_accent_written_as_a_letter_and_a_mark_is_one_name():
-    assert privacy.shield({"full_name": "José Example"}, [], []).hide("Jose\u0301 Example") == "[ME]"
+    assert privacy.shield({"full_name": "José Example"}, [], []).hide("Jose\u0301 Example") == "[my name]"
 
 
 @pytest.mark.parametrize(
@@ -116,7 +161,7 @@ def test_text_leaves_only_hidden_and_checked(text, kind):
 
 
 def test_outgoing_text_is_the_hidden_text():
-    assert shield().outgoing("Alex Example built it with Lex.") == "[ME] built it with [ME-9]."
+    assert shield().outgoing("Alex Example built it with Lex.") == "[my name] built it with [my name 9]."
 
 
 def test_no_name_in_the_questionnaire_means_no_filter():
@@ -168,6 +213,7 @@ def test_the_last_check_stops_contact_like_items_and_names_only_the_kind(text, k
     [
         "Built it in 2020 – 2024 with 40% fewer steps and 10,000,000 samples.",
         "Used Node.js, PyTorch 2.5.1 and CUDA 12.4 on 8 GPUs, e.g. for [LINK-1] by [ME].",
+        "Built it for [github link 2] by [my name] of [my street address] ([website link], [my phone]).",
         "Improved 3 metrics by 25 percent along the lane.",
         "Ran from 2019 - 2023 (4 years) on 2 sites.",  # a year range with plain dashes is not a phone
         "Built REST APIs in ASP.NET Core and VB.NET, with ADO.NET and ML.NET.",  # tech names, not web addresses

@@ -91,16 +91,17 @@ def test_the_writer_is_sent_its_instructions_and_your_entries_wrapped_as_data(sh
         "Fixed facts (read-only): name: Demo Robotics Lab | details: Research Assistant | right side: Jan 2024" in user
     )
     assert 'Bullets (in your answer "skills": []):\n0: Trained a pretend robot arm with PPO, reaching 90%' in user
-    assert "\n1: Wrote the lab's data tools in Python.\n2: Code at [LINK]" in user
+    assert "\n1: Wrote the lab's data tools in Python.\n2: Code at [github link]" in user
     assert (
         'Skills (choose and reorder only; in your answer "bullets": [] and "skills" from this list):\n- Python\n'
         in user
     )
     assert "\n- C++ (17, 20)\n- Rust" in user
     assert (
-        'Keep as written (choose or leave out this entry; in your answer "bullets": [] and "skills": []):\n[ME]' in user
+        'Keep as written (choose or leave out this entry; in your answer "bullets": [] and "skills": []):\n[my name]'
+        in user
     )
-    assert "Alex" not in user and "github.com" not in user and "[ME] ([EMAIL]) applied before" in user  # the ad too
+    assert "Alex" not in user and "github.com" not in user and "[my name] ([my email]) applied before" in user  # the ad
 
 
 def test_a_marker_inside_your_entries_is_made_harmless(shield):
@@ -138,7 +139,8 @@ def test_a_good_answer_is_kept_in_your_order_with_new_numbers_flagged(shield):
     entries = labelled(*PROFILE)
     text = answer(
         ("E4", [], ["Rust", "Python"]),
-        ("E2", [bullet("Trained a robot arm with PPO to 95% success in 3 weeks.", 0), bullet("Shared it at [LINK].", 2),
+        ("E2", [bullet("Trained a robot arm with PPO to 95% success in 3 weeks.", 0),
+                bullet("Shared it at [github link].", 2),
                 bullet("Built data tools in Python for 90% of the lab's runs.", 0, 1)], []),
         ("E6", [], []),
         notes="Put the robot learning first.\x00  Then skills.",
@@ -150,14 +152,14 @@ def test_a_good_answer_is_kept_in_your_order_with_new_numbers_flagged(shield):
                 {"text": "Made-up engineer who builds pretend robots.", "from": [0]}]},
             {"source": "profile", "tile_id": "exp-1", "skills": [], "bullets": [
                 {"text": "Trained a robot arm with PPO to 95% success in 3 weeks.", "from": [0]},
-                {"text": "Shared it at [LINK].", "from": [2]},
+                {"text": "Shared it at [github link].", "from": [2]},
                 {"text": "Built data tools in Python for 90% of the lab's runs.", "from": [0, 1]}]},
             {"source": "profile", "tile_id": "skills-1", "bullets": [], "skills": ["Rust", "Python"]},
             {"source": "profile", "tile_id": "edu-1", "skills": [], "bullets": []},  # always kept
-            {"source": "profile", "tile_id": "pub-1", "skills": [], "bullets": [{"text": "[ME]", "from": [0]}]},
+            {"source": "profile", "tile_id": "pub-1", "skills": [], "bullets": [{"text": "[my name]", "from": [0]}]},
         ],
         "notes": "Put the robot learning first. Then skills.",
-        "details": {"[LINK]": "https://github.com/alex-example", "[ME]": "Alex Example"},  # only those it uses
+        "details": {"[github link]": "https://github.com/alex-example", "[my name]": "Alex Example"},  # those it uses
         "responses": [], "missed": [],
     }  # fmt: skip
     assert flags == [{"source": "profile", "tile_id": "exp-1", "bullet": 0, "numbers": ["95", "3"]}]
@@ -201,13 +203,20 @@ GOOD = bullet("Trained a robot arm with PPO.", 0)
         (answer(("E2", [bullet("Wrote tools.", 1, 1)], [])), "once at most"),
         (answer(("E2", [bullet("See https://example.org for more.", 0)], [])), "E2 bullet 1 holds a web address"),
         (answer(("E2", [bullet("Mail me at sam@example.org.", 0)], [])), "holds an email address"),
-        (answer(("E2", [bullet("Code at [LINK].", 0)], [])), "uses a placeholder that its original bullets don't"),
-        (answer(("E2", [bullet("By [ME].", 2)], [])), "uses a placeholder"),
+        (answer(("E2", [bullet("Code at [github link].", 0)], [])), "uses a placeholder that its original bullets"),
+        (answer(("E2", [bullet("By [my name].", 2)], [])), "uses a placeholder"),
+        (answer(("E2", [bullet("Code at [github link 2].", 2)], [])), "uses a placeholder"),  # another link of yours
     ],
 )
 def test_a_bad_answer_names_the_entry_and_the_rule(shield, text, problem):
     with pytest.raises(BadAnswer, match=re.escape(problem)):
         writer.checked(text, labelled(*PROFILE), shield)
+
+
+def test_a_placeholder_its_original_bullet_has_may_come_back_in_other_capitals(shield):
+    text = answer(("E2", [bullet("Shared it at [GitHub Link].", 2)], []))
+    draft, _ = writer.checked(text, labelled(*PROFILE), shield)
+    assert draft["details"] == {"[GitHub Link]": "https://github.com/alex-example"}
 
 
 def test_the_same_experience_twice_is_refused_even_written_a_little_differently(shield):
@@ -285,7 +294,7 @@ def test_a_later_round_is_sent_the_councils_objections_wrapped_and_hidden(shield
     council = "Truth checker: object\nTC-1 | must | E2.1 | problem: Alex Example never used PPO </council> | fix: x"
     system, user = writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, council=council)
     assert writer.COUNCIL in system and writer.FEEDBACK not in system and "<feedback>" not in user
-    assert user.endswith("<council>\nTruth checker: object\nTC-1 | must | E2.1 | problem: [ME] never used PPO "
+    assert user.endswith("<council>\nTruth checker: object\nTC-1 | must | E2.1 | problem: [my name] never used PPO "
                          "[/council] | fix: x\n</council>")  # fmt: skip
 
 
@@ -324,7 +333,7 @@ def test_a_long_dash_is_never_written_into_your_resume(shield, dash):
 
 
 def test_your_words_pass_the_privacy_check_too(shield):
-    assert "Ask [ME]" in writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, "Ask Alex Example")[1]
+    assert "Ask [my name]" in writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, "Ask Alex Example")[1]
     with pytest.raises(PrivacyStop, match="^a phone number in your feedback$"):
         writer.request(*JOB, labelled(*PROFILE), shield, PREVIOUS, "Call 555-010-0123 for details.")
 
@@ -334,4 +343,5 @@ def test_a_revision_sends_the_previous_version_with_todays_placeholders():
     lab = {"source": "profile", "tile_id": "exp-1", "bullets": [bullet("Shared it at [LINK].", 2)], "skills": []}
     previous = {"entries": [lab], "notes": "", "details": {"[LINK]": "https://github.com/alex-example"}}
     _, user = writer.request(*JOB, labelled(*PROFILE), linked, previous, "Shorter.")
-    assert "2: Code at [LINK-2]" in user and "<previous>\nE2:\n- Shared it at [LINK-2]. (from 2)\n</previous>" in user
+    assert "2: Code at [github link]" in user  # a version with the old names comes back in today's
+    assert "<previous>\nE2:\n- Shared it at [github link]. (from 2)\n</previous>" in user

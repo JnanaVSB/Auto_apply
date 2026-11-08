@@ -368,7 +368,7 @@ def test_your_own_members_instructions_pass_the_privacy_gate(conn, data_dir, job
     version = flow.start(conn, config, job)
     finish(conn, flow.advance(conn, config, version)[0], GOOD)
     scout = flow.advance(conn, config, version)[-1]
-    assert scout.member == "x1" and scout.system.startswith("[ME] wants robotics first.")  # your name hidden
+    assert scout.member == "x1" and scout.system.startswith("[my name] wants robotics first.")  # your name hidden
     (data_dir / "skills" / "x1.md").write_text("Write to scout@example.com.", encoding="utf-8")
     assert flow.advance(conn, config, version) == []  # before anything more is sent
     assert one(conn, "SELECT status, problem FROM preparations WHERE id = ?", version) == (
