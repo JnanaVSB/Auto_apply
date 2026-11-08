@@ -38,6 +38,7 @@
 </div>
 
 <div hx-get="/jobs/{{ job.id }}/preparation" hx-trigger="load" hx-swap="outerHTML"></div>  {# Ready to Apply #}
+<div id="scoring-ask"></div>  {# "Scoring is currently running": the box's question after a press #}
 <div hx-get="/jobs/{{ job.id }}/form" hx-trigger="load" hx-swap="outerHTML"></div>  {# Application form #}
 
 {% set scoring = job.scoring %}
@@ -160,4 +161,5 @@
 {% else %}
 <p class="muted">Description not fetched yet (this site has no public job data; a later phase will read it).</p>
 {% endif %}
+<script src="/static/notify.js" defer></script>
 {% endblock %}

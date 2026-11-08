@@ -83,9 +83,11 @@ def recover(conn: sqlcipher3.Connection) -> None:
                 conn.execute(WAIT, (1, 0, None, reason[:300], step))
 
 
-def laptop_work(conn: sqlcipher3.Connection) -> bool:
-    """Whether a version being written uses a model on this computer: automatic scoring then waits (owner)."""
-    for found in conn.execute(LAPTOP):
+def laptop_work(conn: sqlcipher3.Connection, job_id: int | None = None) -> bool:
+    """Whether a version being written (of any job, or of `job_id`) uses a model on this computer: automatic scoring
+    then waits (owner)."""
+    query, values = (LAPTOP, ()) if job_id is None else (f"{LAPTOP} AND job_id = ?", (job_id,))
+    for found in conn.execute(query, values):
         roles = [json.loads(found[0]), *runs.council(found[1])["members"].values()]
         if any(role.get("service", "ollama") == "ollama" for role in roles):
             return True

@@ -2,10 +2,13 @@
 from the once-a-minute check. Progress is kept in memory; results are saved job by job, as in the terminal."""
 
 import logging
+import sqlite3
 import threading
-from contextlib import closing
+import time
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 
 import sqlcipher3
@@ -21,6 +24,9 @@ from app.scoring import files, queue, stage_a
 STOP_WAIT_SECONDS = 5  # how long closing the dashboard waits for scoring to stop after its current job
 RETRY_AFTER = timedelta(minutes=30)  # automatic scoring waits this long after a failed run
 STOPPED = "Stopped. Every job scored before that is saved."
+GAVE_WAY = "The Writer goes first on the graphics card: automatic scoring carries on once it's done."
+LET_GO = "A collection is running: the graphics card is free for the Writer meanwhile."
+BACK = "The collection and the Writer are done: scoring continues."
 log = logging.getLogger("app.web")
 
 
@@ -33,6 +39,8 @@ class Scorer:
     failed_at: datetime | None = None  # when the last run failed: automatic scoring waits RETRY_AFTER
     notice: str | None = None  # why the last request did not start; shown once on the Collect page
     automatic: bool = False  # the current or last run was started by automatic scoring
+    holding: bool = False  # this run holds the graphics card's turn (not while it lets go during a collection)
+    _held: sqlite3.Connection | None = None
     _thread: threading.Thread | None = None
     _stop: threading.Event = field(default_factory=threading.Event)
     _starting: threading.Lock = field(default_factory=threading.Lock)
@@ -59,11 +67,15 @@ class Scorer:
 
     def _run(self, job_ids: list[int] | None, model: str | None) -> None:
         try:
-            with closing(collect.lock(self.data_dir, score.SCORE_LOCK, score.BUSY)):
+            self._take()
+            try:
                 config = _with_model(load_config(), model)
                 prepared = score.prepare(config, self.fetcher, self.lines.append)
                 with closing(db.connect(self.data_dir)) as conn:  # opened by the dashboard already: no upgrade
-                    queue.run(conn, config, *prepared, job_ids=job_ids, stop=self._check_stop, out=self.lines.append)
+                    stop = partial(self._check, conn)
+                    queue.run(conn, config, *prepared, job_ids=job_ids, stop=stop, out=self.lines.append)
+            finally:
+                self._let_go()
             self.state, self.failed_at = "done", None
         except KeyboardInterrupt:
             self.lines.append(STOPPED)
@@ -81,9 +93,35 @@ class Scorer:
         self.lines.append(line)
         self.state, self.failed_at = "failed", datetime.now(UTC)
 
-    def _check_stop(self) -> None:
-        if self._stop.is_set():
-            raise KeyboardInterrupt  # what Ctrl+C does to the command: what is finished stays saved
+    def _check(self, conn: sqlcipher3.Connection) -> None:
+        """Between jobs, and while paused: Stop, automatic scoring giving way to the Writer, and the graphics card let
+        go while a collection runs (it doesn't use it), taken back once the collection and the Writer are both done."""
+        while True:
+            if self.automatic and not self._stop.is_set() and runner.laptop_work(conn):
+                self.lines.append(GAVE_WAY)
+                self._stop.set()
+            if self._stop.is_set():
+                raise KeyboardInterrupt  # what Ctrl+C does to the command: what is finished stays saved
+            collecting = queue.collection_running(conn)
+            if self.holding and not collecting:
+                return
+            if self.holding:
+                self._let_go()
+                self.lines.append(LET_GO)
+            elif not collecting and not runner.laptop_work(conn):
+                with suppress(collect.CollectError):  # another run has it for a moment: try again shortly
+                    self._take()
+                    self.lines.append(BACK)
+                    return
+            time.sleep(queue.PAUSE_CHECK_SECONDS)
+
+    def _take(self) -> None:
+        self._held, self.holding = collect.lock(self.data_dir, score.SCORE_LOCK, score.BUSY), True
+
+    def _let_go(self) -> None:
+        if self._held is not None:
+            self._held.close()
+        self._held, self.holding = None, False
 
     def cancel(self) -> None:
         """The Stop scoring button: scoring stops after its current job; everything finished stays saved."""
