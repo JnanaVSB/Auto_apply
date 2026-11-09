@@ -1,6 +1,9 @@
 /* auto_apply design kit. Fonts and icons are stored in the app; nothing is loaded from the internet.
    Colours and corner shapes live in the tokens (the bottom bar and the Table | Cards switch round to their own
-   height); spacing mostly uses the --space steps. So a second skin is mostly a token override. */
+   height); spacing mostly uses the --space steps. So a second skin is mostly a token override.
+   Two layers, as Apple's Liquid Glass defines them: the floating frame (rail, cost bar, phone bar and menu panel,
+   dialogs, the job table's header, the skip link, the Table | Cards switch) is glass; the content (cards, lanes,
+   forms, tables, notices) sits on solid surfaces with soft depth. Never glass on glass. */
 
 /* ---------- Fonts ---------- */
 @font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3VF-Upright.ttf.woff2") format("woff2");
@@ -26,17 +29,42 @@
   --warn: light-dark(#8a4f00, #e7b565); --warn-soft: light-dark(#fdf0d9, #2c2416);
   --danger: light-dark(#b3261e, #f0928a); --danger-soft: light-dark(#fce9e7, #311c1a);
   --highlight: light-dark(#ffe58f, #665214); --on-highlight: light-dark(#1b2128, #e6e9ed);  /* <mark> */
-  --glass: color-mix(in srgb, var(--surface) 86%, transparent);  /* the bottom bar */
-  --shadow: 0 1px 2px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 40%)),
-    0 4px 16px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 35%));
-  --shadow-raised: 0 2px 4px light-dark(rgb(27 33 40 / 6%), rgb(0 0 0 / 45%)),
-    0 12px 32px light-dark(rgb(27 33 40 / 12%), rgb(0 0 0 / 55%));
+  --hover: color-mix(in srgb, var(--text) 7%, transparent);  /* a hovered row or item, on any surface */
+  --wash: color-mix(in srgb, var(--accent) 10%, transparent);  /* the page background's quiet tint, at its corner */
+
+  /* Glass, for the floating layer only. Regular glass sits over the page background alone (rail, cost bar, switch);
+     thick glass sits where content scrolls beneath (phone bar, menu panel, dialogs, the job table's header). The
+     amounts keep text at 4.5:1 or more over the worst colour behind (hand-over: contrast numbers). */
+  --glass: color-mix(in srgb, var(--surface) 72%, transparent);
+  --glass-thick: color-mix(in srgb, var(--surface) 88%, transparent);
+  --glass-blur: blur(24px) saturate(150%);
+  --glass-line: color-mix(in srgb, var(--text) 11%, transparent);  /* the hairline round the glass */
+  --glass-edge: light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 9%));  /* light catching its top edge */
+  --glass-shadow: inset 0 1px 0 var(--glass-edge), 0 1px 2px light-dark(rgb(0 0 0 / 4%), rgb(0 0 0 / 30%)),
+    0 10px 30px -6px light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 50%));
+  /* Content depth: a soft contact shadow and a wider ambient one; raised for what lifts (hover, the login card). */
+  --shadow: 0 1px 2px light-dark(rgb(0 0 0 / 5%), rgb(0 0 0 / 35%)),
+    0 6px 18px -8px light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 45%));
+  --shadow-raised: 0 2px 4px light-dark(rgb(0 0 0 / 5%), rgb(0 0 0 / 40%)),
+    0 14px 34px -10px light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 60%));
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);  /* every movement: quick start, soft landing */
+  --lit: inset 0 1px 0 rgb(255 255 255 / 18%);  /* light along the top of a coloured fill */
+
+  /* Text sizes: eight named steps, each with its line spacing; rem, so they grow with the browser's text size. */
+  --text-caption: 0.75rem;   --leading-caption: 1.4;   /* 12 px: rail words, phone-bar caption, Tracker days */
+  --text-small: 0.8125rem;   --leading-small: 1.45;    /* 13 px: labels, table headers, card details */
+  --text-ui: 0.875rem;       --leading-ui: 1.5;        /* 14 px: cost bar, secondary lines */
+  --text-compact: 0.9375rem; --leading-compact: 1.3;   /* 15 px: Tracker lane names and card titles */
+  --text-body: 1rem;         --leading-body: 1.6;      /* 16 px: reading text, every field */
+  --text-heading: 1.0625rem; --leading-heading: 1.35;  /* 17 px: h3, card titles, the company line */
+  --text-title: 1.25rem;     --leading-title: 1.3;     /* 20 px: h2, the card score */
+  --text-display: 2rem;      --leading-display: 1.2;   /* 32 px: h1 (26 px on phones) */
 
   --radius-s: 10px; --radius: 14px; --radius-l: 20px; --radius-pill: 999px;
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
   --tap: 3rem;           /* 48 px touch targets below 64rem */
   --control: 2.5rem;     /* 40 px controls with a mouse */
-  --rail: 5.5rem;        /* the icon rail */
+  --rail: 6rem;          /* the icon rail, with the clear border that lets it float */
   --lane-min: 11rem;     /* Tracker: lanes share the width down to this, then the board scrolls inside its box */
   color-scheme: light dark;
 }
@@ -109,10 +137,14 @@
   --chrome-current: light-dark(#38422a, #2c3420); --on-chrome-current: light-dark(#ffffff, #f2f4e6);
   --chrome-mark: #d2b06a;
 }
-/* E-G: the rail, cost bar and phone bottom bar on the dark frame; table headers on a band. */
+/* E-G: the rail, cost bar and phone bottom bar on the dark frame, as smoked glass (more opaque than the light
+   glass, so its pale words keep 4.5:1 over a light page); table headers on a band. */
 :root:is([data-palette="E"], [data-palette="F"], [data-palette="G"]) {
   --chrome-warn: #e3b46a;  /* the paused notice: A-G's dark warn, in both modes */
-  .rail { background: var(--chrome); border-right-color: var(--chrome-line); }
+  --chrome-glass: color-mix(in srgb, var(--chrome) 90%, transparent);
+  .rail, .topbar, .dock > summary { --glass-edge: rgb(255 255 255 / 10%); }
+  .rail { background-color: var(--chrome-glass);  /* the colour only: the glass stays inside the rail's clear border */
+    box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 0 0 1px var(--chrome-line); }
   .rail :is(.nav-group a, .logout button) { color: var(--on-chrome); }
   .rail :is(.nav-group a, .logout button) .icon { color: var(--chrome-muted); }
   .rail :is(.nav-group li:first-child, .logout) { border-top-color: var(--chrome-line); }
@@ -122,15 +154,15 @@
   .rail .nav-group a[aria-current="page"] .icon { color: var(--on-chrome-current); }
   :is(.rail, .topbar) :focus-visible { outline-color: var(--chrome-mark); }
   .brand-mark { background: var(--chrome-mark); color: var(--chrome); }
-  .topbar { background: var(--chrome); border-bottom-color: var(--chrome-line); color: var(--chrome-muted); }
+  .topbar { background: var(--chrome-glass); border-color: var(--chrome-line); color: var(--chrome-muted); }
   .topbar > summary:hover, .topbar > :is(table, p), .dock-where strong { color: var(--on-chrome); }
+  .topbar > summary::after { border-color: var(--chrome-muted); }
   .topbar .error { color: var(--chrome-warn); }
   .topbar a { color: var(--chrome-mark); }
-  .dock > summary { background: color-mix(in srgb, var(--chrome) 92%, transparent); border-color: var(--chrome-line); }
+  .dock > summary { background: var(--chrome-glass); border-color: var(--chrome-line); }
   .dock-where .caption { color: var(--chrome-muted); }
   .dock-button { background: var(--chrome-mark); color: var(--chrome); }
   main th { background: var(--sunken); }
-  @media (prefers-reduced-transparency: reduce) { .dock > summary { background: var(--chrome); } }
 }
 /* Browsers without light-dark() (before Chrome 123, Firefox 120, Safari 17.5) would drop every colour: they get
    Teal light as plain colours, whatever is chosen; the frame tokens take Teal's frame. */
@@ -140,9 +172,13 @@
     --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2; --text: #1b2128; --muted: #56606b;
     --line: #e1e5ea; --line-strong: #7e8894; --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
     --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e;
-    --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128; --glass: #ffffff;
-    --shadow: 0 1px 2px rgb(27 33 40 / 6%), 0 4px 16px rgb(27 33 40 / 6%);
-    --shadow-raised: 0 2px 4px rgb(27 33 40 / 6%), 0 12px 32px rgb(27 33 40 / 12%);
+    --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
+    --hover: rgb(27 33 40 / 7%); --wash: rgb(15 106 128 / 10%);
+    --glass: rgb(255 255 255 / 72%); --glass-thick: rgb(255 255 255 / 88%); --chrome-glass: #ffffff;
+    --glass-line: rgb(27 33 40 / 11%); --glass-edge: rgb(255 255 255 / 80%);
+    --glass-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 1px 2px rgb(0 0 0 / 4%), 0 10px 30px -6px rgb(0 0 0 / 12%);
+    --shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 6px 18px -8px rgb(0 0 0 / 12%);
+    --shadow-raised: 0 2px 4px rgb(0 0 0 / 5%), 0 14px 34px -10px rgb(0 0 0 / 18%);
     --chrome: #ffffff; --on-chrome: #1b2128; --chrome-muted: #56606b; --chrome-line: #e1e5ea;
     --chrome-current: #e3f1f5; --on-chrome-current: #0f6a80; --chrome-mark: #0f6a80; --chrome-warn: #8a4f00;
   }
@@ -152,24 +188,44 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; padding-top: env(safe-area-inset-top); background: var(--bg); color: var(--text);
-  font-family: var(--sans); font-size: 1rem; line-height: 1.6; }
+  font-family: var(--sans); font-size: var(--text-body); line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+/* The page background: a quiet wash of the scheme's accent from two corners, fixed, never moving, so the glass has
+   something to pick up. Text on it keeps 4.5:1 in every scheme (hand-over: contrast numbers). */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(80rem 55rem at 0 0, var(--wash), transparent 70%),
+    radial-gradient(60rem 45rem at 100% 100%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 70%); }
 h1, h2 { font-family: var(--serif); font-weight: 600; }
-h1 { margin: 0 0 var(--space-4); font-size: 2rem; line-height: 1.2; letter-spacing: -0.02em; }
-h2 { margin: var(--space-5) 0 var(--space-3); font-size: 1.25rem; line-height: 1.3; letter-spacing: -0.01em; }
-h3 { margin: var(--space-4) 0 var(--space-2); font-size: 1.0625rem; line-height: 1.35; font-weight: 600; }
+h1 { margin: 0 0 var(--space-4); font-size: var(--text-display); line-height: var(--leading-display);
+  letter-spacing: -0.02em; }
+h2 { margin: var(--space-5) 0 var(--space-3); font-size: var(--text-title); line-height: var(--leading-title);
+  letter-spacing: -0.01em; }
+h3 { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-heading); line-height: var(--leading-heading);
+  font-weight: 600; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
 a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
 a:hover { text-decoration-thickness: 2px; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 mark { background: var(--highlight); color: var(--on-highlight); }
 table { font-variant-numeric: tabular-nums; }
-@media (width < 40rem) { h1 { font-size: 1.625rem; line-height: 1.25; letter-spacing: -0.015em; } }
+@media (width < 40rem) {
+  :root { --text-display: 1.625rem; --leading-display: 1.25; }
+  h1 { letter-spacing: -0.015em; }
+}
 
 /* ---------- Frame: icon rail (40rem and wider), bottom bar and menu panel (phones) ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* The glass itself: a translucent fill from the surface colour, a blur that lifts the colours behind it, a hairline
+   and a bright top edge. Each piece below adds its own shape. */
+.skip, .rail, .topbar, .dock > summary, .sheet, dialog.ask, .view-switch {
+  background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow); }
+.skip, .dock > summary, .sheet, dialog.ask { background: var(--glass-thick); }
 .skip { position: absolute; left: var(--space-4); top: -5rem; z-index: 40; display: inline-flex; align-items: center;
-  min-height: var(--tap); padding: 0 var(--space-4); border-radius: var(--radius-s); background: var(--surface);
-  box-shadow: var(--shadow-raised); }
-.skip:focus { top: var(--space-2); }
+  min-height: var(--tap); padding: 0 var(--space-5); border: 1px solid var(--glass-line);
+  border-radius: var(--radius-pill); font-weight: 600; }
+.skip:focus { top: var(--space-3); }
 .icon { width: 1.25rem; height: 1.25rem; flex: none; }  /* the strokes are set in icons.svg */
 .app { display: grid; grid-template-columns: calc(var(--rail) + env(safe-area-inset-left)) minmax(0, 1fr);
   min-height: calc(100dvh - env(safe-area-inset-top)); }
@@ -178,24 +234,29 @@ main { max-width: 72rem; padding: var(--space-6) var(--space-5) 4rem; }
 /* Login and problem pages: no menu, one centred card. */
 body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) auto; padding: var(--space-6);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-l);
-  box-shadow: var(--shadow); }
+  box-shadow: var(--shadow-raised); }
 
-/* The rail: icons with short words, one block per group (a block can later become a fold-out). */
-.rail { --floor: 2.25rem; position: sticky; top: env(safe-area-inset-top);
+/* The rail: icons with short words, one block per group (a block can later become a fold-out). It floats: a clear
+   border of --inset round it shows the page between the glass and the window's edges (the glass is drawn inside
+   the border, and its hairline and top edge are inner shadows, so they sit on the glass too). */
+.rail { --floor: 2.25rem; --inset: var(--space-2); position: sticky; top: env(safe-area-inset-top);
   height: calc(100dvh - env(safe-area-inset-top)); overflow-y: auto; display: flex;
-  flex-direction: column; gap: 2px; padding: var(--space-2);
-  padding-left: calc(var(--space-2) + env(safe-area-inset-left));
-  background: var(--surface); border-right: 1px solid var(--line); scrollbar-width: thin; }
-.brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; margin: 0 auto var(--space-2);
-  border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: 0.875rem;
+  flex-direction: column; gap: 2px; padding: var(--space-2) var(--space-1);
+  margin-left: env(safe-area-inset-left); border: var(--inset) solid transparent;
+  border-radius: calc(var(--radius-l) + var(--inset)); background-clip: padding-box;
+  box-shadow: inset 0 1px 0 var(--glass-edge), inset 0 0 0 1px var(--glass-line); scrollbar-width: none; }
+.brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; margin: var(--space-1) auto var(--space-2);
+  border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: var(--text-ui);
   font-weight: 700; }
-.nav-title { margin: 0 0 var(--space-1); padding: 0 var(--space-2); font-size: 0.8125rem; line-height: 1.45;
-  letter-spacing: 0.01em; font-weight: 700; color: var(--muted); }
+.nav-title { margin: 0 0 var(--space-1); padding: 0 var(--space-2); font-size: var(--text-small);
+  line-height: var(--leading-small); letter-spacing: 0.01em; font-weight: 700; color: var(--muted); }
 .nav-group ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .nav-group a, .logout button { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control);
   padding: 0 var(--space-3); border: 0; border-radius: var(--radius-s); background: none; color: var(--text);
-  text-decoration: none; font-weight: 500; }
-.nav-group a:hover, .logout button:hover { background: var(--sunken); }
+  text-decoration: none; font-weight: 500;
+  transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out); }
+.nav-group a:hover, .logout button:hover { background: var(--hover); }
+.nav-group a:active { transform: scale(0.96); }
 .nav-group a .icon, .logout .icon { color: var(--muted); }
 /* The current page: tint, bold and a bar, not colour alone. */
 .nav-group a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
@@ -207,10 +268,10 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .rail .nav-group li, .rail .logout { --edge: 0px; display: flex; flex: 0 1 calc(3.25rem + var(--edge));
   min-height: calc(var(--floor) + var(--edge)); }
 .rail .nav-group li:first-child, .rail .logout { --edge: calc(var(--space-1) + 1px); padding-top: var(--space-1);
-  border-top: 1px solid var(--line); }
+  border-top: 1px solid var(--glass-line); }
 .rail .nav-group li:first-child { margin-top: var(--space-1); }
 .rail .nav-group a, .rail .logout button { flex: 1; flex-direction: column; justify-content: center; gap: 0.125rem;
-  min-height: 0; padding: 0 var(--space-1); text-align: center; font-size: 0.75rem; line-height: 1.15;
+  min-height: 0; padding: 0 var(--space-1); text-align: center; font-size: var(--text-caption); line-height: 1.15;
   font-weight: 600; white-space: nowrap; }
 .rail .nav-group a[aria-current="page"] { box-shadow: inset 0 -3px 0 var(--accent); }
 @media (pointer: coarse) {
@@ -219,13 +280,16 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .logout { margin: 0; }
 .rail .logout { margin-top: auto; }
 
-/* The council cost bar: a compact strip above the page; the member table under its summary. */
-.topbar { background: var(--surface); border-bottom: 1px solid var(--line); font-size: 0.875rem; line-height: 1.5;
-  color: var(--muted); }
-.topbar > summary { padding: var(--space-2) var(--space-5); cursor: pointer; }
+/* The council cost bar: a compact glass strip floating above the page, level with the rail's top; the member table
+   under its summary. */
+.topbar { margin: var(--space-2) var(--space-5) 0; border: 1px solid var(--glass-line);
+  border-radius: var(--radius-l); font-size: var(--text-ui); line-height: var(--leading-ui); color: var(--muted); }
+.topbar > summary { position: relative; padding: var(--space-2) 2.75rem var(--space-2) var(--space-4);
+  border-radius: inherit; cursor: pointer; font-variant-numeric: tabular-nums;
+  transition: color 160ms var(--ease-out); }
 .topbar > summary:hover { color: var(--text); }
 .topbar .error { color: var(--warn); font-weight: 650; }
-.topbar > table, .topbar > p { margin: 0 var(--space-5) var(--space-3); }
+.topbar > table, .topbar > p { margin: 0 var(--space-4) var(--space-3); }
 .topbar > table { display: block; max-width: max-content; overflow-x: auto; border-collapse: collapse; }
 .topbar th, .topbar td { padding: var(--space-1) var(--space-4) var(--space-1) 0; text-align: left; }
 
@@ -234,44 +298,53 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
   right: calc(var(--space-3) + env(safe-area-inset-right));
   bottom: calc(var(--space-3) + env(safe-area-inset-bottom)); }
 /* The phone menu, the Filters fold and the Tracker lanes draw their own marker, not the browser's triangle. */
-:is(.dock, .filters-fold, .lane) > summary { list-style: none; }
-:is(.dock, .filters-fold, .lane) > summary::-webkit-details-marker { display: none; }
+:is(.dock, .topbar, .filters-fold, .lane) > summary { list-style: none; }
+:is(.dock, .topbar, .filters-fold, .lane) > summary::-webkit-details-marker { display: none; }
 /* With large text the page name wraps between its words first; Menu moves to a second line only when the name's
    longest word can't sit beside it. On one line the bar is still a pill (radius = half of 3.5rem). */
 .dock > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
-  min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem; border: 1px solid var(--line);
-  border-radius: 1.75rem; background: var(--glass);
-  -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
-  box-shadow: var(--shadow-raised); cursor: pointer; }
+  min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem;
+  border: 1px solid var(--glass-line); border-radius: 1.75rem; cursor: pointer; }
 .dock-where { display: grid; flex: 1 1 auto; width: min-content; line-height: 1.25; }
-.dock-where .caption { font-size: 0.75rem; letter-spacing: 0.01em; color: var(--muted); }
+.dock-where .caption { font-size: var(--text-caption); letter-spacing: 0.01em; color: var(--muted); }
 .dock-where strong { font-weight: 650; }
 .dock-button { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 2.75rem; margin-left: auto;
   padding: 0 var(--space-4); border-radius: var(--radius-pill); background: var(--accent); color: var(--on-accent);
-  font-weight: 650; }
+  font-weight: 650; box-shadow: var(--lit);
+  transition: transform 120ms var(--ease-out), filter 160ms var(--ease-out); }
+.dock > summary:active .dock-button { transform: scale(0.95); }
 .dock[open] .when-closed, .dock:not([open]) .when-open { display: none; }
+/* The menu panel materialises out of the bar it belongs to: it grows from the bar's right end (where Menu is) as
+   its blur, size and opacity arrive together. Closing is instant. */
 .sheet { position: absolute; left: 0; right: 0; bottom: calc(100% + var(--space-2)); max-height: calc(100dvh - 8rem);
-  overflow-y: auto; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-l);
-  background: var(--surface); box-shadow: var(--shadow-raised); transform-origin: bottom center;
-  animation: sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-@keyframes sheet-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+  overflow-y: auto; padding: var(--space-4); border: 1px solid var(--glass-line); border-radius: var(--radius-l);
+  transform-origin: calc(100% - 3rem) 100%; animation: sheet-in 260ms var(--ease-out); }
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(0.75rem) scale(0.94);
+    -webkit-backdrop-filter: blur(0) saturate(100%); backdrop-filter: blur(0) saturate(100%); }
+}
 .sheet .nav-group + .nav-group { margin-top: var(--space-3); }
 .sheet .nav-group ul { grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: var(--space-2); }
-.sheet .nav-group a { min-height: var(--tap); padding: var(--space-2) var(--space-3); border: 1px solid var(--line);
-  border-radius: var(--radius); line-height: 1.3; }
+.sheet .nav-group a { min-height: var(--tap); padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--glass-line); border-radius: var(--radius); line-height: 1.3; }
 .sheet .nav-group a[aria-current="page"] { border-color: var(--accent); }
 .sheet .logout { margin-top: var(--space-4); }
-.sheet .logout button { width: 100%; justify-content: center; min-height: var(--tap); border: 1px solid var(--line);
-  border-radius: var(--radius); }
+.sheet .logout button { width: 100%; justify-content: center; min-height: var(--tap);
+  border: 1px solid var(--glass-line); border-radius: var(--radius); }
 
 @media (width < 40rem) {
   html { scroll-padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }  /* focus never hides behind the bar */
   .app { grid-template-columns: minmax(0, 1fr); padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
   .rail { display: none; }
   .dock { display: block; }
-  .topbar > summary { padding-inline: var(--space-4); }
-  .topbar > table, .topbar > p { margin-inline: var(--space-4); }
+  .topbar { margin-inline: var(--space-3); }
+  .topbar > summary { padding-left: var(--space-4); }
   main { padding: var(--space-5) var(--space-4) 3rem; }
+  /* The scroll edge: content fades out where it meets the bottom bar, instead of colliding with it. */
+  .app::after { content: ""; position: fixed; inset: auto 0 0; z-index: 29;
+    height: calc(6rem + env(safe-area-inset-bottom)); pointer-events: none;
+    background: linear-gradient(to top, color-mix(in srgb, var(--bg) 88%, transparent) 35%,
+    transparent); }
 }
 
 /* ---------- Controls ---------- */
@@ -280,11 +353,16 @@ button, .button { display: inline-flex; align-items: center; justify-content: ce
   min-height: var(--control); padding: 0 1.125rem; border: 1px solid var(--line-strong);
   border-radius: var(--radius-pill); background: var(--surface); font-weight: 600; line-height: 1.25;
   text-decoration: none; cursor: pointer;
-  transition: background-color 120ms ease-out, transform 100ms ease-out; }
+  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), color 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out), filter 160ms var(--ease-out), transform 120ms var(--ease-out); }
 button:hover, .button:hover { background: var(--sunken); }
-button:active, .button:active { transform: scale(0.97); }
-:is(button, .button).primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
-:is(button, .button).primary:hover { background: var(--accent); filter: brightness(1.08); }
+button:active, .button:active { transform: scale(0.97); }  /* feedback the moment it is pressed */
+/* "Press this": the one coloured fill, lit from above (Log in is its page's only action). */
+:is(button, .button).primary, .login button { border-color: var(--accent); background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--lit), 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent),
+    0 4px 12px -4px light-dark(color-mix(in srgb, var(--accent) 45%, transparent), rgb(0 0 0 / 50%)); }
+:is(:is(button, .button).primary, .login button):hover { background: var(--accent); filter: brightness(1.08); }
 :is(button, .button).quiet { border-color: transparent; background: transparent; color: var(--accent); }
 :is(button, .button).quiet:hover { background: var(--accent-soft); }
 :is(button, .button).danger { border-color: var(--danger); color: var(--danger); }
@@ -295,7 +373,10 @@ button:disabled { border-color: var(--line); background: var(--sunken); color: v
   transform: none; filter: none; }
 input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea { max-width: 100%;
   min-height: var(--control); padding: 0 var(--space-3); border: 1px solid var(--line-strong);
-  border-radius: var(--radius-s); background: var(--surface); }
+  border-radius: var(--radius-s); background: var(--surface);
+  transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out); }
+:is(input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea):hover { border-color: var(--text); }
+:is(input, select, textarea):focus-visible { border-color: var(--accent); }
 textarea { width: 100%; padding: var(--space-2) var(--space-3); line-height: 1.5; resize: vertical; }
 input[type="checkbox"], input[type="radio"] { width: 1.125rem; height: 1.125rem; margin: 0; vertical-align: -0.2em;
   accent-color: var(--accent); }
@@ -304,10 +385,15 @@ input[type="file"] { max-width: 100%; }
 ::placeholder { color: var(--muted); opacity: 1; }
 .stacked { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); max-width: 40rem;
   overflow-wrap: anywhere; }
-.stacked label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem; font-size: 0.875rem;
+.stacked label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.375rem; font-size: var(--text-ui);
   font-weight: 600; }
-.stacked label :is(input, select, textarea) { font-size: 1rem; font-weight: 400; }
-.stacked label.tick { display: flex; gap: var(--space-2); align-items: center; font-size: 1rem; font-weight: 400; }
+.stacked label :is(input, select, textarea) { font-size: var(--text-body); font-weight: 400; }
+.stacked label.tick { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-body);
+  font-weight: 400; }
+/* Inside a form the grid's gap alone spaces the parts; a heading adds room above, so it opens a new group. */
+.stacked > :is(p, h3) { max-width: 60ch; margin: 0; }
+.stacked > h2 { margin: var(--space-5) 0 0; }
+.stacked > h2:first-of-type { margin-top: var(--space-2); }
 .login { display: grid; gap: var(--space-2); }
 .list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--space-2); }
 .list-row input { width: 100%; }
@@ -316,25 +402,38 @@ form.inline { display: inline; }
 /* ---------- Containers ---------- */
 /* Tables: hairline rows; the job list's header row stays in view. Below 64rem a table too wide for its box scrolls
    sideways inside its own box (the page never does); there the header row stays at the top of the table. */
-main table { width: 100%; border-collapse: collapse; }
+/* A table is content: it sits on its own solid surface, its header row's corners rounded with it. */
+main table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+main th:first-child { border-top-left-radius: calc(var(--radius) - 1px); }
+main th:last-child { border-top-right-radius: calc(var(--radius) - 1px); }
+:is(.found, .filters, .truth) table { background: none; border: 0; border-radius: 0; box-shadow: none; }
 main th, main td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); text-align: left;
   vertical-align: top; }
-main th { font-size: 0.8125rem; line-height: 1.45; letter-spacing: 0.01em; font-weight: 650; color: var(--muted); }
+main th { font-size: var(--text-small); line-height: var(--leading-small); letter-spacing: 0.01em; font-weight: 650;
+  color: var(--muted); }
 main tr:last-child td { border-bottom: 0; }
-table.jobs th { position: sticky; top: 0; background: var(--bg); }
+main tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
+main tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
+main tbody tr { transition: background-color 160ms var(--ease-out); }
+main tbody tr:hover { background: var(--hover); }
+/* The job list's header row floats over the rows scrolling beneath it: thick glass. */
+table.jobs th { position: sticky; top: 0; z-index: 1; background: var(--glass-thick);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 table.jobs td.date { white-space: nowrap; }
-table.jobs .reasons { font-size: 0.9em; color: var(--muted); }
+table.jobs .reasons { font-size: var(--text-ui); color: var(--muted); }
 @media (width < 64rem) {
-  main table { display: block; overflow-x: auto; }
+  main table { display: block; width: fit-content; max-width: 100%; overflow-x: auto; }  /* the card hugs its rows */
 }
 .hidden-job, .hidden-job a { color: var(--muted); }
 /* A question over the page ("Scoring is currently running"): above the bottom bar, inside a phone's width */
 dialog.ask { position: fixed; inset-block-start: 30%; z-index: 35; max-inline-size: min(28rem, calc(100vw - 2rem));
-  padding: var(--space-5); border: 1px solid var(--line-strong); border-radius: var(--radius);
-  background: var(--surface); color: var(--text); box-shadow: var(--shadow-raised); }
+  padding: var(--space-5); border: 1px solid var(--glass-line); border-radius: var(--radius-l); color: var(--text);
+  box-shadow: var(--glass-shadow), var(--shadow-raised); }
 /* Status labels: a word in a pill; a problem also gets an "!" mark, so colour is never the only sign. */
 .mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: var(--radius-pill);
-  background: var(--sunken); color: var(--muted); font-size: 0.8125rem; line-height: 1.5; letter-spacing: 0.01em;
+  background: var(--sunken); color: var(--muted); font-size: var(--text-small); line-height: 1.5;
+  letter-spacing: 0.01em;
   font-weight: 600; white-space: nowrap; }
 .mark.ok { background: var(--ok-soft); color: var(--ok); }
 .mark.warn { background: var(--warn-soft); color: var(--warn); }
@@ -355,12 +454,13 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .found { margin: var(--space-4) 0; padding: var(--space-4) var(--space-5); background: var(--surface);
   border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .lines { max-height: 30rem; overflow-y: auto; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
-  background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.875rem; line-height: 1.5; }
+  background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-ui);
+  line-height: var(--leading-ui); }
 .pager { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); justify-content: center;
   align-items: center; margin: var(--space-4) 0; }
 .pager a { display: inline-flex; align-items: center; min-height: var(--control); }
 .filters { margin-bottom: var(--space-5); padding: var(--space-4); background: var(--surface);
-  border: 1px solid var(--line); border-radius: var(--radius); }
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .filters p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
   margin: 0 0 var(--space-3); }
 .filters fieldset { display: inline-block; min-width: 0; max-width: 100%; margin: 0 var(--space-2) var(--space-2) 0;
@@ -374,22 +474,26 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .filters-fold { margin-bottom: var(--space-4); }
 .filters-fold > summary { position: relative; min-height: var(--control);
   padding: var(--space-2) 2.75rem var(--space-2) var(--space-4); border: 1px solid var(--line);
-  border-radius: var(--radius); background: var(--surface); cursor: pointer; font-weight: 600; }
-/* The fold-out arrow of the Filters fold and (on phones) the Tracker lanes: a turned corner, up when open. */
-:is(.filters-fold, .lane) > summary::after { width: 0.5rem; height: 0.5rem; border-right: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted); transform: rotate(45deg); }
-:is(.filters-fold, .lane)[open] > summary::after { transform: rotate(-135deg); }
-.filters-fold > summary::after { content: ""; position: absolute; top: 50%; right: var(--space-4);
+  border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); cursor: pointer;
+  font-weight: 600; transition: border-color 160ms var(--ease-out); }
+.filters-fold > summary:hover { border-color: var(--line-strong); }
+/* The fold-out arrow of the cost bar, the Filters fold and (on phones) the Tracker lanes: a turned corner, up when
+   open. */
+:is(.topbar, .filters-fold, .lane) > summary::after { width: 0.5rem; height: 0.5rem;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg);
+  transition: transform 200ms var(--ease-out), margin-top 200ms var(--ease-out); }
+:is(.topbar, .filters-fold, .lane)[open] > summary::after { transform: rotate(-135deg); }
+:is(.topbar, .filters-fold) > summary::after { content: ""; position: absolute; top: 50%; right: var(--space-4);
   margin-top: -0.35rem; }
-.filters-fold[open] > summary::after { margin-top: -0.1rem; }
+:is(.topbar, .filters-fold)[open] > summary::after { margin-top: -0.1rem; }
 .filters-fold .active { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
 .filters-fold .filters { margin: var(--space-2) 0 0; }
-p.company { font-size: 1.1em; margin-top: -0.5rem; }
+p.company { font-size: var(--text-heading); margin-top: -0.5rem; text-wrap: balance; }
 .details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-4); }
 .details dt { color: var(--muted); }
 .details dd { margin: 0; overflow-wrap: anywhere; }
 .address { word-break: break-all; user-select: all; }
-.description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 50rem; }
+.description { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 60ch; }  /* about 66-73 characters */
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); align-items: center;
   margin: var(--space-2) 0 var(--space-4); }
 /* In a table row the buttons sit side by side, and the cell stays a cell, so its line runs with the row. */
@@ -403,38 +507,46 @@ td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); mar
 /* ---------- Lists: one table markup, shown as a table or as cards ---------- */
 /* The list pages use the window's width beside the rail; their running text keeps a reading length. */
 main:has(.view-switch) { max-width: none; }
-main:has(.view-switch) > p:not(.counts) { max-width: 72ch; }  /* the counts line reads as one row of links */
+/* Running text stops at a reading length (60ch is about 66-73 characters of Source Sans 3); tables, card grids, the
+   board and the counts line, which reads as one row of links, keep the full width. */
+main > p:not(.counts) { max-width: 60ch; }
 /* The Table | Cards switch: the chosen view (Cards until one is chosen) looks chosen: tint, outline, bold. With
    large text on a phone the two buttons stack, each as wide as the switch; the radius is a pill on one line and
    round corners around two. */
 .view-switch { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; margin: 0 0 var(--space-4);
-  padding: 3px; border-radius: calc(var(--control) / 2 + 3px); background: var(--sunken); }
+  padding: 3px; border: 1px solid var(--glass-line); border-radius: calc(var(--control) / 2 + 4px); }
 .view-switch button { flex: 1 1 auto; }
+.view-switch button[aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow); }
 .view-switch button:not([aria-pressed="true"]) { border-color: transparent; background: transparent;
   color: var(--muted); }
 .view-switch button:hover { color: var(--text); }
 /* Cards: one card per job from the same row: title and score, company, details, labels and actions. */
 .list-cards {
-  .jobs { display: block; overflow: visible; }
+  .jobs { display: block; overflow: visible; background: none; border: 0; box-shadow: none; }
   .jobs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .jobs tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
     gap: var(--space-4); }
-  .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3);
-    padding: var(--space-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; align-content: start;
+    gap: var(--space-1) var(--space-3); padding: var(--space-4);
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
     box-shadow: var(--shadow); }
+  .jobs tr:hover { background: var(--surface); }
   .jobs .hidden-job { background: var(--bg); box-shadow: none; }
   .jobs td { display: block; padding: 0; border: 0; overflow-wrap: anywhere; }
   .jobs .role { order: 1; flex: 1 1 0; min-width: 0; }
-  .jobs .role > a { font-size: 1.0625rem; font-weight: 650; }
+  .jobs :is(.role, .role > a) { line-height: var(--leading-heading); text-wrap: balance; }
+  .jobs .role > a { font-size: var(--text-heading); font-weight: 650; text-decoration: none; }
+  .jobs .role > a:hover { text-decoration: underline; }
   .jobs tr:not(:has(> .num)) .role { flex-basis: 100%; }  /* no score beside it: the title gets the whole line */
-  .jobs .num { order: 2; font-size: 1.25rem; font-weight: 700; text-align: right; }
+  .jobs .num { order: 2; font-size: var(--text-title); line-height: var(--leading-title); font-weight: 700;
+    text-align: right; }
   .jobs .company { order: 3; flex-basis: 100%; font-family: var(--serif); color: var(--muted); }
-  .jobs :is(.where, .meta) { order: 4; font-size: 0.875rem; }
+  .jobs :is(.where, .meta) { order: 4; font-size: var(--text-ui); }
   .jobs :is(.labels, .state, .actions) { order: 5; flex-basis: 100%; }
   .jobs td.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
   .jobs td.actions > * { margin: 0; }
   .jobs [data-label]:empty { display: none; }
-  .jobs [data-label]::before { content: attr(data-label) " "; color: var(--muted); font-size: 0.875rem;
+  .jobs [data-label]::before { content: attr(data-label) " "; color: var(--muted); font-size: var(--text-ui);
     font-weight: 400; }
 }
 
@@ -450,46 +562,48 @@ main:has(.board) { max-width: none; }
 /* Name (wraps if long) and count on one line; "Outcome" under them. */
 .lane > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
   gap: 0 var(--space-2); min-height: var(--control); padding: var(--space-1) var(--space-2); }
-.lane h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--sans); font-size: 0.9375rem;
-  line-height: 1.3; letter-spacing: 0; font-weight: 700; color: var(--text); }
+.lane h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--sans); font-size: var(--text-compact);
+  line-height: var(--leading-compact); letter-spacing: 0; font-weight: 700; color: var(--text); }
 .lane .count { display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 0.375rem;
-  border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: 0.8125rem;
-  font-weight: 700; }
-.lane .kind { grid-column: 1 / -1; grid-row: 2; color: var(--muted); font-size: 0.8125rem; }
+  border-radius: var(--radius-pill); background: var(--surface); color: var(--muted); font-size: var(--text-small);
+  font-weight: 700; font-variant-numeric: tabular-nums; }
+.lane .kind { grid-column: 1 / -1; grid-row: 2; color: var(--muted); font-size: var(--text-small); }
 .cards { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+/* A card lifts a little under the pointer (shadow only: SortableJS moves the card itself while dragging). */
 .tcard { position: relative; display: grid; gap: 0.125rem; padding: var(--space-3); border-radius: var(--radius);
-  background: var(--surface); box-shadow: var(--shadow); }
+  background: var(--surface); box-shadow: var(--shadow); transition: box-shadow 200ms var(--ease-out); }
+.tcard:not(.stale):hover { box-shadow: var(--shadow-raised); }
 .tcard p { margin: 0; }
-.tcard h3 { margin: 0; font-size: 0.9375rem; line-height: 1.35; overflow-wrap: anywhere; }
+.tcard h3 { margin: 0; font-size: var(--text-compact); line-height: 1.35; overflow-wrap: anywhere; hyphens: auto; }
 .tcard:has(.days) h3 { padding-right: 2.75rem; }
 .tcard h3 a { color: var(--text); text-decoration: none; }
 .tcard h3 a::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }  /* the whole card */
 .tcard h3 a:hover { text-decoration: underline; }
 .tcard h3 a:focus-visible { outline: none; }
 .tcard:has(h3 a:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
-.tcard .company { margin: 0; font-family: var(--serif); font-size: 0.875rem; line-height: 1.35; color: var(--muted);
-  overflow-wrap: anywhere; }
-.tcard .meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-3); color: var(--muted); font-size: 0.8125rem;
-  line-height: 1.45; }
+.tcard .company { margin: 0; font-family: var(--serif); font-size: var(--text-ui); line-height: 1.35;
+  color: var(--muted); overflow-wrap: anywhere; }
+.tcard .meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-3); color: var(--muted); font-size: var(--text-small);
+  line-height: var(--leading-small); }
 /* Days since you applied, top right (none on Ready). */
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
-  border-radius: var(--radius-pill); background: var(--sunken); color: var(--muted); font-size: 0.75rem;
-  line-height: 1.6; font-weight: 700; }
+  border-radius: var(--radius-pill); background: var(--sunken); color: var(--muted); font-size: var(--text-caption);
+  line-height: 1.6; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* The card's forms (I applied, the round, Move to) sit above its link, so they can be used. */
 .tcard form { position: relative; z-index: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
-  gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: 0.8125rem;
+  gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: var(--text-small);
   font-weight: 600; }
 .tcard select { min-width: 0; max-width: 100%; padding: 0 var(--space-3); border-radius: var(--radius-pill);
-  font-size: 0.9375rem; }
+  font-size: var(--text-body); }  /* 16 px: a phone zooms the page for a smaller field */
 .tcard label { min-width: 0; }  /* with the form's: a list with a long stage name shrinks to fit the card */
 /* No change for the set number of days: dashed and on the page colour, with a word and an icon, not colour alone. */
 .tcard.stale { border: 2px dashed var(--line-strong); background: var(--bg); box-shadow: none; }
 .tcard.stale h3 a, .tcard.stale .company { color: var(--muted); }
 .tcard .note { display: inline-flex; align-items: center; gap: 0.375rem; margin-top: 0.375rem; color: var(--warn);
-  font-size: 0.8125rem; font-weight: 600; }
+  font-size: var(--text-small); font-weight: 600; }
 .tcard .note .icon { width: 1rem; height: 1rem; }
-.lane .empty { margin: 0; padding: 1.25rem var(--space-3); color: var(--muted); font-size: 0.875rem; line-height: 1.5;
-  text-align: center; }
+.lane .empty { margin: 0; padding: 1.25rem var(--space-3); color: var(--muted); font-size: var(--text-ui);
+  line-height: 1.5; text-align: center; }
 /* Wider screens: a lane can't be folded, so its cards always show. Phones: each lane is a drawer with its count;
    the stages that need you start open. */
 @media (width >= 40rem) {
@@ -502,20 +616,48 @@ main:has(.board) { max-width: none; }
   .board { grid-template-columns: minmax(0, 1fr); gap: 0.625rem; overflow: visible; }
   .outcome-gap { height: 0.25rem; margin: 0.375rem var(--space-6); }
   .lane > summary { cursor: pointer; }
-  .lane > summary::after { content: ""; grid-column: 3; grid-row: 1; margin: 0 var(--space-1);
-    transition: transform 160ms ease-out; }
+  .lane > summary::after { content: ""; grid-column: 3; grid-row: 1; margin: 0 var(--space-1); }
+}
+
+/* ---------- Motion ---------- */
+/* Short (under 300 ms), ease-out, and only transform, opacity and blur. A page arrives with a gentle rise once, when
+   it loads: the parts HTMX redraws (the Ready box every 3 s, collect and score progress) are inside <main> and never
+   replay it. Fold-outs open smoothly where the browser can animate a height (::details-content), and simply open
+   where it can't; the phone menu's fold is left out, its panel has its own entrance. */
+.content > main, body > main { animation: page-in 240ms var(--ease-out) backwards; }
+@keyframes page-in { from { opacity: 0; transform: translateY(0.375rem); } }
+@keyframes fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  :root { interpolate-size: allow-keywords; }
+  :is(.topbar, .filters-fold, main details:not(.lane))::details-content { block-size: 0; opacity: 0;
+    overflow-y: clip; overflow-clip-margin: 0.375rem;
+    transition: block-size 260ms var(--ease-out), opacity 200ms var(--ease-out),
+      content-visibility 260ms allow-discrete; }
+  :is(.topbar, .filters-fold, main details:not(.lane))[open]::details-content { block-size: auto; opacity: 1; }
+}
+@media (prefers-reduced-motion: no-preference) and (width < 40rem) {
+  .lane::details-content { block-size: 0; opacity: 0; overflow-y: clip; overflow-clip-margin: 0.375rem;
+    transition: block-size 260ms var(--ease-out), opacity 200ms var(--ease-out),
+      content-visibility 260ms allow-discrete; }
+  .lane[open]::details-content { block-size: auto; opacity: 1; }
 }
 
 /* ---------- Preferences ---------- */
+/* More contrast: near-solid glass and defined borders everywhere. */
 @media (prefers-contrast: more) {
-  :root, :root[data-palette] { --line: var(--line-strong); }
+  :root, :root[data-palette] { --line: var(--line-strong); --glass-line: var(--line-strong);
+    --glass: color-mix(in srgb, var(--surface) 96%, transparent); --glass-thick: var(--glass);
+    --chrome-glass: var(--chrome); }
 }
+/* Reduce motion: nothing moves; short fades and colour changes remain. */
 @media (prefers-reduced-motion: reduce) {
-  .sheet { animation: none; }
-  button, .button { transition: none; }
-  button:active, .button:active { transform: none; }
-  .lane > summary::after { transition: none; }
+  .content > main, body > main { animation: fade-in 120ms ease-out backwards; }
+  .sheet { animation: fade-in 120ms ease-out; }
+  :is(button, .button, .nav-group a, .logout button):active, .dock > summary:active .dock-button { transform: none; }
+  :is(.topbar, .filters-fold, .lane) > summary::after { transition: none; }
 }
+/* Reduce transparency: solid surfaces, no blur. */
 @media (prefers-reduced-transparency: reduce) {
-  .dock > summary { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  :root, :root[data-palette] { --glass: var(--surface); --glass-thick: var(--surface); --glass-blur: none;
+    --chrome-glass: var(--chrome); }
 }
