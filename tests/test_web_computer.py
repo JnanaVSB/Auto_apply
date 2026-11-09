@@ -18,11 +18,12 @@ TRACKER = "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?
 
 @pytest.fixture
 def both(phone_dashboard):
-    """The laptop and the phone, each logged in; the phone's cookie and token ride along with its requests."""
+    """The laptop and the phone, each logged in; each one's headers and token ride along with its presses."""
     laptop, phone = phone_dashboard
     log_in(laptop)
     phone.cookie, session = phone_login(phone)
-    phone.token = session.csrf
+    laptop.sent, laptop.token = {}, csrf(laptop)
+    phone.sent, phone.token = phone.cookie | ORIGIN, session.csrf
     return laptop, phone
 
 
@@ -32,10 +33,8 @@ def on_phone(phone, path):
 
 def press(client, job, value, **form):
     """The mark's button, from the laptop or the phone."""
-    phone = hasattr(client, "cookie")
-    data = form | {"value": value, "csrf_token": client.token if phone else csrf(client)}
-    headers = client.cookie | ORIGIN if phone else {}
-    return client.post(f"/jobs/{job}/form/computer", data=data, headers=headers, follow_redirects=False)
+    data = form | {"value": value, "csrf_token": client.token}
+    return client.post(f"/jobs/{job}/form/computer", data=data, headers=client.sent, follow_redirects=False)
 
 
 def test_the_phone_marks_a_job_and_takes_it_off(both, conn):
