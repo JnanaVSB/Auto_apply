@@ -1,0 +1,145 @@
+"""Settings → Scoring model (/settings/scoring-model), kept apart from main.py: which model gives jobs their AI score.
+On this computer (Ollama, the default), or through your own address once you ticked the box for exactly that address;
+its key goes only into the keychain, under a name of its own. A save writes the model and the ticked address together,
+or nothing."""
+
+from collections.abc import Callable
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
+
+from app import llm
+from app.config import AISettings, ConfigError, load_config
+from app.keychain import KeychainError, delete_secret, get_secret, set_secret
+from app.web import actions, security
+from app.web.writer_settings import KEY, number
+
+PAGE = "/settings/scoring-model"
+KEY_NAME = "own-scoring"  # its own slot, so a Writer on another address keeps its key
+ON_THE_LAPTOP = "Change this key on the laptop."
+ACCOUNT_ID = "YOUR-ACCOUNT-ID"
+PRESETS = {  # each fills in only the address; you make your own account and key
+    "groq": ("Groq", "https://api.groq.com/openai/v1"),
+    "cloudflare": ("Cloudflare", f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1"),
+    "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1"),
+}
+SAVED = {
+    "local": "Saved: jobs are scored on this computer.",
+    "own": "Saved: jobs are scored through your own address.",
+    "key": "Key saved.",
+    "removed": "Key removed.",
+}
+OWN_FIELDS = ("address", "model", "needs_key", "price_input", "price_output")
+
+
+def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
+    @app.get(PAGE)
+    async def scoring_page(request: Request) -> Response:
+        return await _view(request, page)
+
+    @app.post(f"{PAGE}/local")
+    async def score_here(request: Request) -> Response:
+        default = {"model": AISettings().evaluator.model}  # the local model's name is changed on main Settings
+        return await _saved(request, page, default, "", "local")
+
+    @app.post(f"{PAGE}/own")
+    async def score_through_own_address(request: Request) -> Response:
+        try:
+            config = load_config()
+        except ConfigError as error:
+            return page(request, "scoring_settings.html", file_problem=str(error))
+        role, problem = _own(request.state.form, config.scoring.cloud_ok)
+        return await _saved(request, page, role, role["address"], "own", problem)
+
+    @app.post(f"{PAGE}/test")
+    async def test_scoring(request: Request) -> Response:
+        try:
+            result = await run_in_threadpool(llm.check, load_config().ai.evaluator)
+        except (ConfigError, KeychainError) as error:
+            result = (False, str(error))
+        return await _view(request, page, test=result)
+
+    @app.post(f"{PAGE}/key")
+    async def save_key(request: Request) -> Response:
+        security.laptop_only(request, ON_THE_LAPTOP)
+        form, remove = request.state.form, bool(request.state.form.get("remove"))
+        if not remove and not KEY.fullmatch(form.get("key", "")):
+            return await _view(request, page, problem="Not saved: paste the whole key, without spaces.")
+        try:
+            delete_secret(KEY_NAME) if remove else set_secret(KEY_NAME, form["key"])
+        except KeychainError as error:
+            return await _view(request, page, problem=str(error))
+        return RedirectResponse(f"{PAGE}?saved={'removed' if remove else 'key'}", 303)
+
+
+async def _saved(
+    request: Request, page: Callable[..., HTMLResponse], role: dict, ticked: str, saved: str, problem: str | None = None
+) -> Response:
+    """The scoring model and the address you ticked for, written together; or nothing, and the form keeps what was
+    typed."""
+
+    def change(old: dict) -> dict:
+        ai, scoring = dict(old.get("ai") or {}), dict(old.get("scoring") or {})
+        return old | {"ai": ai | {"evaluator": role}, "scoring": scoring | {"cloud_ok": ticked}}
+
+    if problem := problem or actions.update_settings(change):
+        return await _view(request, page, problem=problem, typed=request.state.form)
+    request.app.state.scorer.failed_at = None  # a run the old setting stopped may start again at once
+    return RedirectResponse(f"{PAGE}?saved={saved}", 303)  # reloading never saves twice
+
+
+def _own(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
+    """Your own address's scoring model from the form, and why it can't be saved (or None). The settings' own rules
+    (https://, both prices or neither, a model name) are checked when it is saved."""
+    address, model = form.get("address", "").strip().removesuffix("/"), form.get("model", "").strip()
+    role = {"service": "openai-compatible", "model": model, "address": address, "thinking": "off"}
+    role |= {"key_name": KEY_NAME} if form.get("needs_key") else {}
+    role |= {name: number(form[name]) for name in ("price_input", "price_output") if form.get(name, "").strip()}
+    if ACCOUNT_ID in address:
+        return role, f"Not saved: put your own Cloudflare account id where the address says {ACCOUNT_ID}."
+    if model.lower().startswith("openrouter/"):  # the scoring gate refuses it too
+        return role, f"Not saved: the model {model} lets OpenRouter choose the model and who runs it: name one model."
+    if not form.get("confirm") and address != cloud_ok:
+        return role, (
+            f"Not saved: tick the box to confirm that your resume (contact details hidden) and job ads go to "
+            f"{_host(address) or 'this address'}."
+        )
+    return role, None
+
+
+def _host(address: str) -> str:
+    try:
+        return urlsplit(address).hostname or ""
+    except ValueError:  # a broken address, such as https://[x
+        return ""
+
+
+async def _view(
+    request: Request, page: Callable[..., HTMLResponse], problem: str | None = None,
+    typed: dict[str, str] | None = None, test: tuple[bool, str] | None = None,
+) -> HTMLResponse:  # fmt: skip
+    try:
+        config = load_config()
+    except ConfigError as error:
+        return page(request, "scoring_settings.html", file_problem=str(error))
+    scorer = config.ai.evaluator
+    own = dict.fromkeys(OWN_FIELDS, "")
+    if scorer.own:
+        found = scorer.model_dump(exclude_none=True)
+        own |= {name: str(found[name]) for name in OWN_FIELDS if name in found}
+        own["needs_key"] = "on" if scorer.key_name else ""
+    if preset := PRESETS.get(request.query_params.get("preset", "")):
+        own["address"] = preset[1]
+    if typed:
+        own |= {name: typed.get(name, "") for name in OWN_FIELDS}
+    try:
+        key = get_secret(KEY_NAME) is not None
+    except KeychainError:
+        key = None
+    return page(
+        request, "scoring_settings.html", scorer=scorer, host=_host(scorer.address), own=own,
+        own_host=_host(own["address"]), ticked=bool(own["address"]) and own["address"] == config.scoring.cloud_ok,
+        presets=PRESETS, key=key, problem=problem, test=test, saved=SAVED.get(request.query_params.get("saved", "")),
+    )  # fmt: skip

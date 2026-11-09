@@ -96,6 +96,29 @@ def test_a_valid_save_rewrites_the_file_all_at_once(client, settings_file, data_
     assert not settings_file.with_name("config.yaml.new").exists()
 
 
+def test_a_cloud_scorer_shows_where_jobs_go_and_its_settings_survive_a_save(client, settings_file):
+    with settings_file.open("a", encoding="utf-8") as file:
+        file.write("scoring:\n  cloud_ok: https://scoring.example.net/v1\n")
+        file.write("ai:\n  evaluator:\n    service: openai-compatible\n    model: my-model\n"
+                   "    address: https://scoring.example.net/v1\n")  # fmt: skip
+    text = client.get("/settings").text
+    assert "Your resume (contact details hidden) and job ads go to scoring.example.net for the AI score" in text
+    assert "Scoring uses <strong>my-model</strong> at scoring.example.net" in text and 'name="ai_model"' not in text
+    assert "Nothing leaves this computer" not in text and "Phase 3b" not in text
+    assert 'href="/settings/plugin"' in text and 'href="/settings/scoring-model"' in text  # the other links stay
+    assert "Saved." in save(client, collect_every_hours="6").text
+    found = load_config(settings_file)
+    assert (found.ai.evaluator.address, found.ai.evaluator.model, found.scoring.cloud_ok) == (
+        "https://scoring.example.net/v1", "my-model", "https://scoring.example.net/v1"
+    )  # fmt: skip
+
+
+def test_scoring_on_this_computer_shows_todays_words_and_boxes(client):
+    text = client.get("/settings").text
+    assert "Nothing leaves this computer: the quick check and the AI both run here." in text
+    assert 'name="ai_model"' in text and 'name="ai_context"' in text and "Scoring uses" not in text
+
+
 def test_saving_the_form_keeps_the_scoring_and_ai_settings_it_does_not_show(client, settings_file):
     with settings_file.open("a", encoding="utf-8") as file:
         file.write("scoring:\n  meaning_threshold: 0.7\n  extra_skills: [MuJoCo]\n")

@@ -233,7 +233,7 @@ def test_the_settings_page_never_asks_a_cloud_service(client, settings_path, mon
         settings_path.read_text(encoding="utf-8").replace("    model:", "    service: anthropic\n    model:"), "utf-8"
     )
     monkeypatch.setattr(main.ollama, "status", lambda role: pytest.fail("asked a cloud service"))
-    assert "set ai.evaluator.service to ollama" in client.get("/settings").text
+    assert "job ads go to api.anthropic.com for the AI score" in client.get("/settings").text  # said, never asked
 
 
 def test_saving_scoring_settings_keeps_what_the_form_does_not_show(client, settings_path):
