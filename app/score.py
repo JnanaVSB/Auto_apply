@@ -24,6 +24,10 @@ SCORE_LOCK = "score-lock.db"  # one scoring run at a time, from the terminal or 
 BUSY = "Scoring is already running (in another window or the dashboard). Wait for it to finish."
 WAITING = "Waiting for the collection to finish..."
 STOPPED = "\nStopped. Everything scored so far is saved; run it again to continue."
+ERRORS = (  # what a scoring command reports in one line; app.setup reports them the same way
+    ConfigError, KeychainError, db.DatabaseError, collect.CollectError, files.SetupError, ResumeError,
+    llm.StopScoring, sqlcipher3.Error, sqlite3.Error, OSError,
+)  # fmt: skip
 
 
 def open_database(data_dir: Path, out: queue.Output = print) -> sqlcipher3.Connection:
@@ -92,10 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "setup":
                 return 0 if setup(config) else 1
             score(config)
-    except (
-        ConfigError, KeychainError, db.DatabaseError, collect.CollectError, files.SetupError, ResumeError,
-        llm.StopScoring, sqlcipher3.Error, sqlite3.Error, OSError,
-    ) as error:  # fmt: skip
+    except ERRORS as error:
         print(db.error_line(error), file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
         print(STOPPED, file=sys.stderr)

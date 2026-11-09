@@ -7,9 +7,10 @@ import argparse
 import secrets
 import shlex
 import sys
+from contextlib import closing
 from urllib.parse import urlsplit
 
-from app import config, db, keychain, score
+from app import collect, config, db, keychain, score
 from app.config import Config, ConfigError, load_config
 from app.keychain import KeychainError
 from app.scoring import files
@@ -108,7 +109,13 @@ def _scoring(settings: Config) -> None:
     missing = [file for file in files.FILES if not files._correct(folder / file.name, file)]
     size = sum(file.size for file in missing) / 1_000_000
     if not missing or _ask(f"Download the scoring files now (about {size:.0f} MB)?"):
-        if score.main(["setup"]) != 0:  # not ready yet doesn't stop setup
+        try:  # as `python -m app.score setup` does, but Ctrl+C stops setup itself
+            with closing(collect.lock(settings.data_dir, score.SCORE_LOCK, score.BUSY)):
+                ready = score.setup(settings)
+        except score.ERRORS as error:
+            print(db.error_line(error), file=sys.stderr)
+            ready = False
+        if not ready:  # doesn't stop setup
             print(
                 "Scoring isn't ready yet (see the line above); once that's fixed, check again with:\n"
                 f"  {_later('app.score setup')}"

@@ -39,8 +39,10 @@ def ran(tmp_path, monkeypatch):
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": pytest.fail("asked for a password"))
     monkeypatch.setattr(files, "_correct", lambda path, file: True)
     calls = []
-    for module, code in ((db, 0), (score, 1), (web_command, 0)):  # 1: the scoring model isn't ready, as at first
-        monkeypatch.setattr(module, "main", lambda argv, module=module, code=code: calls.append(module) or code)
+    for module in (db, web_command):
+        monkeypatch.setattr(module, "main", lambda argv, module=module: calls.append(module) or 0)
+    # the scoring model isn't ready, as at first
+    monkeypatch.setattr(score, "setup", lambda settings, transport=None: calls.append(score) or False)
     return calls
 
 
@@ -111,12 +113,15 @@ def test_a_second_run_asks_only_about_the_dashboard_and_changes_nothing(
     ran, tmp_path, fake_keychain, monkeypatch, capsys
 ):
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
+    answering(monkeypatch, "n")
+    assert setup.main([]) == 0  # the first run leaves scoring's lock file, as `python -m app.score setup` does
     before = {path: path.read_bytes() for path in (tmp_path / "data").iterdir()}
+    capsys.readouterr()
     answers = answering(monkeypatch, "n")
     assert setup.main([]) == 0
     assert answers.questions == ["Start the dashboard now? [y/N] "]
     assert {path: path.read_bytes() for path in (tmp_path / "data").iterdir()} == before
-    assert ran == [score]  # files all there: only the model check, which may say "not ready" without stopping setup
+    assert ran == [score, score]  # files all there: only the model check, which may say "not ready" and go on
     assert fake_keychain.store == {}  # the test entry removed again
     out = capsys.readouterr().out
     assert out.startswith("Keychain: works.\nSettings: data/config.yaml is already there; left as it is.\n")
@@ -158,10 +163,38 @@ def test_scoring_not_ready_says_how_to_check_again_and_setup_goes_on(ran, later,
     )
     assert f"{again} setup\n" in out
     assert "Setup is done." in out
-    monkeypatch.setattr(score, "main", lambda argv: 0)
+    monkeypatch.setattr(score, "setup", lambda settings, transport=None: True)
     answering(monkeypatch, "n")
     assert setup.main([]) == 0
     assert "isn't ready" not in capsys.readouterr().out
+
+
+def test_a_scoring_error_is_one_line_and_setup_goes_on(ran, tmp_path, monkeypatch, capsys):
+    def no_download(settings, transport=None):
+        raise files.SetupError("Could not download the meaning model: made-up reason.")
+
+    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
+    monkeypatch.setattr(score, "setup", no_download)
+    answering(monkeypatch, "n")
+    assert setup.main([]) == 0
+    out, err = capsys.readouterr()
+    assert err == "Error: Could not download the meaning model: made-up reason.\n"
+    assert "Scoring isn't ready yet (see the line above)" in out
+    assert "Setup is done." in out
+
+
+def test_ctrl_c_during_the_scoring_download_stops_setup(ran, tmp_path, monkeypatch, capsys):
+    def interrupted(settings, transport=None):
+        raise KeyboardInterrupt
+
+    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
+    monkeypatch.setattr(score, "setup", interrupted)
+    answers = answering(monkeypatch)  # no answer: any question fails the test
+    assert setup.main([]) == 1
+    out, err = capsys.readouterr()
+    assert err == "\nStopped. Nothing done so far is undone; run ./setup.sh again to continue.\n"
+    assert "Setup is done." not in out
+    assert answers.questions == []
 
 
 @pytest.mark.parametrize(
