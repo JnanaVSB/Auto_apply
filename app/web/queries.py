@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException
 from app import jobs
 from app.collect import DISCOVERED, source_label, source_state
 from app.config import AISettings, ScoringSettings
-from app.scoring.ready import STATUS
+from app.scoring.ready import AT_READY, PREPARABLE, STATUS
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
 from app.sources.feeds import FEEDS
@@ -78,7 +78,7 @@ SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, 
         AND o.model != chosen.model AND o.score IS NOT NULL ORDER BY o.scored_on DESC LIMIT 1) AS other"""  # noqa: S608 (fixed text)
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
-    added_by_you, check_location, location_by_you, not_interested"""
+    added_by_you, check_location, location_by_you, not_interested, for_computer"""
 JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume,
     s.changed AS ad_changed, f.failed AS new_try_failed, f.resume AS new_try_resume, f.tried_on AS new_try_on,
     a.keywords, a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on,
@@ -88,6 +88,11 @@ OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE jo
 SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
         r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%', s.source_job_id
     FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
+# A job the "To do on a computer" list can show: open and not skipped, still at Ready on the Tracker (or not on it),
+# and no application recorded
+LISTABLE = f"{PREPARABLE} AND {AT_READY} AND jobs.id NOT IN (SELECT job_id FROM submissions)"  # noqa: S608
+FOR_COMPUTER = f"SELECT id, title, company FROM jobs WHERE for_computer = 1 AND {LISTABLE} ORDER BY id DESC"  # noqa: S608
+LISTABLE_JOB = f"SELECT 1 FROM jobs WHERE id = ? AND {LISTABLE}"  # noqa: S608 (fixed text)
 
 
 @dataclass(frozen=True)
@@ -565,3 +570,14 @@ def last_refreshes(conn: sqlcipher3.Connection, count: int = 3) -> list[dict]:
 def stopped_boards(conn: sqlcipher3.Connection) -> list[tuple[str, str]]:
     """Boards you stopped reading, with the day you stopped them."""
     return conn.execute("SELECT name, stopped_on FROM sources WHERE stopped_on IS NOT NULL ORDER BY name").fetchall()
+
+
+def for_computer(conn: sqlcipher3.Connection) -> list[dict]:
+    """Jobs marked "Do this on a computer" that the list can show (LISTABLE); newest first."""
+    rows = conn.execute(FOR_COMPUTER)
+    return [{"id": job_id, "title": title, "company": company} for job_id, title, company in rows]
+
+
+def listable(conn: sqlcipher3.Connection, job_id: int) -> bool:
+    """Whether the job could be on "To do on a computer", so the phone offers the mark."""
+    return conn.execute(LISTABLE_JOB, (job_id,)).fetchone() is not None

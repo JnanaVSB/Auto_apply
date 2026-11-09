@@ -74,6 +74,13 @@ def set_prepare_anyway(conn: sqlcipher3.Connection, job_id: int, value: bool) ->
     return changed.rowcount == 1
 
 
+def set_for_computer(conn: sqlcipher3.Connection, job_id: int, value: bool) -> bool:
+    """Mark a job "Do this on a computer", or take it off; False if there is no such job."""
+    with conn:
+        changed = conn.execute("UPDATE jobs SET for_computer = ? WHERE id = ?", (value, job_id))
+    return changed.rowcount == 1
+
+
 def set_answer(conn: sqlcipher3.Connection, job_id: int, label: str) -> bool:
     """Mark a job yes, maybe or no for the answer key, or clear the mark; False if there is no such job."""
     with conn:

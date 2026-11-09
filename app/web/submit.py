@@ -12,7 +12,7 @@ from pathlib import Path
 
 import sqlcipher3
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
@@ -253,6 +253,16 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
                 return _part(request, job, failed=actions.BUSY if "locked" in str(error) else PRESS_FAILED)
         return _part(request, job)
 
+    @app.post("/jobs/{job_id:int}/form/computer")
+    async def for_computer(request: Request, job_id: int) -> Response:
+        """Do this on a computer, or Take it off: from either address, so the laptop can take a job off too."""
+        value = request.state.form.get("value") == "1"
+        if not actions.set_for_computer(request.app.state.conn, queries.known(job_id), value):
+            raise HTTPException(404)
+        if request.state.form.get("to") == "ready":  # Ready's own list
+            return RedirectResponse("/ready", 303)
+        return _part(request, _job(request, job_id))
+
     @app.post("/jobs/{job_id:int}/form/fill")
     async def fill(request: Request, job_id: int) -> Response:
         """Open and fill: the press also opens the form in a new tab, so whatever happens here, it answers with only the
@@ -354,6 +364,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             max_line=MAX_LINE, max_long=MAX_LONG,
             fill_address=fill_address, fill_reason=fill_reason, last_fill=fill_words.latest(conn, job_id),
             read_address=read_address, read_reason=read_reason,
+            markable=request.state.remote and queries.listable(conn, job_id),
             job=job, record=recorded, heading=recorded and record.heading(recorded),
             caution=recorded and record.caution(recorded), no_copy=record.NO_COPY, another_file=record.ANOTHER_FILE,
             moved_back=back and record.MOVED_BACK.format(_day(back)),

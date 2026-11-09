@@ -12,6 +12,8 @@ STATUS = f"""CASE WHEN {READY} THEN 'ready' WHEN s.score >= chosen.threshold THE
     ELSE 'waiting' END"""
 # A job that can be prepared: still open and not skipped. Skip keeps the Prepare date, so Undo puts it back as it was.
 PREPARABLE = "status = 'open' AND not_interested = 0"
+# Still at Ready on the Tracker, or not on it: not applied elsewhere, rejected, or moved on by hand or by Gmail.
+AT_READY = "jobs.id NOT IN (SELECT job_id FROM tracker WHERE stage != 'ready')"
 QUEUE = (
     "UPDATE jobs SET prepare_requested_on = ? WHERE id = ? AND prepare_requested_on IS NULL"  # noqa: S608 (fixed text)
     f" AND {PREPARABLE}"
@@ -29,7 +31,7 @@ NEWEST = f"""WITH chosen (model, threshold, resume) AS (SELECT ?, ?, ?)
     WHERE ({READY}) AND {PREPARABLE}
     -- a job already past Ready on the Tracker (e.g. applied elsewhere) is never prepared automatically or offered
     -- to a pilot
-    AND jobs.id NOT IN (SELECT job_id FROM tracker WHERE stage != 'ready')
+    AND {AT_READY}
     ORDER BY coalesce(jobs.date_posted, substr(jobs.first_seen, 1, 10)) DESC, jobs.id DESC LIMIT ?"""  # noqa: S608
 
 

@@ -13,6 +13,18 @@
   Skipped (marked "not interested"). <button type="submit">Undo</button>
 </form>
 {% endif %}
+{% if to_do %}
+<h2>To do on a computer</h2>
+<ul class="reasons">
+  {% for job in to_do %}
+  <li><a href="/jobs/{{ job.id }}">{{ job.title }}</a> <span class="muted">{{ job.company }}</span>
+    <form method="post" action="/jobs/{{ job.id }}/form/computer" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="value" value="0"><input type="hidden" name="to" value="ready">
+      <button type="submit">Take it off</button>
+    </form></li>
+  {% endfor %}
+</ul>
+{% endif %}
 <p class="summary">{{ "{:,}".format(listing.total) }} job{{ "" if listing.total == 1 else "s" }} ready.</p>
 {% if listing.jobs %}
 <div class="list-{{ list_view }}">
