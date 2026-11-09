@@ -781,8 +781,9 @@ UPGRADES = (
     ALTER TABLE scoring_days ADD COLUMN uncounted INTEGER NOT NULL DEFAULT 0 CHECK (uncounted IN (0, 1));
     """,
     """
-    -- 1: you marked the job "Do this on a computer"; Ready lists it while it is open, not skipped and not recorded
+    -- 1: you marked the job "Do this on a computer"; Ready lists it while it is still to do
     ALTER TABLE jobs ADD COLUMN for_computer INTEGER NOT NULL DEFAULT 0 CHECK (for_computer IN (0, 1));
+    CREATE INDEX jobs_for_computer ON jobs (for_computer) WHERE for_computer = 1;  -- Ready reads only the marked jobs
     """,
 )
 SCHEMA_VERSION = len(UPGRADES)

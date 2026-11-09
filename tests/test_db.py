@@ -730,7 +730,11 @@ def test_version_27_adds_the_computer_mark_to_jobs_and_changes_nothing_else(tmp_
         with closing(db.connect(path)) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 27
             found, rows = _everything(conn)
-            assert [row for row in found if row[1] != "jobs"] == [row for row in before[0] if row[1] != "jobs"]
+            assert [row for row in found if row[1] not in ("jobs", "jobs_for_computer")] == [
+                row for row in before[0] if row[1] != "jobs"
+            ]
+            index = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'jobs_for_computer'").fetchone()
+            assert index == ("CREATE INDEX jobs_for_computer ON jobs (for_computer) WHERE for_computer = 1",)
             assert {name: rows[name] for name in rows if name != "jobs"} == {
                 name: before[1][name] for name in before[1] if name != "jobs"
             }

@@ -6,7 +6,7 @@ from helpers import add_job, csrf, log_in, one
 from test_web_phone import ORIGIN, either, phone_login, serve, words  # noqa: F401
 from test_web_plugin import phone_dashboard  # noqa: F401
 
-from app.web import actions
+from app.web import actions, queries
 
 MARK, TAKE_OFF, ON_LIST, LIST = "Do this on a computer", "Take it off", "On the computer list", "To do on a computer"
 NO_FORM = "https://careers.example/1"  # a site the app reads no form from: the mark is there all the same
@@ -144,3 +144,8 @@ def test_set_for_computer_says_whether_there_is_such_a_job(conn):
         job = add_job(conn, "ML Intern")
     assert actions.set_for_computer(conn, job, True) and not actions.set_for_computer(conn, job + 1, True)
     assert one(conn, MARKED) == (1,)
+
+
+def test_the_list_reads_only_the_marked_jobs(conn):
+    plan = conn.execute(f"EXPLAIN QUERY PLAN {queries.FOR_COMPUTER}").fetchall()
+    assert "USING INDEX jobs_for_computer" in plan[0][3]
