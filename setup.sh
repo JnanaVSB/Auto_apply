@@ -46,6 +46,53 @@ usage() {
     exit 2
 }
 
+install_miniforge() { # into ~/miniforge3, after asking; the installer runs only once its fingerprint matches
+    [ ! -e "$HOME/miniforge3" ] ||
+        stop "$HOME/miniforge3 exists but has no conda in it (perhaps a cut-off install): move or remove that folder, then run ./setup.sh again."
+    ask "Install Miniforge $MINIFORGE_VERSION (about $download_size download) in ~/miniforge3? It changes no shell settings." ||
+        stop "Nothing installed. Install Miniforge yourself in ~/miniforge3 (https://github.com/conda-forge/miniforge) or update your conda to $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer, then run ./setup.sh again."
+    command -v curl >/dev/null || stop "curl is needed to download Miniforge: install curl, then run ./setup.sh again."
+    need_space
+    workdir=$(mktemp -d)
+    trap 'rm -rf "$workdir"' EXIT
+    # -q first: no ~/.curlrc settings. It gives up when it can't connect in 30 s, or stalls under 1 KB/s for a minute.
+    curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
+        -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
+        stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
+    if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
+        actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')
+    else
+        actual=$(shasum -a 256 <"$workdir/$installer" | awk '{ print $1 }')
+    fi
+    [ "$actual" = "$fingerprint" ] ||
+        stop "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later."
+    /bin/bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
+        stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
+    rm -rf "$workdir" # here, since the exec at the end skips the EXIT trap
+}
+
+conda_problem() { # why this conda can't build the environment ("doesn't run", "is version X"), or nothing
+    version=$("$1" --version 2>/dev/null || true)
+    version=${version#conda }
+    major=${version%%.*}
+    case $version in
+    *.*) minor=${version#*.} ;;
+    *) minor= ;; # no "X.Y": not a version
+    esac
+    minor=${minor%%.*}
+    case $major:$minor in
+    :* | *: | *[!0-9:]*) echo "doesn't run" ;;
+    *) if [ "$major" -lt "$MIN_CONDA_MAJOR" ] ||
+        { [ "$major" -eq "$MIN_CONDA_MAJOR" ] && [ "$minor" -lt "$MIN_CONDA_MINOR" ]; }; then
+        echo "is version $version"
+    fi ;;
+    esac
+}
+
+works() { # does the environment load the app?
+    "$conda" run -n "$ENV_NAME" python -c "$IMPORT_TEST" >/dev/null 2>&1
+}
+
 # Ctrl+C anywhere says so, instead of the failure line of a step it cut off (bash runs this once that step ends).
 # It leaves through the EXIT trap, so a Miniforge download is still removed.
 trap 'echo "Stopped. Nothing is undone; run ./setup.sh again to continue." >&2; exit 130' INT TERM
@@ -97,27 +144,7 @@ for candidate in "$miniforge_conda" "${CONDA_EXE:-}" "$(command -v conda || true
     fi
 done
 
-conda_problem() { # why this conda can't build the environment ("doesn't run", "is version X"), or nothing
-    version=$("$1" --version 2>/dev/null || true)
-    version=${version#conda }
-    major=${version%%.*}
-    case $version in
-    *.*) minor=${version#*.} ;;
-    *) minor= ;; # no "X.Y": not a version
-    esac
-    minor=${minor%%.*}
-    case $major:$minor in
-    :* | *: | *[!0-9:]*) echo "doesn't run" ;;
-    *) if [ "$major" -lt "$MIN_CONDA_MAJOR" ] ||
-        { [ "$major" -eq "$MIN_CONDA_MAJOR" ] && [ "$minor" -lt "$MIN_CONDA_MINOR" ]; }; then
-        echo "is version $version"
-    fi ;;
-    esac
-}
-
 # 3. The environment, by name, so whichever one is active doesn't matter
-works() { "$conda" run -n "$ENV_NAME" python -c "$IMPORT_TEST" >/dev/null 2>&1; }
-
 if [ -n "$conda" ] && works; then
     echo "Environment $ENV_NAME: ready (left as it is)." # whatever the conda's version: it built this already
 else
@@ -130,30 +157,7 @@ else
         conda=
     fi
     if [ -z "$conda" ]; then
-        [ ! -e "$HOME/miniforge3" ] ||
-            stop "$HOME/miniforge3 exists but has no conda in it (perhaps a cut-off install): move or remove that folder, then run ./setup.sh again."
-        ask "Install Miniforge $MINIFORGE_VERSION (about $download_size download) in ~/miniforge3? It changes no shell settings." ||
-            stop "Nothing installed. Install Miniforge yourself in ~/miniforge3 (https://github.com/conda-forge/miniforge) or update your conda to $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer, then run ./setup.sh again."
-        command -v curl >/dev/null || stop "curl is needed to download Miniforge: install curl, then run ./setup.sh again."
-        need_space
-        workdir=$(mktemp -d)
-        trap 'rm -rf "$workdir"' EXIT
-        # -q first: no ~/.curlrc settings. It gives up when it can't connect in 30 s, or stalls under 1 KB/s for a minute.
-        curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
-            -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
-            stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
-        if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
-            actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')
-        else
-            actual=$(shasum -a 256 <"$workdir/$installer" | awk '{ print $1 }')
-        fi
-        if [ "$actual" != "$fingerprint" ]; then
-            rm -f "$workdir/$installer"
-            stop "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later."
-        fi
-        /bin/bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
-            stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
-        rm -rf "$workdir"
+        install_miniforge
         conda=$miniforge_conda
         problem=$(conda_problem "$conda")
     fi
