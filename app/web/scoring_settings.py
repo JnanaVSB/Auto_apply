@@ -39,6 +39,7 @@ SAVED = {
     "removed": "Key removed.",
 }
 OWN_FIELDS = ("address", "model", "needs_key", "price_input", "price_output")
+UNTICKED = "Not saved: tick the box to confirm that your resume (contact details hidden) and job ads go to {}."
 
 
 def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
@@ -53,21 +54,11 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
 
     @app.post(f"{PAGE}/own")
     async def score_through_own_address(request: Request) -> Response:
-        try:
-            config = load_config()
-        except ConfigError as error:
-            return page(request, "scoring_settings.html", file_problem=str(error))
-        role, problem = _own(request.state.form, config.scoring.cloud_ok)
-        return await _saved(request, page, role, role["address"], "own", problem)
+        return await _cloud(request, page, *_own(request.state.form), "own")
 
     @app.post(f"{PAGE}/paid")
     async def score_through_openai_or_anthropic(request: Request) -> Response:
-        try:
-            config = load_config()
-        except ConfigError as error:
-            return page(request, "scoring_settings.html", file_problem=str(error))
-        role, problem = _paid(request.state.form, config.scoring.cloud_ok)
-        return await _saved(request, page, role, role["address"], role["key_name"], problem)
+        return await _cloud(request, page, *_paid(request.state.form), request.state.form.get("kind", ""))
 
     @app.post(f"{PAGE}/test")
     async def test_scoring(request: Request) -> Response:
@@ -116,7 +107,21 @@ async def _saved(
     return RedirectResponse(f"{PAGE}?saved={saved}", 303)  # reloading never saves twice
 
 
-def _own(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
+async def _cloud(
+    request: Request, page: Callable[..., HTMLResponse], role: dict, problem: str | None, saved: str
+) -> Response:
+    """A cloud scoring model: asked once per address (the tick), after the form's own problems, then written as _saved
+    does."""
+    try:
+        cloud_ok = load_config().scoring.cloud_ok
+    except ConfigError as error:
+        return page(request, "scoring_settings.html", file_problem=str(error))
+    if not problem and not request.state.form.get("confirm") and role["address"] != cloud_ok:
+        problem = UNTICKED.format(_host(role["address"]) or "this address")
+    return await _saved(request, page, role, role["address"], saved, problem)
+
+
+def _own(form: dict[str, str]) -> tuple[dict, str | None]:
     """Your own address's scoring model from the form, and why it can't be saved (or None). The settings' own rules
     (https://, both prices or neither, a model name) are checked when it is saved."""
     address, model = form.get("address", "").strip().removesuffix("/"), form.get("model", "").strip()
@@ -127,15 +132,10 @@ def _own(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
         return role, f"Not saved: put your own Cloudflare account id where the address says {ACCOUNT_ID}."
     if model.lower().startswith("openrouter/"):  # the scoring gate refuses it too
         return role, f"Not saved: the model {model} lets OpenRouter choose the model and who runs it: name one model."
-    if not form.get("confirm") and address != cloud_ok:
-        return role, (
-            f"Not saved: tick the box to confirm that your resume (contact details hidden) and job ads go to "
-            f"{_host(address) or 'this address'}."
-        )
     return role, None
 
 
-def _paid(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
+def _paid(form: dict[str, str]) -> tuple[dict, str | None]:
     """OpenAI's or Anthropic's scoring model from the form (kind, model), with the Writer page's key, and why it can't
     be saved (or None). The address is written out, so the ticked one is exactly the one the scoring gate compares."""
     kind, model = form.get("kind", ""), form.get("model", "")
@@ -143,11 +143,6 @@ def _paid(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
     role = {"service": service, "model": model, "address": address, "key_name": kind, "thinking": "off"}
     if kind not in PAID or model not in prices.models(kind):
         return role, "Not saved: choose one of the listed models."
-    if not form.get("confirm") and address != cloud_ok:
-        return role, (
-            f"Not saved: tick the box to confirm that your resume (contact details hidden) and job ads go to "
-            f"{_host(address)}."
-        )
     return role, None
 
 
