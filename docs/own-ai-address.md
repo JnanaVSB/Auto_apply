@@ -57,9 +57,11 @@ services' public pages on 2026-11-07, and it can change:
 OpenAI and Anthropic have their own sections on the page, each with a list of models to choose from.
 
 ## 4. Keys
-- **Your own address:** if it needs a key, tick "This address needs a key" and paste the key in **Your own address's
-  key**. It's kept in your computer's keychain for that address only (a new address needs its own key), never shown
-  again and never written to a file. You can change it on the laptop only, not from your phone.
+- **Your own address:** if it needs a key, tick "This address needs a key". Save the address first (with its tick),
+  then paste its key in **Your own address's key**. It's kept in your computer's keychain for that address's host only
+  (a different host needs its own key), never shown again and never written to a file. You can change it on the laptop
+  only, not from your phone. After you switch to another service, its old key stays in your keychain until you switch
+  back and remove it, or remove it with your system's keychain tool.
 - **OpenAI and Anthropic:** these use the same key as the Writer page (**Settings → Writer**). The Scoring model page
   only shows whether that key is saved, with a link to add it.
 

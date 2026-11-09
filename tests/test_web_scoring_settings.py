@@ -134,14 +134,15 @@ def test_the_key_is_saved_only_in_the_keychain_for_its_host_and_never_shown(clie
     post(client, PAGE + "/own", **OWN, needs_key="on", confirm="on")
     name = scoring_settings.key_name("scoring.example.net")
     assert scoring(settings_file)[0].key_name == name
-    text = post(client, PAGE + "/key", key=FAKE_KEY).text
+    text = post(client, PAGE + "/key", key=FAKE_KEY, host="scoring.example.net").text
     assert fake_keychain.store[(SERVICE, name)] == FAKE_KEY
     assert (SERVICE, "own-address") not in fake_keychain.store  # the Writer's own-address key is a different one
     assert "Key saved." in text and FAKE_KEY not in text and FAKE_KEY not in settings_file.read_text(encoding="utf-8")
     assert "saved for scoring.example.net" in text and "Remove key" in text
+    assert 'name="host" value="scoring.example.net"' in text  # the host this key form was shown for
     for bad in ("", "has spaces in it", "x" * 501):
-        assert "Not saved: paste the whole key" in post(client, PAGE + "/key", key=bad).text
-    assert "Key removed." in post(client, PAGE + "/key", remove="1").text
+        assert "Not saved: paste the whole key" in post(client, PAGE + "/key", key=bad, host="scoring.example.net").text
+    assert "Key removed." in post(client, PAGE + "/key", remove="1", host="scoring.example.net").text
     assert (SERVICE, name) not in fake_keychain.store
     assert client.post(PAGE + "/key", data={"key": FAKE_KEY}).status_code == 403  # no form token
 
@@ -168,7 +169,7 @@ def test_a_key_saved_for_one_host_never_goes_to_another(client, settings_file, f
     monkeypatch.setattr(scoring_settings.llm, "check", lambda role: check(role, fake))  # the real check, fake service
     groq, openrouter = scoring_settings.PRESETS["groq"][1], scoring_settings.PRESETS["openrouter"][1]
     post(client, PAGE + "/own", address=groq, model="fake-model", needs_key="on", confirm="on")
-    post(client, PAGE + "/key", key=FAKE_KEY)
+    post(client, PAGE + "/key", key=FAKE_KEY, host="api.groq.com")
     assert "saved for api.groq.com" in post(client, PAGE + "/test").text
     post(client, PAGE + "/own", address=openrouter, model="fake-model", needs_key="on", confirm="on")
     text = post(client, PAGE + "/test").text
@@ -176,6 +177,31 @@ def test_a_key_saved_for_one_host_never_goes_to_another(client, settings_file, f
     with pytest.raises(llm.StopScoring, match="No key is saved in the keychain"):
         llm.call(scoring(settings_file)[0], "Score this job.", "A job.", {}, transport=fake)
     assert sent == [("api.groq.com", f"Bearer {FAKE_KEY}")]  # the Groq key went to Groq only: nothing to openrouter.ai
+
+
+def test_a_key_is_saved_only_for_the_address_the_page_showed(client, fake_keychain):
+    groq, openrouter = scoring_settings.PRESETS["groq"][1], scoring_settings.PRESETS["openrouter"][1]
+    groq_slot = (SERVICE, scoring_settings.key_name("api.groq.com"))
+    openrouter_slot = (SERVICE, scoring_settings.key_name("openrouter.ai"))
+    changed = "Not saved: the address changed since this page was opened; reload it, then save the key."
+    post(client, PAGE + "/own", address=groq, model="fake-model", needs_key="on", confirm="on")
+    post(client, PAGE + "/key", key=FAKE_KEY, host="api.groq.com")
+    first = "Save this address first (with its tick), then paste its key here."
+    for text in (
+        client.get(f"{PAGE}?preset=openrouter").text,  # a preset, or a refused save keeping what was typed
+        post(client, PAGE + "/own", address=openrouter, model="fake-model", needs_key="on").text,
+    ):
+        assert first in text and 'name="key"' not in text
+    assert changed in post(client, PAGE + "/key", key="fake-openrouter-222", host="openrouter.ai").text
+    assert fake_keychain.store[groq_slot] == FAKE_KEY and openrouter_slot not in fake_keychain.store
+    post(client, PAGE + "/own", address=openrouter, model="fake-model", needs_key="on", confirm="on")  # another tab
+    assert changed in post(client, PAGE + "/key", key=FAKE_KEY, host="api.groq.com").text  # an older tab: Groq's page
+    assert openrouter_slot not in fake_keychain.store
+    post(client, PAGE + "/key", key="fake-openrouter-222", host="openrouter.ai")  # the page as it is now
+    assert changed in post(client, PAGE + "/key", remove="1", host="api.groq.com").text
+    assert fake_keychain.store[openrouter_slot] == "fake-openrouter-222"  # an older tab's Remove removes nothing
+    assert "Key removed." in post(client, PAGE + "/key", remove="1", host="openrouter.ai").text
+    assert openrouter_slot not in fake_keychain.store and fake_keychain.store[groq_slot] == FAKE_KEY
 
 
 def test_the_test_button_checks_the_scoring_model(client, monkeypatch):

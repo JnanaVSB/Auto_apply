@@ -87,6 +87,9 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             return page(request, "scoring_settings.html", file_problem=str(error))
         if not scorer.own:
             return await _view(request, page, problem="Not saved: save your own address first, then its key.")
+        if form.get("host", "") != _host(scorer.address):  # a page opened for another address, or before a switch
+            problem = "Not saved: the address changed since this page was opened; reload it, then save the key."
+            return await _view(request, page, problem=problem)
         if not remove and not KEY.fullmatch(form.get("key", "")):
             return await _view(request, page, problem="Not saved: paste the whole key, without spaces.")
         name = key_name(_host(scorer.address))

@@ -69,8 +69,11 @@
 <h3>Your own address's key</h3>
 {% if remote %}
 <p>Change this key on the laptop.</p>
+{% elif own_host != key_host %}
+<p>Save this address first (with its tick), then paste its key here.</p>
 {% else %}
 <form method="post" action="/settings/scoring-model/key" class="actions">{{ csrf_field() }}
+  <input type="hidden" name="host" value="{{ key_host }}">
   <span>{% if key is none %}the keychain can't be read{% elif key %}saved for {{ key_host }}{% elif key_host %}not saved for {{ key_host }}{% else %}not saved{% endif %}</span>
   <label>Key <input name="key" type="password" autocomplete="off" maxlength="500"></label>
   <button type="submit">Save key</button>
