@@ -106,7 +106,7 @@ Some things stay on the laptop:
 - **Changing the phone address.** The phone shows it but can't change it.
 - **Filling a form with the browser plugin** happens on the laptop.
   On the phone, press **Do this on a computer** on a job: Ready to Apply lists it under To do on a computer until you
-  apply, move it on the Tracker or take it off.
+  record it as submitted on the laptop, move its Tracker card on from Ready, or take it off.
 
 On a phone, a long Tracker lane comes 100 cards at a time, and the "Which job" list on E-mails to check opens when you press
 it.
