@@ -34,11 +34,6 @@ ALONE = re.compile(
 )
 STREET_WORDS = "Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl|Parkway|Pkwy"
 STREET = re.compile(rf"\b\d{{1,6}}\s+(?:[A-Z][\w.'-]*\s+){{1,4}}(?:{STREET_WORDS})\b")  # e.g. 12 Fake Hill Rd
-# Today's names in any capitals ([My Name] is [my name]), and the names before 8E ([ME], [LINK-2]) as drafts keep them
-PLACEHOLDER = re.compile(
-    r"\[(?:(?:ME|EMAIL|PHONE|ADDRESS|LINK)(?:-[0-9]+)?"
-    r"|(?i:(?:my (?:name|email|phone|street address)|(?:linkedin|github|google scholar|website) link)(?: [0-9]+)?))\]"
-)
 OLD_NAMES = {"my name": "ME", "my email": "EMAIL", "my phone": "PHONE", "my street address": "ADDRESS", "link": "LINK"}
 # A link is named by the site in its own address, never by the text shown for it; any other is a website link
 SITES = {
@@ -46,6 +41,12 @@ SITES = {
     "github link": re.compile(r"(?:[\w-]+\.)*github\.(?:com|io)"),
     "google scholar link": re.compile(r"scholar\.google\.(?:com?\.)?[a-z]{2,3}"),
 }
+WEBSITE = "website link"
+NAMES = [*(name for name in OLD_NAMES if name != "link"), *SITES, WEBSITE]  # every placeholder's name today
+# Today's names in any capitals ([My Name] is [my name]), and the names before 8E ([ME], [LINK-2]) as drafts keep them
+PLACEHOLDER = re.compile(
+    rf"\[(?:(?:{'|'.join(OLD_NAMES.values())})(?:-[0-9]+)?|(?i:(?:{'|'.join(NAMES)})(?: [0-9]+)?))\]"
+)
 LINKS = ("linkedin", "github", "portfolio", "scholar", "other_link")
 NO_NAME = "Fill in your full name in the Questionnaire first: the privacy filter needs it to hide your name."
 # The name at the top of a source: \name{..} or \author{..}, else its first big line, as in {\Huge Alex Example}
@@ -157,7 +158,7 @@ def _numbered(kind: str, found: list[str], pattern, same, old: bool) -> list[tup
 
 def _site(link: str) -> str:
     host = re.match(r"[^/:?#]*", _link_core(link))[0]
-    return next((name for name, hosts in SITES.items() if hosts.fullmatch(host)), "website link")
+    return next((name for name, hosts in SITES.items() if hosts.fullmatch(host)), WEBSITE)
 
 
 def _names(name: str, preferred: str) -> list[str]:

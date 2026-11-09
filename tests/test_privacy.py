@@ -73,6 +73,14 @@ def test_a_placeholder_in_other_capitals_is_put_back_but_other_link_never_is():
     assert privacy.PLACEHOLDER.search("[other link] or [me] or [Link-2]") is None  # the old names only as they were
 
 
+def test_every_placeholder_name_is_recognised_plain_and_numbered():
+    assert {*privacy.SITES, privacy.WEBSITE} <= set(privacy.NAMES)  # a new site is a new name
+    for name in privacy.NAMES:
+        assert all(privacy.PLACEHOLDER.fullmatch(found) for found in (f"[{name}]", f"[{name} 2]", f"[{name.upper()}]"))
+    for name in privacy.OLD_NAMES.values():
+        assert privacy.PLACEHOLDER.fullmatch(f"[{name}]") and privacy.PLACEHOLDER.fullmatch(f"[{name}-2]")
+
+
 def test_each_detail_always_gets_the_same_placeholder():
     first, again = shield(), shield()
     text = "Alex Example, alex@example.com, (555) 010-0199, https://github.com/alex-example"
