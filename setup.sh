@@ -138,8 +138,9 @@ else
         need_space
         workdir=$(mktemp -d)
         trap 'rm -rf "$workdir"' EXIT
-        # -q first: no ~/.curlrc settings
-        curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
+        # -q first: no ~/.curlrc settings. It gives up when it can't connect in 30 s, or stalls under 1 KB/s for a minute.
+        curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
+            -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
             stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
         if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
             actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')

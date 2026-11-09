@@ -19,8 +19,20 @@ PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-d
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
 RELEASE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1"
 MINIFORGE = f"{RELEASE}/Miniforge3-26.9.4-1-Linux-x86_64.sh"
-# What Macs' bash 3.2 lacks (or what reads oddly there), from the 8F review
-BASH_4_ONLY = r"\b(?:declare|local|mapfile|readarray|coproc)\b|,,|\^\^|\[\[|\|&|;&|&>>|\$\{\w+@|\$\{!|<<<|printf -v|=~"
+# What Macs' bash 3.2 lacks (or what reads oddly there), from the 8F reviews
+BASH_4_ONLY = "|".join(
+    (
+        r"\b(?:declare|local|mapfile|readarray|coproc|globstar)\b",
+        r"\[\[|=~|<<<|\|&|;&|&>>|printf -v|read -N|wait -n",
+        r"\[ -v ",  # [ -v NAME ]
+        r"\$\{\w+[,^@]",  # ${x,,} ${x^} ${x@Q}: case changes and @ operators
+        r"\$\{!",  # ${!x}
+        r"\{\w+\}[<>]",  # exec {fd}>file
+        r"\[-\d",  # ${a[-1]}
+        r"\$\{\w+:\d+:-\d",  # ${x:0:-1}; ${x:-default} is bash 3.2, and the script uses it
+        r"\{0\d+\.\.",  # {01..10}
+    )
+)
 FAKES = {
     "uname": 'case $1 in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; esac',
     "sw_vers": 'echo "$FAKE_MACOS"',
@@ -155,6 +167,30 @@ def test_the_real_script_is_valid_bash_and_executable():
 def test_the_real_script_uses_nothing_newer_than_bash_3_2():
     code = re.sub(r"(^|\s)#.*", "", SCRIPT.read_text(), flags=re.MULTILINE)  # comments may say anything
     assert re.findall(BASH_4_ONLY, code) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "declare -A seen", "local x=1", "mapfile -t lines", "readarray lines", "coproc cat", "shopt -s globstar",
+        '[[ -n "$x" ]]', 'case $x in a) ;& esac', "cat <<< x", "a |& b", "a &>> log", "printf -v x %s y",
+        "read -N 1 x", "wait -n", "[ -v HOME ]", "${x,,}", "${x^^}", "${x^}", "${x,}", "${x@Q}", "${!x}",
+        "exec {fd}>log", "${a[-1]}", "${x:0:-1}", "echo {01..10}",
+    ],
+)  # fmt: skip
+def test_the_bash_3_2_check_catches_bash_4_forms(line):
+    assert re.search(BASH_4_ONLY, line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "${CONDA_EXE:-}", "${x:-default}", "${version#conda }", "${x%%.*}", '[ -n "$x" ]', "{ [ a ] && b; }",
+        "case $x in a) ;; esac", "cmd 2>/dev/null", "awk '{ print $1 }'", '[ "$a" -lt 1 ]', "local_name=1",
+    ],
+)  # fmt: skip
+def test_the_bash_3_2_check_allows_what_bash_3_2_has(line):
+    assert not re.search(BASH_4_ONLY, line)
 
 
 @pytest.mark.parametrize("args", [["--fast"], ["--environment-only", "again"]])
@@ -360,7 +396,9 @@ def test_a_wrong_fingerprint_installs_nothing_and_leaves_no_download(sandbox):
     assert result.stderr == "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later.\n"
     installer = MINIFORGE.rsplit("/", 1)[1]
     (download,) = sandbox.log("curl")  # into a folder of its own in the temp folder, from the pinned address
-    assert download.startswith(f"-q -fL --proto =https --tlsv1.2 --connect-timeout 30 -o {sandbox.temp}/")
+    assert download.startswith(
+        f"-q -fL --proto =https --tlsv1.2 --connect-timeout 30 --speed-limit 1024 --speed-time 60 -o {sandbox.temp}/"
+    )
     assert download.endswith(f"/{installer} {MINIFORGE}")
     assert sandbox.log("installer") == []
     assert not (sandbox.home / "miniforge3").exists()

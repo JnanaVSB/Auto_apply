@@ -101,6 +101,8 @@ Each stop is one line saying why. Find yours here:
   install GNOME Keyring (or KWallet) and log in to the desktop. A server with no desktop has no keychain.
 - **"The keychain is locked or refused"**: unlock it (log out and back in, or open **Passwords and Keys**), then run
   it again.
+- **"…set to a store that isn't the macOS Keychain"**: remove the `PYTHON_KEYRING_BACKEND` setting or the
+  `keyringrc.cfg` file the line names, then run it again.
 - **"macOS asked for permission and it was refused…"**: run it again and choose **Always Allow** when macOS asks.
 - **"The project's data folder is a file"**: rename or move the file named `data` in the project folder, then run it
   again.
