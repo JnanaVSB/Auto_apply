@@ -12,6 +12,7 @@ from app.scoring import files
 from app.web import __main__ as web_command
 
 SETTINGS = b"data_dir: {data}\n# made-up settings of the test's own\n"
+CORRECT = files._correct  # the real check, before a test replaces it
 
 
 class Answers:
@@ -64,7 +65,7 @@ def answering(monkeypatch, *answers):
     ("platform", "fix"),
     [
         ("linux", "This computer has no keychain the app can use."),
-        ("darwin", 'click "Always Allow" when macOS asks'),
+        ("darwin", "PYTHON_KEYRING_BACKEND or a keyringrc.cfg file): remove that setting, then run ./setup.sh again."),
         ("win32", "(found: conftest)."),
     ],
 )
@@ -113,6 +114,7 @@ def test_a_second_run_asks_only_about_the_dashboard_and_changes_nothing(
     ran, tmp_path, fake_keychain, monkeypatch, capsys
 ):
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
+    fake_keychain.store[(keychain.SERVICE, db.KEY_NAME)] = "made-up key"
     answering(monkeypatch, "n")
     assert setup.main([]) == 0  # the first run leaves scoring's lock file, as `python -m app.score setup` does
     before = {path: path.read_bytes() for path in (tmp_path / "data").iterdir()}
@@ -122,10 +124,35 @@ def test_a_second_run_asks_only_about_the_dashboard_and_changes_nothing(
     assert answers.questions == ["Start the dashboard now? [y/N] "]
     assert {path: path.read_bytes() for path in (tmp_path / "data").iterdir()} == before
     assert ran == [score, score]  # files all there: only the model check, which may say "not ready" and go on
-    assert fake_keychain.store == {}  # the test entry removed again
+    assert list(fake_keychain.store) == [(keychain.SERVICE, db.KEY_NAME)]  # the test entry removed again
     out = capsys.readouterr().out
     assert out.startswith("Keychain: works.\nSettings: data/config.yaml is already there; left as it is.\n")
     assert "Database: already set up." in out
+
+
+def test_a_database_whose_key_is_not_in_the_keychain_says_how_to_restore_it(ran, later, tmp_path, monkeypatch, capsys):
+    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")  # copied over, with no key in this keychain
+    answering(monkeypatch, "n")
+    assert setup.main([]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "Database: found, but its key isn't in this computer's keychain (a new computer?). Restore it with:\n"
+        f"  {later} -m app.db recover\n"
+    ) in out
+    assert "already set up" not in out
+    assert db not in ran  # never set up again over it
+    assert "Setup is done." in out
+
+
+def test_an_unreadable_scoring_cache_counts_as_files_missing(ran, tmp_path, monkeypatch, capsys):
+    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
+    (tmp_path / "cache").write_bytes(b"a file where the cache folder should be")
+    monkeypatch.setattr(files, "cache_dir", lambda: tmp_path / "cache" / "auto_apply")
+    monkeypatch.setattr(files, "_correct", CORRECT)
+    answers = answering(monkeypatch, "n", "n")
+    assert setup.main([]) == 0
+    assert answers.questions[0] == "Download the scoring files now (about 137 MB)? [y/N] "
+    assert "Setup is done." in capsys.readouterr().out
 
 
 def test_a_missing_database_is_set_up_and_its_failure_stops_setup(ran, monkeypatch):

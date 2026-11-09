@@ -39,7 +39,7 @@ dashboard; running it again is safe. Step by step, with every question and stop:
    conda activate auto_apply
    ```
 2. Create your private settings file (the `data/` folder is never committed), then set your own
-   `roles` (Simplify categories and keywords) in `data/config.yaml`:
+   `roles` (Simplify categories and keywords) on the dashboard's Settings page (or in `data/config.yaml`):
    ```bash
    mkdir -p data && cp config.example.yaml data/config.yaml
    ```

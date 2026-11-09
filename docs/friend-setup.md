@@ -11,7 +11,8 @@ keychain, never in a file.
 - **A computer:** Linux on an x86-64 processor, with a desktop; or a Mac with Apple silicon (M1 or newer) on macOS 11 or
   newer. macOS is untested so far. Intel Macs are not supported for now. On Windows this command doesn't run: use the
   by-hand steps in the [README](../README.md#setup).
-- **`git` and `curl`**, which most systems already have.
+- **`git` and `curl`**, which most systems already have. On a Mac, the first `git` may offer to install Apple's
+  command line tools: accept, wait for it to finish, then run the command again.
 - **At least 3 GB free in your home folder.**
 - **A keychain.** A Mac has one. On Linux it is GNOME Keyring or KWallet, which a desktop usually has; a server with no
   desktop has none, and the app can't run there.
@@ -90,8 +91,9 @@ Each stop is one line saying why. Find yours here:
   Try again later. Never work around this check.
 - **"Installing Miniforge failed"**: remove the folder `~/miniforge3`, then run it again.
 - **"…can't load the app. Run ./setup.sh again and answer yes to rebuild it"**: you answered no to the rebuild.
-- **"Removing the broken environment… failed"**: remove it yourself with
-  `conda env remove -n auto_apply` (see section 3 for which `conda`), then run setup again.
+- **"Removing the broken environment… failed"**: if `auto_apply` is the active environment, run `conda deactivate`
+  first. Or remove it yourself with `conda env remove -n auto_apply` (see section 3 for which `conda`), then run setup
+  again.
 - **"Building the environment failed"**: check the free space and your internet connection, then run it again.
 - **"…was built but can't load the app"** or **"Could not find the Python of environment auto_apply"**: run it again;
   if it stops the same way, ask whoever gave you this.

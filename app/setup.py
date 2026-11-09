@@ -28,6 +28,10 @@ REFUSED_LINUX = (
     'The keychain is locked or refused: unlock it (log out and back in, or open "Passwords and Keys"), '
     "then run ./setup.sh again."
 )
+NO_KEYCHAIN_MAC = (
+    "The keychain library is set to a store that isn't the macOS Keychain (for example by PYTHON_KEYRING_BACKEND or "
+    "a keyringrc.cfg file): remove that setting, then run ./setup.sh again."
+)
 REFUSED_MAC = (
     "macOS asked for permission and it was refused, or the keychain is locked: run ./setup.sh again and click "
     '"Always Allow" when macOS asks.'
@@ -48,7 +52,7 @@ def _ask(question: str) -> bool:
 
 def _keychain_fix(missing: bool) -> str:
     if sys.platform == "darwin":
-        return REFUSED_MAC
+        return NO_KEYCHAIN_MAC if missing else REFUSED_MAC
     if sys.platform.startswith("linux"):
         return NO_KEYCHAIN_LINUX if missing else REFUSED_LINUX
     return ""
@@ -106,7 +110,10 @@ def _later(command: str) -> str:
 
 def _scoring(settings: Config) -> None:
     folder = files.cache_dir()
-    missing = [file for file in files.FILES if not files._correct(folder / file.name, file)]
+    try:
+        missing = [file for file in files.FILES if not files._correct(folder / file.name, file)]
+    except OSError:  # an unreadable cache folder: the download then says what is wrong
+        missing = list(files.FILES)
     size = sum(file.size for file in missing) / 1_000_000
     if not missing or _ask(f"Download the scoring files now (about {size:.0f} MB)?"):
         try:  # as `python -m app.score setup` does, but Ctrl+C stops setup itself
@@ -140,10 +147,16 @@ def main(argv: list[str] | None = None) -> int:
         _check_keychain()
         _copy_config()
         settings = load_config()
-        if (settings.data_dir / db.DB_FILE).exists():
+        if not (settings.data_dir / db.DB_FILE).exists():
+            if db.main(["setup"]) != 0:  # it prints its own reason
+                return 1
+        elif keychain.get_secret(db.KEY_NAME) is None:  # e.g. the data folder copied to a new computer
+            print(
+                "Database: found, but its key isn't in this computer's keychain (a new computer?). Restore it with:\n"
+                f"  {_later('app.db recover')}"
+            )
+        else:
             print("Database: already set up.")
-        elif db.main(["setup"]) != 0:  # it prints its own reason
-            return 1
         _scoring(settings)
         print(
             f"Setup is done. To open the dashboard later, run:\n  {_later('app.web')}\n"
@@ -151,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if _ask("Start the dashboard now?"):
             return web_command.main([])
-    except (SetupError, ConfigError, OSError) as error:
+    except (SetupError, ConfigError, KeychainError, OSError) as error:
         print(db.error_line(error), file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
         print(STOPPED, file=sys.stderr)

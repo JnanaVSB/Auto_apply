@@ -1,7 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # One-command setup: ./setup.sh makes the auto_apply environment (installing Miniforge first if there is no conda),
 # then hands over to `python -m app.setup` for the rest. Safe to run again: whatever is done already is left alone.
-# Plain bash that also runs on the bash 3.2 Macs ship.
+# Plain bash that also runs on the bash 3.2 Macs ship; /bin/bash, so a Homebrew Intel bash on an Apple-silicon Mac
+# can't put it under Rosetta.
 set -eu
 
 MINIFORGE_VERSION=26.9.4-1
@@ -55,7 +56,7 @@ case $# in
 1) [ "$1" = --environment-only ] || usage; environment_only=yes ;;
 *) usage ;;
 esac
-cd "$(dirname "$0")"
+CDPATH= cd -- "$(dirname -- "$0")"
 
 # 1. The system
 system=$(uname -s)
@@ -110,18 +111,19 @@ if [ -z "$conda" ]; then
     need_space
     workdir=$(mktemp -d)
     trap 'rm -rf "$workdir"' EXIT
-    curl -fL --proto '=https' --tlsv1.2 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
+    # -q first: no ~/.curlrc settings
+    curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
         stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
-    if command -v sha256sum >/dev/null; then
-        actual=$(sha256sum "$workdir/$installer" | awk '{ print $1 }')
+    if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
+        actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')
     else
-        actual=$(shasum -a 256 "$workdir/$installer" | awk '{ print $1 }')
+        actual=$(shasum -a 256 <"$workdir/$installer" | awk '{ print $1 }')
     fi
     if [ "$actual" != "$fingerprint" ]; then
         rm -f "$workdir/$installer"
         stop "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later."
     fi
-    bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
+    /bin/bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
         stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
     rm -rf "$workdir"
     conda=$HOME/miniforge3/bin/conda
@@ -155,7 +157,7 @@ else
     if "$conda" env list | awk -v name="$ENV_NAME" '$1 == name { found = 1 } END { exit !found }'; then
         ask "Environment $ENV_NAME is there but can't load the app (broken or half-built). Rebuild it? Your data folder is not touched." ||
             stop "Environment $ENV_NAME can't load the app. Run ./setup.sh again and answer yes to rebuild it."
-        "$conda" env remove -y -n "$ENV_NAME" || stop "Removing the broken environment $ENV_NAME failed."
+        "$conda" env remove -y -n "$ENV_NAME" || stop "Removing the broken environment $ENV_NAME failed (if it is active, run conda deactivate first)."
     fi
     failed="Building the environment failed: check the free space in $HOME and the internet connection, then run ./setup.sh again (it continues)."
     if [ "$system" = Linux ]; then

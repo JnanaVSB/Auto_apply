@@ -3,6 +3,7 @@ the network, the keychain or data/."""
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,8 @@ PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-d
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
 RELEASE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1"
 MINIFORGE = f"{RELEASE}/Miniforge3-26.9.4-1-Linux-x86_64.sh"
+# What Macs' bash 3.2 lacks (or what reads oddly there), from the 8F review
+BASH_4_ONLY = r"\b(?:declare|local|mapfile|readarray|coproc)\b|,,|\^\^|\[\[|\|&|;&|&>>|\$\{\w+@|\$\{!|<<<|printf -v|=~"
 FAKES = {
     "uname": 'case $1 in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; esac',
     "sw_vers": 'echo "$FAKE_MACOS"',
@@ -46,7 +49,10 @@ run) case "$*" in
     esac ;;
 esac""",
 }
-INSTALLER = b'#!/bin/bash\necho "$*" >> "$STATE/installer.log"\nmkdir -p "$3/bin"\ncp "$STATE/conda" "$3/bin/conda"\n'
+# $BASH names the bash that runs it
+INSTALLER = (
+    b'#!/bin/bash\necho "$BASH $*" >> "$STATE/installer.log"\nmkdir -p "$3/bin"\ncp "$STATE/conda" "$3/bin/conda"\n'
+)
 
 
 def executable(path: Path, body: str) -> Path:
@@ -133,6 +139,12 @@ def sandbox(tmp_path) -> Sandbox:
 def test_the_real_script_is_valid_bash_and_executable():
     assert subprocess.run(["bash", "-n", str(SCRIPT)], check=False).returncode == 0  # noqa: S603, S607
     assert os.access(SCRIPT, os.X_OK)
+    assert SCRIPT.read_text().startswith("#!/bin/bash\n")  # never a Homebrew Intel bash found on the PATH
+
+
+def test_the_real_script_uses_nothing_newer_than_bash_3_2():
+    code = re.sub(r"(^|\s)#.*", "", SCRIPT.read_text(), flags=re.MULTILINE)  # comments may say anything
+    assert re.findall(BASH_4_ONLY, code) == []
 
 
 @pytest.mark.parametrize("args", [["--fast"], ["--environment-only", "again"]])
@@ -284,7 +296,7 @@ def test_a_wrong_fingerprint_installs_nothing_and_leaves_no_download(sandbox):
     assert result.stderr == "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later.\n"
     installer = MINIFORGE.rsplit("/", 1)[1]
     (download,) = sandbox.log("curl")  # into a folder of its own in the temp folder, from the pinned address
-    assert download.startswith(f"-fL --proto =https --tlsv1.2 -o {sandbox.temp}/")
+    assert download.startswith(f"-q -fL --proto =https --tlsv1.2 --connect-timeout 30 -o {sandbox.temp}/")
     assert download.endswith(f"/{installer} {MINIFORGE}")
     assert sandbox.log("installer") == []
     assert not (sandbox.home / "miniforge3").exists()
@@ -296,7 +308,7 @@ def test_miniforge_with_the_right_fingerprint_is_installed_then_the_environment_
     sandbox.pin(INSTALLER)
     result = sandbox.run(answers=" Yes \n")
     assert result.returncode == 0, result.stderr
-    assert sandbox.log("installer") == [f"-b -p {sandbox.home}/miniforge3"]
+    assert sandbox.log("installer") == [f"/bin/bash -b -p {sandbox.home}/miniforge3"]
     assert list(sandbox.temp.iterdir()) == []
     assert BUILD in sandbox.log("conda")
     assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
@@ -396,7 +408,7 @@ def test_a_mac_installs_its_own_miniforge_checked_with_shasum(sandbox):
     assert "(about 90 MB download)" in result.stdout
     (download,) = sandbox.log("curl")
     assert download.endswith(f"/Miniforge3-26.9.4-1-MacOSX-arm64.sh {RELEASE}/Miniforge3-26.9.4-1-MacOSX-arm64.sh")
-    assert sandbox.log("installer") == [f"-b -p {sandbox.home}/miniforge3"]
+    assert sandbox.log("installer") == [f"/bin/bash -b -p {sandbox.home}/miniforge3"]
     assert "env create -f environment.yml" in sandbox.log("conda")
     assert list(sandbox.temp.iterdir()) == []
 
@@ -425,7 +437,9 @@ def test_a_failed_removal_of_the_broken_environment_stops(sandbox):
     (sandbox.state / "remove-fails").touch()
     result = sandbox.run(answers="y\n")
     assert result.returncode == 1
-    assert result.stderr == "Removing the broken environment auto_apply failed.\n"
+    assert result.stderr == (
+        "Removing the broken environment auto_apply failed (if it is active, run conda deactivate first).\n"
+    )
     assert not any(line.startswith("create") for line in sandbox.log("conda"))
 
 
@@ -435,3 +449,28 @@ def test_an_environment_python_that_is_not_there_stops(sandbox):
     assert result.returncode == 1
     assert result.stderr == "Could not find the Python of environment auto_apply.\n"
     assert sandbox.log("python") == []
+
+
+def test_the_fingerprint_is_read_whatever_the_temp_folder_is_called(sandbox, tmp_path):
+    odd = tmp_path / "odd\\temp"  # sha256sum would put a \\ before the hash of a file named like this
+    odd.mkdir()
+    sandbox.no_conda()
+    sandbox.pin(INSTALLER)
+    result = sandbox.run(answers="y\n", TMPDIR=str(odd))
+    assert result.returncode == 0, result.stderr
+    assert list(odd.iterdir()) == []
+
+
+def test_an_exported_cdpath_doesnt_move_setup_to_another_folder(sandbox, tmp_path):
+    (tmp_path / "decoy" / "project").mkdir(parents=True)  # where `cd project` would go with this CDPATH
+    result = subprocess.run(  # noqa: S603 (a copy of our own script, with fakes only)
+        ["project/setup.sh"],  # noqa: S607 (by its relative path on purpose)
+        cwd=tmp_path,
+        env=sandbox.env | {"CDPATH": str(tmp_path / "decoy")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
