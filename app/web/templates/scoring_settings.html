@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Scoring model{% endblock %}
 {% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro tick(host, ticked) %}<label class="tick"><input type="checkbox" name="confirm" value="on"{% if ticked %} checked{% endif %}> <span>Send my resume to
+    {{ host or "this address" }} to score jobs. My name, e-mail, phone number, links and street address are replaced
+    with placeholders first. <strong>Everything else in my resume still leaves this computer: my employers, projects,
+    schools, dates and skills.</strong> Each job ad goes too. {{ host or "This address" }}'s own terms decide what it
+    keeps and whether it trains on it, so I have read them.</span></label>{% endmacro %}
 {% block content %}
 <h1>Scoring model</h1>
 <p><a href="/settings">Back to Settings</a></p>
@@ -52,11 +57,7 @@
   <p class="hint">Prices per 1M tokens, if you know them: both, or leave both empty.</p>
   <label>Price for text read, $ <input name="price_input" inputmode="decimal" maxlength="12" value="{{ own.price_input }}"></label>
   <label>Price for text written, $ <input name="price_output" inputmode="decimal" maxlength="12" value="{{ own.price_output }}"></label>
-  <label class="tick"><input type="checkbox" name="confirm" value="on"{% if ticked %} checked{% endif %}> <span>Send my resume to
-    {{ own_host or "this address" }} to score jobs. My name, e-mail, phone number, links and street address are replaced
-    with placeholders first. <strong>Everything else in my resume still leaves this computer: my employers, projects,
-    schools, dates and skills.</strong> Each job ad goes too. {{ own_host or "This address" }}'s own terms decide what it
-    keeps and whether it trains on it, so I have read them.</span></label>
+  {{ tick(own_host, ticked) }}
   <p class="hint">Use only a service whose terms say it doesn't train on what you send. The app can't check this, and a
     preset is not a recommendation.</p>
   <p class="hint">OpenAI and Anthropic count towards your spending limits (<a href="/settings/writer">Settings → Writer</a>).
@@ -77,5 +78,23 @@
 </form>
 <p class="hint">Kept only in your computer's keychain, under "own-scoring": never shown again, never written to a file.</p>
 {% endif %}
+
+{% for kind, choice in paid.items() %}
+<h2>{{ choice.label }}</h2>
+<form method="post" action="/settings/scoring-model/paid" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <label>Model, with its price per 1M tokens (read / written)
+    <select name="model">
+      {% if choice.model not in choice.models %}<option value="">Choose a model</option>{% endif %}
+      {% for model, (name, price) in choice.models.items() %}
+      <option value="{{ model }}"{% if choice.model == model %} selected{% endif %}>{{ name }}: ${{ price.input }} / ${{ price.output }}</option>
+      {% endfor %}
+    </select></label>
+  <p>{{ choice.label }} key: {% if choice.key %}saved{% elif choice.key is none %}the keychain can't be read{% else %}no key saved yet: add it in
+    <a href="/settings/writer">Settings → Writer</a>{% endif %}</p>
+  {{ tick(choice.host, choice.ticked) }}
+  <button type="submit">Save</button>
+</form>
+{% endfor %}
 {% endif %}
 {% endblock %}

@@ -1,5 +1,7 @@
 """Settings → Scoring model, on a temporary settings file and the fake keychain (never the real ones)."""
 
+from html import unescape
+
 import pytest
 import yaml
 from helpers import csrf, log_in
@@ -10,6 +12,8 @@ from test_web_settings import ORIGINAL
 from app import config
 from app.config import AISettings, load_config
 from app.keychain import SERVICE
+from app.llm import prices
+from app.scoring import stage_b
 from app.web import scoring_settings
 
 FAKE_KEY = "fake-key-123"  # tests only
@@ -140,8 +144,8 @@ def test_keychain_trouble_is_named_never_the_key(client, fake_keychain, monkeypa
         raise KeyringLocked(f"locked while handling {FAKE_KEY}")
 
     monkeypatch.setattr(fake_keychain, "get_password", locked)
-    text = client.get(PAGE).text
-    assert "the keychain can&#39;t be read" in text and FAKE_KEY not in text
+    text = unescape(client.get(PAGE).text)
+    assert text.count("the keychain can't be read") == 3 and FAKE_KEY not in text  # yours, OpenAI's, Anthropic's
 
 
 def test_the_test_button_checks_the_scoring_model(client, monkeypatch):
@@ -157,3 +161,63 @@ def test_whatever_was_typed_is_shown_as_text(client):
     sneaky = '"><script>alert(1)</script>'
     text = post(client, PAGE + "/own", address=f"https://scoring.example.net/{sneaky}", model=sneaky).text
     assert "<script>alert(1)</script>" not in text and escape(sneaky) in text
+
+
+@pytest.mark.parametrize(
+    ("kind", "service", "address"),
+    [
+        ("openai", "openai-compatible", "https://api.openai.com/v1"),
+        ("anthropic", "anthropic", "https://api.anthropic.com"),
+    ],
+)
+def test_openai_and_anthropic_are_saved_with_the_tick_and_the_scoring_gate_agrees(
+    client, settings_file, kind, service, address
+):
+    model, host = next(iter(prices.models(kind))), address.split("/")[2]
+    text = post(client, PAGE + "/paid", kind=kind, model=model).text
+    assert f"job ads go to {host}." in text and f'<option value="{model}" selected>' in text  # what was chosen
+    assert scoring(settings_file) == (AISettings().evaluator, "")
+    text = post(client, PAGE + "/paid", kind=kind, model=model, confirm="on").text
+    role, ticked = scoring(settings_file)
+    assert (role.service, role.model, role.address, role.key_name, role.thinking, ticked) == (
+        service, model, address, kind, "off", address
+    )  # fmt: skip
+    assert f"Saved: jobs are scored through {scoring_settings.PAID[kind][0]}." in text
+    assert f"<strong>{model}</strong> through <code>{host}</code>" in text
+    assert f'<option value="{model}" selected>' in text
+    assert text.count('<option value="">Choose a model</option>') == 1  # the other service's only
+    stage_b.gate(role, load_config(settings_file).scoring)  # the page and the gate agree on the address
+
+
+def test_the_same_service_is_not_asked_again_but_another_one_is(client, settings_file):
+    first, second, *_ = prices.models("openai")
+    post(client, PAGE + "/own", **OWN, confirm="on")
+    post(client, PAGE + "/paid", kind="openai", model=first)  # from your own address: asked again
+    assert scoring(settings_file)[0].model == "my-model"
+    post(client, PAGE + "/paid", kind="openai", model=first, confirm="on")
+    post(client, PAGE + "/paid", kind="openai", model=second)  # the same address: not asked again
+    assert (scoring(settings_file)[0].model, scoring(settings_file)[1]) == (second, "https://api.openai.com/v1")
+    text = post(client, PAGE + "/paid", kind="anthropic", model=next(iter(prices.models("anthropic")))).text
+    assert "job ads go to api.anthropic.com." in text and scoring(settings_file)[0].model == second
+
+
+@pytest.mark.parametrize(
+    ("kind", "model"),
+    [("openai", "gpt-made-up"), ("openai", next(iter(prices.models("anthropic")))), ("anthropic", ""),
+     ("made-up", "gpt-made-up"), ("", next(iter(prices.models("openai")))), ("ollama", AISettings().evaluator.model)],
+)  # fmt: skip
+def test_only_a_listed_model_of_openai_or_anthropic_is_saved(client, settings_file, kind, model):
+    text = post(client, PAGE + "/paid", kind=kind, model=model, confirm="on").text
+    assert "Not saved: choose one of the listed models." in text
+    assert scoring(settings_file) == (AISettings().evaluator, "")
+
+
+def test_no_model_is_chosen_for_you_and_the_writers_keys_are_named_never_asked_for(client, fake_keychain):
+    text = client.get(PAGE).text
+    assert text.count('<option value="">Choose a model</option>') == 2 and " selected>" not in text
+    link = 'no key saved yet: add it in <a href="/settings/writer">Settings → Writer</a>'
+    assert " ".join(text.split()).count(link) == 2
+    fake_keychain.store[(SERVICE, "openai")] = FAKE_KEY
+    text = " ".join(client.get(PAGE).text.split())
+    assert "OpenAI key: saved" in text and "Anthropic key: no key saved yet" in text and FAKE_KEY not in text
+    assert text.count('name="key"') == 1  # only your own address's key box: one key per service, on the Writer page

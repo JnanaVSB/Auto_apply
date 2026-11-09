@@ -22,6 +22,7 @@ from app.config import PROJECT_DIR, Config, load_config
 from app.fetch import Fetcher
 from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
 from app.keychain import get_secret, set_secret
+from app.llm import prices
 from app.sources import usajobs
 from app.web import __main__ as web_command
 from app.web import gmail_settings, main, preparer, scoring_settings, security, usajobs_settings
@@ -656,6 +657,10 @@ def test_the_scoring_key_is_refused_on_the_phone_but_the_page_works(phone, data_
                               headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
         assert (response.status_code, scoring_settings.ON_THE_LAPTOP in words(response)) == (403, True)
     assert get_secret(scoring_settings.KEY_NAME) == "fake-key-1234"  # neither changed nor removed
+    model = next(iter(prices.models("openai")))
+    response = phone.post(scoring_settings.PAGE + "/paid", data={"kind": "openai", "model": model, "confirm": "on",
+                          "csrf_token": session.csrf}, headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
+    assert response.status_code == 303 and load_config().ai.evaluator.model == model  # saves no key: works here
 
 
 def test_settings_on_the_phone_says_where_to_change_the_usajobs_key(phone, settings):

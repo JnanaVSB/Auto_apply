@@ -1,7 +1,7 @@
 """Settings → Scoring model (/settings/scoring-model), kept apart from main.py: which model gives jobs their AI score.
-On this computer (Ollama, the default), or through your own address once you ticked the box for exactly that address;
-its key goes only into the keychain, under a name of its own. A save writes the model and the ticked address together,
-or nothing."""
+On this computer (Ollama, the default), or through OpenAI, Anthropic or your own address once you ticked the box for
+exactly that address. OpenAI and Anthropic use the Writer page's key; your own address's key goes only into the
+keychain, under a name of its own. A save writes the model and the ticked address together, or nothing."""
 
 from collections.abc import Callable
 from urllib.parse import urlsplit
@@ -11,10 +11,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from app import llm
-from app.config import AISettings, ConfigError, load_config
+from app.config import DEFAULT_ADDRESSES, AISettings, ConfigError, load_config
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
+from app.llm import prices
 from app.web import actions, security
-from app.web.writer_settings import KEY, number
+from app.web.writer_settings import KEY, OPENAI_ADDRESS, number, saved_keys
 
 PAGE = "/settings/scoring-model"
 KEY_NAME = "own-scoring"  # its own slot, so a Writer on another address keeps its key
@@ -25,9 +26,15 @@ PRESETS = {  # each fills in only the address; you make your own account and key
     "cloudflare": ("Cloudflare", f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1"),
     "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1"),
 }
+PAID = {  # (shown name, service, address); the key is the Writer page's, under the same name as here
+    "openai": ("OpenAI", "openai-compatible", OPENAI_ADDRESS),
+    "anthropic": ("Anthropic", "anthropic", DEFAULT_ADDRESSES["anthropic"]),
+}
 SAVED = {
     "local": "Saved: jobs are scored on this computer.",
     "own": "Saved: jobs are scored through your own address.",
+    "openai": "Saved: jobs are scored through OpenAI.",
+    "anthropic": "Saved: jobs are scored through Anthropic.",
     "key": "Key saved.",
     "removed": "Key removed.",
 }
@@ -52,6 +59,15 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
             return page(request, "scoring_settings.html", file_problem=str(error))
         role, problem = _own(request.state.form, config.scoring.cloud_ok)
         return await _saved(request, page, role, role["address"], "own", problem)
+
+    @app.post(f"{PAGE}/paid")
+    async def score_through_openai_or_anthropic(request: Request) -> Response:
+        try:
+            config = load_config()
+        except ConfigError as error:
+            return page(request, "scoring_settings.html", file_problem=str(error))
+        role, problem = _paid(request.state.form, config.scoring.cloud_ok)
+        return await _saved(request, page, role, role["address"], role["key_name"], problem)
 
     @app.post(f"{PAGE}/test")
     async def test_scoring(request: Request) -> Response:
@@ -109,6 +125,22 @@ def _own(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
     return role, None
 
 
+def _paid(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
+    """OpenAI's or Anthropic's scoring model from the form (kind, model), with the Writer page's key, and why it can't
+    be saved (or None). The address is written out, so the ticked one is exactly the one the scoring gate compares."""
+    kind, model = form.get("kind", ""), form.get("model", "")
+    _, service, address = PAID.get(kind, ("", "", ""))
+    role = {"service": service, "model": model, "address": address, "key_name": kind, "thinking": "off"}
+    if kind not in PAID or model not in prices.models(kind):
+        return role, "Not saved: choose one of the listed models."
+    if not form.get("confirm") and address != cloud_ok:
+        return role, (
+            f"Not saved: tick the box to confirm that your resume (contact details hidden) and job ads go to "
+            f"{_host(address)}."
+        )
+    return role, None
+
+
 def _host(address: str) -> str:
     try:
         return urlsplit(address).hostname or ""
@@ -132,7 +164,17 @@ async def _view(
         own["needs_key"] = "on" if scorer.key_name else ""
     if preset := PRESETS.get(request.query_params.get("preset", "")):
         own["address"] = preset[1]
-    if typed:
+    keys = saved_keys()
+    paid = {
+        kind: {
+            "label": label, "host": _host(address), "models": prices.models(kind), "key": keys[kind],
+            "model": scorer.model if scorer.address == address else "", "ticked": address == config.scoring.cloud_ok,
+        }
+        for kind, (label, _, address) in PAID.items()
+    }  # fmt: skip
+    if typed and typed.get("kind") in paid:  # OpenAI's or Anthropic's form keeps the model chosen
+        paid[typed["kind"]]["model"] = typed.get("model", "")
+    elif typed:
         own |= {name: typed.get(name, "") for name in OWN_FIELDS}
     try:
         key = get_secret(KEY_NAME) is not None
@@ -141,5 +183,6 @@ async def _view(
     return page(
         request, "scoring_settings.html", scorer=scorer, host=_host(scorer.address), own=own,
         own_host=_host(own["address"]), ticked=bool(own["address"]) and own["address"] == config.scoring.cloud_ok,
-        presets=PRESETS, key=key, problem=problem, test=test, saved=SAVED.get(request.query_params.get("saved", "")),
+        presets=PRESETS, key=key, paid=paid, problem=problem, test=test,
+        saved=SAVED.get(request.query_params.get("saved", "")),
     )  # fmt: skip
