@@ -1,9 +1,8 @@
 # Checklist for a cloud computer
 
-**There is no cloud computer for now, and nothing in this file is built.** The app runs on your own laptop. A spare
-laptop may later become a private, always-on server running Ubuntu Server (dual-boot, beside its other system), with the
-main laptop keeping the scoring and the two linked by SSH or another secure way. This is not planned yet. The list below
-is what would have to be true first, should you ever consider a cloud computer. It doesn't recommend one.
+**There is no cloud computer for now, and nothing in this file is built.** The app runs on your own laptop. You may
+later choose to turn a spare computer of your own into a private, always-on server; that isn't planned. The list below is
+what would have to be true first, should you ever consider a cloud computer. It doesn't recommend one.
 
 Why it needs its own list: today's protection is mostly "it's my laptop, and only I can touch it". On a cloud computer,
 someone else owns the machine, it's always on, and it's on the internet.

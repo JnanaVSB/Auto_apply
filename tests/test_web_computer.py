@@ -3,7 +3,7 @@
 
 import pytest
 from helpers import add_job, csrf, log_in, one
-from test_web_phone import ORIGIN, either, phone_login, serve, words  # noqa: F401
+from test_web_phone import EXPIRED, ORIGIN, either, phone_login, serve, words  # noqa: F401
 from test_web_plugin import phone_dashboard  # noqa: F401
 
 from app.web import actions, queries
@@ -50,8 +50,9 @@ def test_the_phone_marks_a_job_and_takes_it_off(both, conn):
         assert ON_LIST in words(part) and TAKE_OFF in words(part) and MARK not in words(part)
         assert one(conn, MARKED) == (1,)
     assert ON_LIST in on_phone(phone, f"/jobs/{job}/form")  # saved, not only in the answer to the press
-    assert MARK in words(press(phone, job, "0"))
-    assert one(conn, MARKED) == (0,)
+    for _ in range(2):  # taking it off twice leaves it off
+        assert MARK in words(press(phone, job, "0"))
+        assert one(conn, MARKED) == (0,)
 
 
 def test_a_recorded_job_shows_the_mark_nowhere_and_keeps_it(both, conn):
@@ -108,11 +109,14 @@ def test_ready_lists_the_marked_jobs_still_to_do_on_both_addresses(both, conn):
         add_job(conn, "Closed Intern", for_computer=1, status="closed")
         add_job(conn, "Gone Intern", for_computer=1, status="no longer available")
         add_job(conn, "Unmarked Intern")
+        newer = add_job(conn, "Robotics Intern", company="Hooli", for_computer=1)
     for page in (words(laptop.get("/ready")), on_phone(phone, "/ready")):
         listed = page.split(f"<h2>{LIST}</h2>")[1].split('class="summary"')[0]  # above the count
         assert f'<a href="/jobs/{job}">ML Intern</a>' in listed and "Initech" in listed
         assert f'action="/jobs/{job}/form/computer"' in listed and TAKE_OFF in listed
-        assert listed.count("<li>") == 1  # skipped, closed, gone and unmarked jobs left out
+        assert f'<a href="/jobs/{newer}">Robotics Intern</a>' in listed
+        assert listed.index("Robotics Intern") < listed.index("ML Intern")  # newest first
+        assert listed.count("<li>") == 2  # skipped, closed, gone and unmarked jobs left out
 
 
 def test_take_it_off_on_ready_works_from_both_addresses(both, conn):
@@ -124,6 +128,31 @@ def test_take_it_off_on_ready_works_from_both_addresses(both, conn):
         response = press(client, job, "0", to="ready")
         assert (response.status_code, response.headers["location"]) == (303, "/ready")
         assert one(conn, MARKED) == (0,)
+
+
+def test_the_mark_needs_a_login_the_token_and_this_site(both, conn):
+    _, phone = both
+    with conn:
+        job = add_job(conn, "ML Intern", for_computer=1)
+    path, data = f"/jobs/{job}/form/computer", {"value": "0"}
+    no_login = phone.post(path, data=data, headers=ORIGIN, follow_redirects=False)
+    assert (no_login.status_code, no_login.headers["location"]) == (303, "/login")
+    for token in ({}, {"csrf_token": "made-up-token"}):
+        refused = phone.post(path, data=data | token, headers=phone.cookie | ORIGIN, follow_redirects=False)
+        assert (refused.status_code, EXPIRED in words(refused)) == (403, True)
+    another_site = phone.cookie | {"Origin": "https://attacker.example"}
+    sent = phone.post(path, data=data | {"csrf_token": phone.token}, headers=another_site, follow_redirects=False)
+    assert sent.status_code == 403
+    assert one(conn, MARKED) == (1,)  # untouched by every refused press
+
+
+@pytest.mark.parametrize("value", ["", "2", "yes"])
+def test_only_1_sets_the_mark_any_other_value_takes_it_off(both, conn, value):
+    _, phone = both
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=NO_FORM, for_computer=1)
+    assert MARK in words(press(phone, job, value))
+    assert one(conn, MARKED) == (0,)
 
 
 def test_an_unknown_job_is_not_found_from_either_address(both):
