@@ -27,7 +27,8 @@ git clone https://github.com/JnanaVSB/Auto_apply.git && cd Auto_apply && ./setup
 ## 2. What it asks, in order
 Every question is No unless you type `y` (or `yes`). Some only come up when they're needed.
 
-1. **Install Miniforge?** Only if no conda is found on your computer. Miniforge is the free tool that holds the app's
+1. **Install Miniforge?** Only if no conda is found on your computer, or the one found is older than 26.1 or doesn't
+   run (it is left as it is). Miniforge is the free tool that holds the app's
    Python. It goes in `~/miniforge3`, changes no shell settings, and the download (about 130 MB, or 90 MB on a Mac) is
    checked against its fingerprint before anything runs.
 2. **Rebuild the environment?** Only if an earlier `auto_apply` environment is broken or half-built. Your `data/`
@@ -77,14 +78,13 @@ Each stop is one line saying why. Find yours here:
   computer can't run the one-command setup.
 - **"Setup needs at least 3 GB free in…"**: free some space in the folder it names, then run it again. **"Could not
   check the free space…"** means the home folder couldn't be read.
-- **"Nothing installed. To install conda yourself…"**: you answered no to Miniforge. Install it yourself from the link
-  it gives, or run `./setup.sh` again and answer yes.
+- **"Nothing installed…"**: you answered no to Miniforge. Install it yourself in `~/miniforge3` from the link it gives,
+  or update your conda to 26.1 or newer, or run `./setup.sh` again and answer yes.
 - **"…miniforge3 exists but has no conda in it"**: an earlier install was probably cut off. Setup never overwrites a
   folder: move or remove `~/miniforge3`, then run it again.
-- **"The conda at … doesn't run"**: if it is `~/miniforge3`, an earlier install was probably cut off: remove that
-  folder, then run it again. Otherwise repair or update that conda.
-- **"The conda at … is version …; setup needs 26.1 or newer"**: update it with the command the line gives, then run it
-  again. Or install Miniforge instead.
+- **"The Miniforge in ~/miniforge3 is version …"** or **"…doesn't run"**: it is too old to build the environment, or an
+  earlier install was cut off. Setup never deletes it: move or remove `~/miniforge3`, then run it again, and it
+  installs a fresh one.
 - **"curl is needed…"**: install curl, then run it again.
 - **"Downloading Miniforge failed"**: check your internet connection, then run it again.
 - **"The download's fingerprint is wrong; nothing was installed"**: the file that arrived isn't the one setup expects.
@@ -108,9 +108,11 @@ Each stop is one line saying why. Find yours here:
   is somewhere else, it names the setting to check.
 
 ## 6. If you already have Miniconda or Anaconda
-Setup uses the conda you already have, as it is, if it is version 26.1 or newer, and makes its own `auto_apply`
-environment with it. Setup itself only
-names conda-forge, the free community channel. If your conda still asks you to accept Anaconda's terms, that comes from
+Setup uses the conda you already have, as it is. If your `auto_apply` environment already works, setup keeps it,
+whatever your conda's version. To build the environment it needs conda 26.1 or newer. If yours is older or doesn't
+run, setup says so ("The conda at … setup needs 26.1 or newer, so it can install its own Miniforge"), leaves it as it
+is, and offers its own Miniforge in `~/miniforge3`, which it then uses from that run on. Setup itself only names
+conda-forge, the free community channel. If your conda still asks you to accept Anaconda's terms, that comes from
 your conda's own settings: read them and decide, or ask whoever gave you this.
 
 ## 7. What setup never does

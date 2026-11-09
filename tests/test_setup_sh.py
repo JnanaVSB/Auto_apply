@@ -13,6 +13,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parent.parent / "setup.sh"
 # The only real programs on the PATH: none of them downloads anything.
 REAL_TOOLS = ("awk", "bash", "cat", "cp", "dirname", "mkdir", "mktemp", "rm", "sha256sum", "touch")
+IMPORT = "run -n auto_apply python -c import sqlcipher3, app.setup, app.web.main"  # does the environment work?
 BUILD = "create -y -n auto_apply --override-channels -c conda-forge --file conda-linux-64.lock"  # conda-forge only
 PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-deps -r requirements-pip.txt"
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
@@ -49,6 +50,11 @@ run) case "$*" in
     esac ;;
 esac""",
 }
+OLD_CONDA = """if [ "$1" = --version ]; then
+    [ "{version}" != fails ] || exit 1; echo "{version}"; exit 0
+fi
+echo "$*" >> "$STATE/old.log"
+exit 1"""
 # $BASH names the bash that runs it
 INSTALLER = (
     b'#!/bin/bash\necho "$BASH $*" >> "$STATE/installer.log"\nmkdir -p "$3/bin"\ncp "$STATE/conda" "$3/bin/conda"\n'
@@ -119,6 +125,10 @@ class Sandbox:
     def no_conda(self) -> None:
         (self.fakes / "conda").unlink()
         self.no_environment()
+
+    def old_conda(self, version: str = "conda 4.8.3") -> None:
+        """An older conda first on the PATH, which logs anything but its version to old.log."""
+        executable(self.fakes / "conda", OLD_CONDA.format(version=version))
 
     def pin(self, data: bytes, name: str = "LINUX_SHA256") -> None:
         """The copy's fingerprint for one system replaced by that of these bytes: the real script's pin can't be
@@ -211,28 +221,79 @@ def test_too_little_free_space_for_miniforge_stops_before_the_download(sandbox):
 
 
 @pytest.mark.parametrize("version", ["conda 26.1.0", "conda 27.0.1"])
-def test_a_new_enough_conda_is_used(sandbox, version):
+def test_a_new_enough_conda_builds_the_environment(sandbox, version):
+    sandbox.no_environment()
     assert sandbox.run(FAKE_CONDA_VERSION=version).returncode == 0
+    assert BUILD in sandbox.log("conda")
 
 
-@pytest.mark.parametrize(("version", "shown"), [("conda 4.8.3", "4.8.3"), ("conda 26.0.9", "26.0.9")])
-def test_an_old_conda_stops_with_how_to_update_it(sandbox, version, shown):
-    result = sandbox.run(FAKE_CONDA_VERSION=version)
+def test_an_old_conda_with_a_good_environment_is_left_alone(sandbox):
+    result = sandbox.run(FAKE_CONDA_VERSION="conda 4.8.3")  # it built the environment already, so it reads the lock
+    assert result.returncode == 0, result.stderr
+    assert "setup needs 26.1" not in result.stdout
+    assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
+
+
+@pytest.mark.parametrize(
+    ("version", "problem"),
+    [
+        ("conda 4.8.3", "is version 4.8.3"),
+        ("conda 26.0.9", "is version 26.0.9"),
+        ("fails", "doesn't run"),
+        ("hello", "doesn't run"),
+        ("conda 26", "doesn't run"),
+        ("conda 2x.1", "doesn't run"),
+        ("", "doesn't run"),
+    ],
+)
+def test_an_old_or_broken_conda_gets_miniforge_offered_instead(sandbox, version, problem):
+    sandbox.no_environment()
+    result = sandbox.run(answers="n\n", FAKE_CONDA_VERSION=version)
     assert result.returncode == 1
-    conda = sandbox.fakes / "conda"
-    assert result.stderr == (
-        f'The conda at {conda} is version {shown}; setup needs 26.1 or newer. Update it with: "{conda}" update -n '
-        "base conda (then run ./setup.sh again), or install Miniforge.\n"
+    assert result.stdout.startswith(
+        f"The conda at {sandbox.fakes / 'conda'} {problem}; setup needs 26.1 or newer, so it can install its own "
+        "Miniforge in ~/miniforge3 instead. That conda is left as it is.\nInstall Miniforge 26.9.4-1"
     )
-    assert sandbox.log("conda") == []
+    assert result.stderr.startswith("Nothing installed. Install Miniforge yourself in ~/miniforge3")
+    assert sandbox.log("conda") == [IMPORT]  # only asked whether the environment works, then its version
+    assert sandbox.log("curl") == []
 
 
-@pytest.mark.parametrize("version", ["fails", "hello", "conda 26", "conda 2x.1", ""])
-def test_a_conda_that_does_not_run_stops_and_names_it(sandbox, version):
-    result = sandbox.run(FAKE_CONDA_VERSION=version)
+def test_yes_installs_miniforge_beside_an_old_conda_and_builds_with_it(sandbox):
+    sandbox.old_conda()
+    sandbox.no_environment()
+    sandbox.pin(INSTALLER)
+    result = sandbox.run(answers="y\n")
+    assert result.returncode == 0, result.stderr
+    assert "That conda is left as it is." in result.stdout
+    assert sandbox.log("installer") == [f"/bin/bash -b -p {sandbox.home}/miniforge3"]
+    assert BUILD in sandbox.log("conda")  # the new Miniforge's conda
+    assert sandbox.log("old") == [IMPORT]  # the old conda only asked whether the environment works
+    assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
+
+
+def test_miniforge_comes_before_an_older_conda_on_the_path(sandbox):
+    sandbox.old_conda()
+    executable(sandbox.home / "miniforge3" / "bin" / "conda", FAKES["conda"])
+    result = sandbox.run()
+    assert result.returncode == 0, result.stderr
+    assert sandbox.log("old") == []
+    assert sandbox.log("conda")[0] == IMPORT
+
+
+@pytest.mark.parametrize(("version", "problem"), [("conda 4.8.3", "is version 4.8.3"), ("fails", "doesn't run")])
+def test_an_old_or_broken_miniforge_of_setups_own_stops_and_is_left(sandbox, version, problem):
+    sandbox.no_conda()
+    conda = executable(sandbox.home / "miniforge3" / "bin" / "conda", OLD_CONDA.format(version=version))
+    result = sandbox.run(answers="y\n")
     assert result.returncode == 1
-    assert result.stderr.startswith(f"The conda at {sandbox.fakes / 'conda'} doesn't run. If it is ~/miniforge3")
-    assert sandbox.log("conda") == []
+    assert result.stderr == (
+        f"The Miniforge in ~/miniforge3 {problem}; setup needs conda 26.1 or newer. Move or remove that folder, then "
+        "run ./setup.sh again: it installs a fresh one.\n"
+    )
+    assert conda.exists()
+    assert "Install Miniforge" not in result.stdout
+    assert sandbox.log("old") == [IMPORT]
 
 
 @pytest.mark.parametrize("place", ["CONDA_EXE", "miniconda3", "anaconda3"])
@@ -242,7 +303,7 @@ def test_a_conda_elsewhere_is_used_as_it_is(sandbox, place):
     executable(found, FAKES["conda"])
     result = sandbox.run(**({"CONDA_EXE": str(found)} if place == "CONDA_EXE" else {}))
     assert result.returncode == 0, result.stderr
-    assert sandbox.log("conda")[0] == "run -n auto_apply python -c import sqlcipher3, app.setup, app.web.main"
+    assert sandbox.log("conda")[0] == IMPORT
     assert not (sandbox.home / "miniforge3").exists()
 
 
@@ -253,7 +314,10 @@ def test_no_conda_and_no_stops_with_the_manual_steps_and_downloads_nothing(sandb
     assert result.stdout.startswith(
         "Install Miniforge 26.9.4-1 (about 130 MB download) in ~/miniforge3? It changes no shell settings. [y/N] "
     )
-    assert "https://github.com/conda-forge/miniforge, then run ./setup.sh again" in result.stderr
+    assert result.stderr == (
+        "Nothing installed. Install Miniforge yourself in ~/miniforge3 (https://github.com/conda-forge/miniforge) or "
+        "update your conda to 26.1 or newer, then run ./setup.sh again.\n"
+    )
     assert sandbox.log("curl") == []
 
 

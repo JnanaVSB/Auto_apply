@@ -86,73 +86,79 @@ Darwin)
 *) stop "This system ($system) is not supported: setup runs on Linux (x86-64) and Apple-silicon Macs." ;;
 esac
 
-# 2. conda: an existing one is used as it is
+# 2. conda: setup's own ~/miniforge3 first, then one already on this computer
+miniforge_conda=$HOME/miniforge3/bin/conda
 conda=
-if [ -n "${CONDA_EXE:-}" ] && [ -f "$CONDA_EXE" ] && [ -x "$CONDA_EXE" ]; then
-    conda=$CONDA_EXE
-else
-    found=$(command -v conda || true)
-    case $found in
-    /*) conda=$found ;; # a program on the PATH; a shell function or alias gives a bare name instead
-    esac
-fi
-for candidate in "$HOME/miniforge3/bin/conda" "$HOME/miniconda3/bin/conda" "$HOME/anaconda3/bin/conda"; do
+for candidate in "$miniforge_conda" "${CONDA_EXE:-}" "$(command -v conda || true)" \
+    "$HOME/miniconda3/bin/conda" "$HOME/anaconda3/bin/conda"; do
+    # a program file only: for a shell function or alias, `command -v` gives a bare name, which is no file here
     if [ -z "$conda" ] && [ -f "$candidate" ] && [ -x "$candidate" ]; then
         conda=$candidate
     fi
 done
 
-if [ -z "$conda" ]; then
-    [ ! -e "$HOME/miniforge3" ] ||
-        stop "$HOME/miniforge3 exists but has no conda in it (perhaps a cut-off install): move or remove that folder, then run ./setup.sh again."
-    ask "Install Miniforge $MINIFORGE_VERSION (about $download_size download) in ~/miniforge3? It changes no shell settings." ||
-        stop "Nothing installed. To install conda yourself, follow https://github.com/conda-forge/miniforge, then run ./setup.sh again."
-    command -v curl >/dev/null || stop "curl is needed to download Miniforge: install curl, then run ./setup.sh again."
-    need_space
-    workdir=$(mktemp -d)
-    trap 'rm -rf "$workdir"' EXIT
-    # -q first: no ~/.curlrc settings
-    curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
-        stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
-    if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
-        actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')
-    else
-        actual=$(shasum -a 256 <"$workdir/$installer" | awk '{ print $1 }')
-    fi
-    if [ "$actual" != "$fingerprint" ]; then
-        rm -f "$workdir/$installer"
-        stop "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later."
-    fi
-    /bin/bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
-        stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
-    rm -rf "$workdir"
-    conda=$HOME/miniforge3/bin/conda
-fi
-
-conda_version=$("$conda" --version 2>/dev/null || true)
-conda_version=${conda_version#conda }
-conda_major=${conda_version%%.*}
-case $conda_version in
-*.*) conda_minor=${conda_version#*.} ;;
-*) conda_minor= ;; # no "X.Y": not a version
-esac
-conda_minor=${conda_minor%%.*}
-case $conda_major:$conda_minor in
-:* | *: | *[!0-9:]*)
-    stop "The conda at $conda doesn't run. If it is ~/miniforge3 (perhaps a cut-off install), remove that folder and run ./setup.sh again; otherwise repair or update that conda."
-    ;;
-esac
-if [ "$conda_major" -lt "$MIN_CONDA_MAJOR" ] ||
-    { [ "$conda_major" -eq "$MIN_CONDA_MAJOR" ] && [ "$conda_minor" -lt "$MIN_CONDA_MINOR" ]; }; then
-    stop "The conda at $conda is version $conda_version; setup needs $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer. Update it with: \"$conda\" update -n base conda (then run ./setup.sh again), or install Miniforge."
-fi
+conda_problem() { # why this conda can't build the environment ("doesn't run", "is version X"), or nothing
+    version=$("$1" --version 2>/dev/null || true)
+    version=${version#conda }
+    major=${version%%.*}
+    case $version in
+    *.*) minor=${version#*.} ;;
+    *) minor= ;; # no "X.Y": not a version
+    esac
+    minor=${minor%%.*}
+    case $major:$minor in
+    :* | *: | *[!0-9:]*) echo "doesn't run" ;;
+    *) if [ "$major" -lt "$MIN_CONDA_MAJOR" ] ||
+        { [ "$major" -eq "$MIN_CONDA_MAJOR" ] && [ "$minor" -lt "$MIN_CONDA_MINOR" ]; }; then
+        echo "is version $version"
+    fi ;;
+    esac
+}
 
 # 3. The environment, by name, so whichever one is active doesn't matter
 works() { "$conda" run -n "$ENV_NAME" python -c "$IMPORT_TEST" >/dev/null 2>&1; }
 
-if works; then
-    echo "Environment $ENV_NAME: ready (left as it is)."
+if [ -n "$conda" ] && works; then
+    echo "Environment $ENV_NAME: ready (left as it is)." # whatever the conda's version: it built this already
 else
+    # Building needs conda 26.1 or newer. Another conda that is older or broken is left as it is, and setup offers its
+    # own Miniforge instead.
+    problem=
+    [ -z "$conda" ] || problem=$(conda_problem "$conda")
+    if [ -n "$problem" ] && [ "$conda" != "$miniforge_conda" ]; then
+        echo "The conda at $conda $problem; setup needs $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer, so it can install its own Miniforge in ~/miniforge3 instead. That conda is left as it is."
+        conda=
+    fi
+    if [ -z "$conda" ]; then
+        [ ! -e "$HOME/miniforge3" ] ||
+            stop "$HOME/miniforge3 exists but has no conda in it (perhaps a cut-off install): move or remove that folder, then run ./setup.sh again."
+        ask "Install Miniforge $MINIFORGE_VERSION (about $download_size download) in ~/miniforge3? It changes no shell settings." ||
+            stop "Nothing installed. Install Miniforge yourself in ~/miniforge3 (https://github.com/conda-forge/miniforge) or update your conda to $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer, then run ./setup.sh again."
+        command -v curl >/dev/null || stop "curl is needed to download Miniforge: install curl, then run ./setup.sh again."
+        need_space
+        workdir=$(mktemp -d)
+        trap 'rm -rf "$workdir"' EXIT
+        # -q first: no ~/.curlrc settings
+        curl -q -fL --proto '=https' --tlsv1.2 --connect-timeout 30 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
+            stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
+        if command -v sha256sum >/dev/null; then # read from stdin, so no file name (or its escaping) in the output
+            actual=$(sha256sum <"$workdir/$installer" | awk '{ print $1 }')
+        else
+            actual=$(shasum -a 256 <"$workdir/$installer" | awk '{ print $1 }')
+        fi
+        if [ "$actual" != "$fingerprint" ]; then
+            rm -f "$workdir/$installer"
+            stop "The download's fingerprint is wrong; nothing was installed. Run ./setup.sh again later."
+        fi
+        /bin/bash "$workdir/$installer" -b -p "$HOME/miniforge3" || # -b: no questions, no shell changes
+            stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
+        rm -rf "$workdir"
+        conda=$miniforge_conda
+        problem=$(conda_problem "$conda")
+    fi
+    [ -z "$problem" ] ||
+        stop "The Miniforge in ~/miniforge3 $problem; setup needs conda $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer. Move or remove that folder, then run ./setup.sh again: it installs a fresh one."
+
     need_space
     if "$conda" env list | awk -v name="$ENV_NAME" '$1 == name { found = 1 } END { exit !found }'; then
         ask "Environment $ENV_NAME is there but can't load the app (broken or half-built). Rebuild it? Your data folder is not touched." ||
