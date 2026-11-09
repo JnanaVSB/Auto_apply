@@ -5,12 +5,14 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from helpers import add_job
+from helpers import add_job, one
+from test_spending import calls
 from test_stage_a import RESUME, FakeMeaning
 from test_tiles import RESUME_CLS
 
 from app import llm, questionnaire
-from app.config import AIRole, AISettings, Config, ScoringSettings
+from app.config import AIRole, AISettings, Config, ScoringSettings, SpendingSettings
+from app.council import spending
 from app.documents import privacy, tile_sets
 from app.documents.tiles import Tile
 from app.resume import Resume
@@ -25,11 +27,15 @@ CONTACT = {"full_name": "Alex Example", "email": "alex@example.com",
            "linkedin": "https://www.linkedin.com/in/alex-example-fake"}  # fmt: skip
 PAPER = Tile("pub-0001", "publication", "Publications", {"name": "Fake Paper. 2025.",
              "link": "https://example.org/fake-paper"})  # fmt: skip
+OPUS = AIRole(service="anthropic", model="claude-opus-5-5", key_name="anthropic")
+USED = llm.Usage(2000, 0, 500)  # Opus: 2000 x $4 + 500 x $20 per 1M = $0.018
+MONEY = "SELECT calls, input_tokens, cached_tokens, output_tokens, cost, reserved, uncounted FROM scoring_days"
 
 
 @pytest.fixture(autouse=True)
 def fixed_day(monkeypatch):
     monkeypatch.setattr(queue, "today", lambda: TODAY)
+    monkeypatch.setattr(spending, "today", lambda: TODAY)
     monkeypatch.setattr(queue.time, "sleep", lambda seconds: None)
 
 
@@ -63,15 +69,32 @@ class Sent:
         return '{"score": 90, "reasons": ["[my name] fits."]}'
 
 
-def run(conn, ai, config=CONFIG, resume=MY_RESUME, **options):
+def replies(ai, usage=llm.NOTHING):
+    """A stand-in AI that gives only an answer's text, sent as llm.call sends it: with the tokens counted for it."""
+    return lambda *found, **options: llm.Reply(ai(*found, **options), usage)
+
+
+def run(conn, ai, config=CONFIG, resume=MY_RESUME, usage=llm.NOTHING, **options):
     lines = []
-    tally = queue.run(conn, config, checker(), SETUP, resume, ask=ai, out=lines.append, **options)
+    tally = queue.run(conn, config, checker(), SETUP, resume, call=replies(ai, usage), out=lines.append, **options)
     return tally, lines
 
 
 def own_address(data_dir, ticked=OWN.address):
     (data_dir / "resume.tex").write_text(RESUME_CLS, encoding="utf-8")
     return Config(data_dir=data_dir, scoring=ScoringSettings(cloud_ok=ticked), ai=AISettings(evaluator=OWN))
+
+
+def paid(data_dir, role=OPUS, daily=15, monthly=150):
+    """Scoring through a service you ticked, within these spending limits."""
+    return own_address(data_dir, role.address).model_copy(
+        update={"ai": AISettings(evaluator=role), "spending": SpendingSettings(daily=daily, monthly=monthly)}
+    )
+
+
+def you_and_a_job(conn):
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
+    return add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
 
 
 def test_newest_first_then_strongest_match_and_nothing_older_than_90_days(conn):
@@ -100,7 +123,7 @@ def test_only_out_of_date_scores_are_done_again(conn):
     run(conn, ai)
     assert ai.titles == ["RL Intern"]  # its ad changed
     ai = FakeAI()
-    queue.run(conn, CONFIG, checker(), SETUP, Resume(RESUME, "new-resume-fp"), ask=ai, out=lambda line: None)
+    queue.run(conn, CONFIG, checker(), SETUP, Resume(RESUME, "new-resume-fp"), call=replies(ai), out=lambda line: None)
     assert ai.titles == ["RL Intern"]  # scored with an older resume
 
 
@@ -264,13 +287,13 @@ def test_a_failed_new_try_is_not_repeated_until_the_resume_or_ad_changes(conn):
         return "not JSON"
 
     for _ in range(2):  # the failed new try is made once, not again on the next run
-        queue.run(conn, CONFIG, checker(), SETUP, new_resume, ask=bad, out=lambda line: None)
+        queue.run(conn, CONFIG, checker(), SETUP, new_resume, call=replies(bad), out=lambda line: None)
     assert len(tries) == 2  # one job, two tries, one run
     assert conn.execute("SELECT score FROM ai_scores").fetchone()[0] == 30  # the older score stays
     with conn:
         conn.execute("UPDATE jobs SET description = 'Robots now.' WHERE id = ?", (job,))
     ai = FakeAI()
-    queue.run(conn, CONFIG, checker(), SETUP, new_resume, ask=ai, out=lambda line: None)
+    queue.run(conn, CONFIG, checker(), SETUP, new_resume, call=replies(ai), out=lambda line: None)
     assert ai.titles == ["RL Intern"]  # its ad changed: tried again
 
 
@@ -302,3 +325,70 @@ def test_an_address_you_never_ticked_stops_the_run_before_anything_is_done(conn,
     with pytest.raises(llm.StopScoring, match="isn't ticked for this address"):
         run(conn, ai, own_address(tmp_path, ticked=""))
     assert ai.texts == [] and conn.execute("SELECT count(*) FROM stage_a").fetchone()[0] == 0
+
+
+def test_a_paid_request_within_your_limits_is_sent_through_the_filter_and_its_cost_counted(conn, tmp_path):
+    you_and_a_job(conn)
+    ai = Sent()
+    run(conn, ai, paid(tmp_path), Resume("Alex Example trained robots in PyTorch.", "resume-fp"), usage=USED)
+    assert "Alex" not in ai.texts[0] and "[my name]" in ai.texts[0]
+    assert one(conn, MONEY) == (1, 2000, 0, 500, pytest.approx(0.018), 0, 0)  # what was set aside became its cost
+    assert spending.spent(conn, TODAY) == pytest.approx((0.018, 0.018))  # the council's limits see it
+
+
+@pytest.mark.parametrize(
+    ("day", "council", "line"),
+    [
+        (TODAY, 14.99, "today's spending limit of $15.00 would be passed ($14.99 spent today"),
+        ("2026-10-02", 149.99, "this month's spending limit of $150.00 would be passed ($149.99 spent this month"),
+    ],
+)
+def test_a_paid_request_past_your_limits_is_refused_and_scoring_waits_until_tomorrow(conn, tmp_path, day, council,
+                                                                                     line):  # fmt: skip
+    calls(conn, ("done", council, 0, day), job=you_and_a_job(conn))  # the council's spend counts against them too
+    ai = Sent()
+    with pytest.raises(llm.StopScoring, match=re.escape(line)):
+        run(conn, ai, paid(tmp_path))
+    assert ai.texts == [] and one(conn, MONEY) == (0, 0, 0, 0, 0, 0, 0)  # nothing sent, nothing set aside
+    assert queue.used_today(conn) == 120 * 60  # automatic scoring waits until midnight instead of trying again
+
+
+def test_your_own_address_without_a_price_is_sent_but_not_counted(conn, tmp_path):
+    you_and_a_job(conn)
+    run(conn, Sent(), paid(tmp_path, OWN, daily=1), usage=USED)
+    assert one(conn, MONEY) == (1, 2000, 0, 500, 0, 0, 1)  # its tokens kept, its dollars "at least"
+    assert spending.history(conn, "day")[0].uncounted
+
+
+@pytest.mark.parametrize(
+    "error", [llm.LLMError("the answer was cut off", USED), llm.TimedOut("no answer within 120 seconds")]
+)
+def test_a_failed_paid_request_still_counts_what_it_may_have_cost(conn, tmp_path, error):
+    you_and_a_job(conn)
+
+    def failing(*found, **options):
+        raise error
+
+    run(conn, failing, paid(tmp_path))
+    sent, *tokens, cost, reserved, _ = one(conn, MONEY)
+    assert (sent, reserved) == (2, 0)  # the try and its retry, each ended
+    if error.usage != llm.NOTHING:  # charged for what it wrote before it failed (an empty Usage is still truthy)
+        assert (tokens, cost) == ([4000, 0, 1000], pytest.approx(0.036))
+    else:  # no answer, so perhaps charged up to what was set aside: far more than what it read
+        assert tokens == [0, 0, 0] and cost > 0.036
+
+
+def test_what_a_stopped_run_set_aside_stays_counted_as_spent(conn):
+    with conn:
+        conn.execute("INSERT INTO scoring_days (day, calls, reserved) VALUES ('2026-10-27', 1, 0.5)")
+    _, lines = run(conn, FakeAI())
+    assert one(conn, "SELECT cost, reserved FROM scoring_days WHERE day = '2026-10-27'") == (0.5, 0)
+    assert "The last scoring run stopped while waiting for an answer: up to $0.50 is counted as spent." in lines
+    _, lines = run(conn, FakeAI())
+    assert not any("stopped while waiting" in line for line in lines)  # said once
+
+
+def test_scoring_on_this_computer_counts_no_money(conn):
+    add_job(conn, "RL Robot Engineer", description="Robots.", date_posted=posted(1))
+    tally, _ = run(conn, FakeAI(), usage=USED)
+    assert tally.scored == 1 and one(conn, MONEY) == (0, 0, 0, 0, 0, 0, 0) and spending.history(conn, "day") == []

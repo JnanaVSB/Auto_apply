@@ -1,6 +1,6 @@
 """The scoring queue: the quick check on every open job, then the AI score for the jobs that passed, newest first and
 strongest match first, within the scoring time per day. It pauses while a collection runs and continues where it
-stopped; every job's result is saved as soon as it is done."""
+stopped; every job's result is saved as soon as it is done. A paid request is sent only within your spending limits."""
 
 import json
 import time
@@ -11,7 +11,8 @@ from typing import NamedTuple
 import sqlcipher3
 
 from app import llm, questionnaire
-from app.config import Config
+from app.config import AIRole, Config
+from app.council import spending
 from app.documents import privacy, tile_sets
 from app.resume import Resume, read_latex
 from app.scoring import stage_a, stage_b
@@ -33,6 +34,15 @@ WAITING = f"""SELECT j.id FROM jobs j JOIN stage_a a ON a.job_id = j.id
 JOB = """SELECT j.title, j.description, a.keywords, a.job_skills, a.shared_skills, a.meaning
     FROM jobs j JOIN stage_a a ON a.job_id = j.id WHERE j.id = ? AND j.status = 'open'"""
 RUNNING = "SELECT 1 FROM collect_runs WHERE finished_at IS NULL AND started_at > ?"
+USED_UP = """INSERT INTO scoring_days (day, seconds) VALUES (?, ?)
+    ON CONFLICT (day) DO UPDATE SET seconds = max(seconds, excluded.seconds)"""
+RESERVE = """INSERT INTO scoring_days (day, calls, reserved) VALUES (?, 1, ?)
+    ON CONFLICT (day) DO UPDATE SET calls = calls + 1, reserved = reserved + excluded.reserved"""
+CHARGED = """UPDATE scoring_days SET reserved = max(reserved - ?, 0), input_tokens = input_tokens + ?,
+    cached_tokens = cached_tokens + ?, output_tokens = output_tokens + ?, cost = cost + ?, uncounted = max(uncounted, ?)
+    WHERE day = ?"""
+LEFT_OVER = "SELECT coalesce(sum(reserved), 0) FROM scoring_days"
+KEPT = "UPDATE scoring_days SET cost = cost + reserved, reserved = 0 WHERE reserved > 0"
 Output = Callable[[str], None]
 
 
@@ -99,7 +109,7 @@ def run(
     job_ids: list[int] | None = None,
     stop: Callable[[], None] = lambda: None,
     out: Output = print,
-    ask: stage_b.Ask = llm.ask,
+    call: Callable[..., llm.Reply] = llm.call,
 ) -> Tally:
     """The quick check on every open job that needs it, then the AI score.
 
@@ -107,6 +117,7 @@ def run(
     these"), just those jobs, quick check included, in that order, of any age, without using up the day's time.
     A failed job is saved only once the next job goes differently. SAME_FAILURES in a row stop the run: the first is
     saved as failed, so that a repeat moves on, and the others stay waiting; the time of all of them counts.
+    `call` sends one request (llm.call); a paid one only within your spending limits, its cost counted.
     """
 
     def pause_or_stop() -> None:
@@ -114,7 +125,9 @@ def run(
         wait_for_collections(conn, stop, out)
 
     settings, role = config.scoring, config.ai.evaluator
+    _left_over(conn, out)
     shield = None if role.service == "ollama" else _shield(conn, config)
+    ask = _counted(conn, config, call) if shield is not None else lambda *found, **options: call(*found, **options).text
     stage_a.run(conn, checker, setup, settings, pause_or_stop, out, only=job_ids)
     ids = waiting(conn, role.model, setup, resume.fingerprint) if job_ids is None else job_ids
     daily = job_ids is None  # the queue's own run: its time counts towards the scoring time per day
@@ -158,6 +171,46 @@ def run(
     if ids:
         out(_summary(tally, settings.ready_threshold, len(ids), used_today(conn), limit))
     return tally
+
+
+def _counted(conn: sqlcipher3.Connection, config: Config, call: Callable[..., llm.Reply]) -> stage_b.Ask:
+    """A paid request, as the council's: its largest possible cost set aside if it still fits your spending limits
+    (else llm.StopScoring, and automatic scoring waits until tomorrow), then what it really cost instead."""
+
+    def ask(role: AIRole, system: str, user: str, shape: dict, *, retry: bool) -> str:
+        largest, day = spending.largest(role, system + user), spending.today()
+        with conn:  # checked and set aside together, so the council can't take the same room
+            if not (refusal := spending.refusal(conn, role, largest, config.spending, day)):
+                conn.execute(RESERVE, (day, largest or 0))
+        if refusal:
+            with conn:
+                conn.execute(USED_UP, (today(), config.scoring.minutes_per_day * 60))
+            raise llm.StopScoring(refusal)
+        usage, cost = llm.NOTHING, largest  # no answer, or a time-out: perhaps charged up to what was set aside
+        try:
+            reply = call(role, system, user, shape, retry=retry)
+            usage, cost = reply.usage, spending.charged(role, reply.usage)
+            return reply.text
+        except llm.TimedOut:
+            raise
+        except llm.LLMError as error:  # refused or broken: what the service still charged for it
+            usage, cost = error.usage, spending.charged(role, error.usage)
+            raise
+        finally:
+            with conn:
+                conn.execute(CHARGED, (largest or 0, *usage, cost or 0, cost is None, day))
+
+    return ask
+
+
+def _left_over(conn: sqlcipher3.Connection, out: Output) -> None:
+    """What a run stopped while waiting for an answer (a crash, a power cut) had set aside stays counted: it may have
+    been charged up to that. Only one scoring run sends at a time (score.SCORE_LOCK), so none is still waiting."""
+    with conn:
+        if left := conn.execute(LEFT_OVER).fetchone()[0]:
+            conn.execute(KEPT)
+    if left:
+        out(f"The last scoring run stopped while waiting for an answer: up to ${left:.2f} is counted as spent.")
 
 
 def _shield(conn: sqlcipher3.Connection, config: Config) -> privacy.Shield:

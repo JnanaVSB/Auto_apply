@@ -74,11 +74,6 @@ def gate(role: AIRole, settings: ScoringSettings) -> None:
             f"The box for sending your resume to {host} isn't ticked for this address: tick it in {FIX_IT}, or score "
             "on this computer."
         )
-    if not role.own:  # OpenAI and Anthropic charge: refused until their cost is counted (8E, E2c removes this)
-        raise llm.StopScoring(
-            f"Scoring through {host} comes with counting its cost in your spending limits, which isn't built yet: "
-            f"choose this computer or your own address in {FIX_IT}."
-        )
 
 
 def message(resume: str, title: str, description: str | None, shield: privacy.Shield | None = None) -> tuple[str, str]:

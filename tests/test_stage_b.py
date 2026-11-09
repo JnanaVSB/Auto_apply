@@ -171,18 +171,15 @@ def test_reasons_get_your_details_back_and_a_body_link_never_becomes_yours():
 
 
 OPENROUTER = "https://openrouter.ai/api/v1"
-NOT_YET = "comes with counting its cost in your spending limits, which isn't built yet"
+CLAUDE = AIRole(service="anthropic", model="claude-sonnet-5-5", key_name="anthropic")
+OPENAI = AIRole(service="openai-compatible", model="gpt-6.1-sol", address="https://api.openai.com/v1", key_name="k")
 
 
 @pytest.mark.parametrize(
     ("role", "ticked", "line"),
     [
-        (AIRole(service="anthropic", model="claude-sonnet-5-5", key_name="anthropic"), "https://api.anthropic.com",
-         f"^Scoring through api.anthropic.com {NOT_YET}"),
-        (AIRole(service="openai-compatible", model="gpt-6.1-sol", address="https://api.openai.com/v1", key_name="k"),
-         "https://api.openai.com/v1", f"^Scoring through api.openai.com {NOT_YET}"),
-        (AIRole(service="anthropic", model="claude-sonnet-5-5", key_name="anthropic"), "",
-         "isn't ticked for this address"),
+        (CLAUDE, "", "isn't ticked for this address"),
+        (OPENAI, "https://api.openai.com/v2", "isn't ticked for this address"),
         *((AIRole(service="openai-compatible", model=model, address=OPENROUTER, key_name="k"), OPENROUTER,
            "lets OpenRouter choose the model") for model in ("openrouter/free", "openrouter/auto", "OpenRouter/Free")),
         (OWN, "", "isn't ticked for this address"),
@@ -194,6 +191,16 @@ def test_scoring_elsewhere_is_refused_unless_ticked_for_exactly_that_address(rol
     with pytest.raises(llm.StopScoring, match=line) as stopped:
         stage_b.score_job(role, RESUME, "Job", "Ad.", STRONG, ScoringSettings(cloud_ok=ticked), ask=ai, shield=shield())
     assert ai.asked == [] and role.address not in str(stopped.value)  # the host only, never the address's path
+
+
+@pytest.mark.parametrize("role", [CLAUDE, OPENAI])
+def test_openai_and_anthropic_score_once_ticked_and_only_through_the_privacy_filter(role):
+    ai = FakeAI(GOOD)
+    ticked = ScoringSettings(cloud_ok=role.address)
+    assert stage_b.score_job(role, PRIVATE_RESUME, "Job", "Ad.", STRONG, ticked, ask=ai, shield=shield()).score == 82
+    assert "Sam" not in ai.asked[0]["user"] and "[my name]" in ai.asked[0]["user"]  # their cost: tests/test_queue.py
+    with pytest.raises(llm.StopScoring, match="needs the privacy filter"):
+        stage_b.score_job(role, PRIVATE_RESUME, "Job", "Ad.", STRONG, ticked, ask=ai)
 
 
 def test_your_own_address_without_the_privacy_filter_is_refused():
