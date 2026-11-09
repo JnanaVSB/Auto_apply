@@ -31,48 +31,58 @@
   --highlight: light-dark(#ffe58f, #665214); --on-highlight: light-dark(#1b2128, #e6e9ed);  /* <mark> */
   --hover: color-mix(in srgb, var(--text) 7%, transparent);  /* a hovered row or item, on any surface */
 
-  /* The backdrop: four soft colour fields, fixed behind everything, so the glass has light to bend. Each is a bright,
-     saturated tone of one of the scheme's own colours (accent, the accent's hue turned 70 degrees, ok, warn), so every
-     scheme gets its own backdrop. Browsers without relative colours get plain tints of the same colours. */
-  --field-1: color-mix(in srgb, var(--accent) 22%, transparent);
-  --field-2: color-mix(in srgb, color-mix(in srgb, var(--accent), var(--warn)) 18%, transparent);
-  --field-3: color-mix(in srgb, var(--ok) 12%, transparent);
-  --field-4: color-mix(in srgb, var(--warn) 10%, transparent);
-  /* Ink for text that sits on the backdrop or on glass: each colour pulled toward --text, as Apple's vibrant labels
-     are, so it keeps 4.5:1 over the strongest field (hand-over: contrast numbers). */
+  /* The backdrop, in two related tones only: a pearl of the accent's hue and a warm neutral of warn's hue as the
+     ground, one soft glow and one quiet deeper area of the accent, like light through frosted crystal. Built from the
+     scheme's tokens: Teal is a cool pearl with a deep teal depth, the olive schemes cream with forest or brass.
+     These are the plain values for browsers without relative colours; the relative ones follow below. */
+  --bd-pearl: color-mix(in srgb, var(--accent) 5%, var(--bg));
+  --bd-warm: color-mix(in srgb, var(--warn) 8%, var(--bg));
+  --bd-glow: light-dark(rgb(255 255 255 / 80%), color-mix(in srgb, var(--accent) 16%, transparent));
+  --bd-depth: light-dark(color-mix(in srgb, var(--accent) 18%, transparent), rgb(0 0 0 / 50%));
+  /* Ink: grey, warning and error text pulled toward --text, as Apple's vibrant labels are, so they keep 4.5:1 on
+     thin glass over the deepest part of the backdrop. Used for the whole page (set on body, below). */
   --ink-muted: color-mix(in srgb, var(--muted) 70%, var(--text));
   --ink-danger: color-mix(in srgb, var(--danger) 70%, var(--text));
   --ink-warn: color-mix(in srgb, var(--warn) 70%, var(--text));
   --link: color-mix(in srgb, var(--accent) 70%, var(--text));
   --ink-title: color-mix(in srgb, var(--title, var(--text)) 75%, var(--text));
 
-  /* Glass. Clear glass for the bars and controls (rail, cost bar, phone bar, the switch, buttons); frosted panes for
-     content (cards, lanes' cards, boxes, tables, the login card); thick glass where text-heavy content scrolls
-     beneath (menu panel, dialogs, the job table's header). The fills are the least that keep text at 4.5:1. */
-  --glass: color-mix(in srgb, var(--surface) 48%, transparent);
-  --glass-pane: color-mix(in srgb, var(--surface) 56%, transparent);
-  --glass-thick: color-mix(in srgb, var(--surface) 75%, transparent);
-  --glass-blur: blur(26px) saturate(190%) brightness(1.04);
-  --glass-blur-pane: blur(14px) saturate(170%);  /* lighter on repeated cards: many blurs cost frames */
-  --glass-line: light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 13%));  /* the bright rim */
+  /* Glass, in three thicknesses, so layers read as layers: content panes are the thinnest and clearest (cards, boxes,
+     tables, forms, the login card); floating pieces are thicker and brighter (rail, bars, switch, buttons); thick
+     glass where text-heavy content scrolls beneath (phone bar, menu panel, dialog, the job table's header). Each fill
+     is the least that keeps text at 4.5:1 (hand-over: contrast numbers); blur and saturation do the rest. */
+  --glass-pane: color-mix(in srgb, var(--surface) 26%, transparent);
+  --glass: color-mix(in srgb, var(--surface) 36%, transparent);
+  --glass-thick: color-mix(in srgb, var(--surface) 58%, transparent);
+  --glass-blur: blur(30px) saturate(200%) brightness(1.06);
+  --glass-blur-pane: blur(18px) saturate(185%) brightness(1.03);  /* lighter on repeated cards: blurs cost frames */
+  --glass-line: light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 16%));  /* the outer hairline rim */
   --hairline: color-mix(in srgb, var(--text) 12%, transparent);  /* a divider drawn on glass */
-  /* The crystal edge: light on the top-left rim, a darker bottom-right rim, a soft inner glow. */
-  --glass-edge: inset 1px 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 22%)),
-    inset -1px -1px 0 light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 40%)),
-    inset 0 0 1.25rem light-dark(rgb(255 255 255 / 35%), rgb(255 255 255 / 4%));
-  --glass-sheen: linear-gradient(135deg, light-dark(rgb(255 255 255 / 45%), rgb(255 255 255 / 9%)) 0%,
-    transparent 42%, transparent 70%, light-dark(rgb(255 255 255 / 12%), rgb(255 255 255 / 3%)) 100%);
-  /* Floating pieces cast a soft shadow tinted with the scheme's accent. */
-  --glass-shadow: var(--glass-edge), 0 1px 2px light-dark(rgb(0 0 0 / 5%), rgb(0 0 0 / 30%)),
-    0 12px 32px -12px light-dark(color-mix(in srgb, var(--accent) 40%, transparent), rgb(0 0 0 / 60%));
+  /* The crystal edge, showing the glass's thickness: a crisp bright top-left rim, a darker refracted bottom-right rim,
+     an inner light line just inside the outer hairline (a double edge) and a faint inner shade at the bottom. */
+  --glass-edge: inset 1px 1px 0 light-dark(rgb(255 255 255 / 100%), rgb(255 255 255 / 32%)),
+    inset -1px -1px 0 light-dark(rgb(0 0 0 / 14%), rgb(0 0 0 / 55%)),
+    inset 0 0 0 2px light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 6%)),
+    inset 0 -14px 24px -18px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 40%));
+  /* Light on the surface: a highlight band along the top and a diagonal sheen across it. */
+  --glass-sheen: linear-gradient(180deg, light-dark(rgb(255 255 255 / 42%), rgb(255 255 255 / 12%)),
+    light-dark(rgb(255 255 255 / 8%), rgb(255 255 255 / 3%)) 1.5rem, transparent 3.5rem),
+    linear-gradient(115deg, transparent 18%, light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 6%)) 30%,
+    transparent 44%);
+  /* Floating pieces are thicker: more light inside, a deeper coloured shadow. */
+  --glass-shadow: var(--glass-edge), inset 0 0 1.5rem light-dark(rgb(255 255 255 / 30%), rgb(255 255 255 / 5%)),
+    0 2px 4px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 35%)),
+    0 18px 44px -16px light-dark(color-mix(in srgb, var(--accent) 55%, transparent), rgb(0 0 0 / 70%));
   --shadow: var(--glass-edge), 0 1px 2px light-dark(rgb(0 0 0 / 5%), rgb(0 0 0 / 30%)),
-    0 8px 22px -12px light-dark(color-mix(in srgb, var(--accent) 30%, transparent), rgb(0 0 0 / 55%));
+    0 10px 26px -14px light-dark(color-mix(in srgb, var(--accent) 35%, transparent), rgb(0 0 0 / 60%));
   --shadow-raised: var(--glass-edge), 0 2px 4px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 35%)),
-    0 18px 40px -14px light-dark(color-mix(in srgb, var(--accent) 45%, transparent), rgb(0 0 0 / 65%));
+    0 20px 44px -16px light-dark(color-mix(in srgb, var(--accent) 50%, transparent), rgb(0 0 0 / 70%));
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);  /* every movement: quick start, soft landing */
-  --lit: inset 0 1px 0 rgb(255 255 255 / 35%);  /* light along the top of a coloured fill */
-  --gloss: linear-gradient(180deg, rgb(255 255 255 / 30%), rgb(255 255 255 / 0%) 55%);  /* a glossy top half */
-  --gloss-tint: linear-gradient(180deg, rgb(255 255 255 / 12%), rgb(255 255 255 / 0%) 50%);  /* on coloured fills */
+  --lit: inset 0 1px 0 rgb(255 255 255 / 45%), inset 0 -1px 0 rgb(0 0 0 / 18%);  /* a coloured fill's two edges */
+  /* A polished pill's glossy cap: bright at the top, ending in a soft line above the middle. */
+  --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 20%)),
+    light-dark(rgb(255 255 255 / 25%), rgb(255 255 255 / 6%)) 44%, transparent 48%);
+  --gloss-tint: linear-gradient(180deg, rgb(255 255 255 / 34%), rgb(255 255 255 / 6%) 38%, transparent 42%);
 
   /* Text sizes: eight named steps, each with its line spacing; rem, so they grow with the browser's text size. */
   --text-caption: 0.75rem;   --leading-caption: 1.4;   /* 12 px: rail words, phone-bar caption, Tracker days */
@@ -95,11 +105,10 @@
 @media (width < 64rem) { :root { --control: var(--tap); } }
 @supports (color: oklch(from red l c h)) {
   :root {
-    --field-1: light-dark(oklch(from var(--accent) 0.8 0.15 h / 0.75), oklch(from var(--accent) 0.46 0.13 h / 0.65));
-    --field-2: light-dark(oklch(from var(--accent) 0.84 0.15 calc(h + 70) / 0.65),
-      oklch(from var(--accent) 0.44 0.13 calc(h + 70) / 0.55));
-    --field-3: light-dark(oklch(from var(--ok) 0.84 0.12 h / 0.55), oklch(from var(--ok) 0.44 0.104 h / 0.45));
-    --field-4: light-dark(oklch(from var(--warn) 0.84 0.135 h / 0.55), oklch(from var(--warn) 0.44 0.117 h / 0.45));
+    --bd-pearl: light-dark(oklch(from var(--accent) 0.965 0.018 h), oklch(from var(--accent) 0.22 0.035 h));
+    --bd-warm: light-dark(oklch(from var(--warn) 0.94 0.03 h), oklch(from var(--warn) 0.18 0.025 h));
+    --bd-glow: light-dark(oklch(from var(--accent) 0.995 0.01 h / 0.8), oklch(from var(--accent) 0.44 0.09 h / 0.6));
+    --bd-depth: light-dark(oklch(from var(--accent) 0.56 0.08 h / 0.6), oklch(from var(--accent) 0.11 0.02 h / 0.7));
   }
 }
 
@@ -209,7 +218,7 @@
     --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e;
     --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
-    --field-1: transparent; --field-2: transparent; --field-3: transparent; --field-4: transparent;
+    --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent;
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
     --glass-blur-pane: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff; --glass-sheen: none;
@@ -227,13 +236,14 @@ html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; padding-top: env(safe-area-inset-top); background: var(--bg); color: var(--text);
   font-family: var(--sans); font-size: var(--text-body); line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-/* The backdrop: large soft colour fields, fixed, never moving, so the glass above bends and blurs them as the page
-   scrolls. Text on it uses the ink colours and keeps 4.5:1 over the strongest field (hand-over: contrast numbers). */
+/* The page's grey, warning and error text use their ink versions (the originals stay the source of the ink). */
+body { --muted: var(--ink-muted); --warn: var(--ink-warn); --danger: var(--ink-danger); }
+/* The backdrop: fixed, never moving, so the glass above bends and blurs it as the page scrolls. A smooth diagonal
+   from pearl to the warm neutral, a soft glow at the top left, a quiet deeper area at the bottom right. */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(70vmax 55vmax at 0% 0%, var(--field-1), transparent 70%),
-    radial-gradient(60vmax 50vmax at 100% 15%, var(--field-2), transparent 70%),
-    radial-gradient(55vmax 45vmax at 85% 100%, var(--field-3), transparent 70%),
-    radial-gradient(50vmax 45vmax at 10% 95%, var(--field-4), transparent 70%), var(--bg); }
+  background: radial-gradient(75vmax 60vmax at 12% 8%, var(--bd-glow), transparent 65%),
+    radial-gradient(85vmax 70vmax at 100% 100%, var(--bd-depth), transparent 70%),
+    linear-gradient(155deg, var(--bd-pearl), var(--bd-warm)); }
 h1, h2 { font-family: var(--serif); font-weight: 600; }
 h1 { margin: 0 0 var(--space-4); font-size: var(--text-display); line-height: var(--leading-display);
   letter-spacing: -0.02em; }
@@ -733,7 +743,7 @@ main:has(.board) { max-width: none; }
   :root, :root[data-palette] { --line: var(--line-strong); --glass-line: var(--line-strong);
     --hairline: var(--line-strong); --glass: color-mix(in srgb, var(--surface) 96%, transparent);
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
-    --field-1: transparent; --field-2: transparent; --field-3: transparent; --field-4: transparent; }
+    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent; }
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -746,5 +756,5 @@ main:has(.board) { max-width: none; }
 @media (prefers-reduced-transparency: reduce) {
   :root, :root[data-palette] { --glass: var(--surface); --glass-pane: var(--surface); --glass-thick: var(--surface);
     --glass-blur: none; --glass-blur-pane: none; --glass-sheen: none; --chrome-glass: var(--chrome);
-    --field-1: transparent; --field-2: transparent; --field-3: transparent; --field-4: transparent; }
+    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent; }
 }
