@@ -14,6 +14,7 @@ SCRIPT = Path(__file__).resolve().parent.parent / "setup.sh"
 REAL_TOOLS = ("awk", "bash", "cat", "cp", "dirname", "mkdir", "mktemp", "rm", "sha256sum", "touch")
 BUILD = "create -y -n auto_apply --override-channels -c conda-forge --file conda-linux-64.lock"  # conda-forge only
 PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-deps -r requirements-pip.txt"
+STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
 MINIFORGE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1/Miniforge3-26.9.4-1-Linux-x86_64.sh"
 FAKES = {
     "uname": 'case $1 in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; esac',
@@ -32,7 +33,8 @@ case "$1 $2" in
 "env create") touch "$STATE/listed" "$STATE/works"; exit 0 ;;
 esac
 case "$1" in
-create) [ ! -e "$STATE/build-fails" ] || exit 1; touch "$STATE/listed" "$STATE/works" ;;
+create) [ ! -e "$STATE/ctrl-c" ] || { kill -INT "$PPID"; exit 1; }  # stopped by Ctrl+C, as conda exits then
+    [ ! -e "$STATE/build-fails" ] || exit 1; touch "$STATE/listed" "$STATE/works" ;;
 run) case "$*" in
     *"print(sys.executable)"*) echo "$STATE/python" ;;
     *"pip install"*) ;;
@@ -339,5 +341,15 @@ def test_ctrl_c_during_the_download_leaves_no_download(sandbox):
     executable(sandbox.fakes / "curl", FAKES["curl"] + '\nkill -INT "$PPID"')  # Ctrl+C once the file is there
     result = sandbox.run(answers="y\n")
     assert result.returncode == 130
+    assert result.stderr == STOPPED
     assert list(sandbox.temp.iterdir()) == []
     assert sandbox.log("installer") == []
+
+
+def test_ctrl_c_while_building_says_stopped_not_failed(sandbox):
+    sandbox.no_environment()
+    (sandbox.state / "ctrl-c").touch()
+    result = sandbox.run()
+    assert result.returncode == 130
+    assert result.stderr == STOPPED
+    assert sandbox.log("python") == []

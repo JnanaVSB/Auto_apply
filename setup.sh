@@ -42,6 +42,10 @@ usage() {
     exit 2
 }
 
+# Ctrl+C anywhere says so, instead of the failure line of a step it cut off (bash runs this once that step ends).
+# It leaves through the EXIT trap, so a Miniforge download is still removed.
+trap 'echo "Stopped. Nothing is undone; run ./setup.sh again to continue." >&2; exit 130' INT TERM
+
 environment_only=no
 case $# in
 0) ;;
@@ -103,7 +107,6 @@ if [ -z "$conda" ]; then
     need_space
     workdir=$(mktemp -d)
     trap 'rm -rf "$workdir"' EXIT
-    trap 'exit 130' INT TERM # through EXIT, so Ctrl+C also removes the download
     curl -fL --proto '=https' --tlsv1.2 -o "$workdir/$installer" "$MINIFORGE_URL/$installer" ||
         stop "Downloading Miniforge failed: check the internet connection, then run ./setup.sh again."
     if command -v sha256sum >/dev/null; then
