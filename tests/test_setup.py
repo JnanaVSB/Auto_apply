@@ -36,6 +36,7 @@ def ran(tmp_path, monkeypatch):
     path = tmp_path / "data" / "config.yaml"
     path.parent.mkdir()
     path.write_bytes(SETTINGS.replace(b"{data}", str(tmp_path / "data").encode()))
+    (path.parent / db.DB_FILE).write_bytes(b"made-up database")  # set up already, with no key in this keychain
     monkeypatch.setattr(config, "CONFIG_PATH", path)
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": pytest.fail("asked for a password"))
     monkeypatch.setattr(files, "is_correct", lambda path, file: True)
@@ -113,7 +114,6 @@ def test_a_different_value_read_back_stops_and_the_entry_is_removed(ran, fake_ke
 def test_a_second_run_asks_only_about_the_dashboard_and_changes_nothing(
     ran, tmp_path, fake_keychain, monkeypatch, capsys
 ):
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     fake_keychain.store[(keychain.SERVICE, db.KEY_NAME)] = "made-up key"
     answering(monkeypatch, "n")
     assert setup.main([]) == 0  # the first run leaves scoring's lock file, as `python -m app.score setup` does
@@ -131,7 +131,6 @@ def test_a_second_run_asks_only_about_the_dashboard_and_changes_nothing(
 
 
 def test_a_database_whose_key_is_not_in_the_keychain_says_how_to_restore_it(ran, later, tmp_path, monkeypatch, capsys):
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")  # copied over, with no key in this keychain
     answering(monkeypatch, "n")
     assert setup.main([]) == 0
     out = capsys.readouterr().out
@@ -145,7 +144,6 @@ def test_a_database_whose_key_is_not_in_the_keychain_says_how_to_restore_it(ran,
 
 
 def test_an_unreadable_scoring_cache_counts_as_files_missing(ran, tmp_path, monkeypatch, capsys):
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     (tmp_path / "cache").write_bytes(b"a file where the cache folder should be")
     monkeypatch.setattr(files, "cache_dir", lambda: tmp_path / "cache" / "auto_apply")
     monkeypatch.setattr(files, "is_correct", CORRECT)
@@ -156,6 +154,7 @@ def test_an_unreadable_scoring_cache_counts_as_files_missing(ran, tmp_path, monk
 
 
 def test_a_missing_database_is_set_up_and_its_failure_stops_setup(ran, monkeypatch):
+    (config.CONFIG_PATH.parent / db.DB_FILE).unlink()
     answering(monkeypatch, "n")
     assert setup.main([]) == 0
     assert ran == [db, score]
@@ -165,7 +164,6 @@ def test_a_missing_database_is_set_up_and_its_failure_stops_setup(ran, monkeypat
 
 
 def test_missing_scoring_files_are_offered_with_their_size(ran, later, tmp_path, monkeypatch, capsys):
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     monkeypatch.setattr(files, "is_correct", lambda path, file: file is files.SKILLS)
     answers = answering(monkeypatch, "  N ", "no")
     assert setup.main([]) == 0
@@ -181,7 +179,6 @@ def test_missing_scoring_files_are_offered_with_their_size(ran, later, tmp_path,
 
 
 def test_scoring_not_ready_says_how_to_check_again_and_setup_goes_on(ran, later, tmp_path, monkeypatch, capsys):
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     answering(monkeypatch, "n")
     assert setup.main([]) == 0  # the stand-in scoring check says "not ready"
     out = capsys.readouterr().out
@@ -200,7 +197,6 @@ def test_a_scoring_error_is_one_line_and_setup_goes_on(ran, tmp_path, monkeypatc
     def no_download(settings, transport=None):
         raise files.SetupError("Could not download the meaning model: made-up reason.")
 
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     monkeypatch.setattr(score, "setup", no_download)
     answering(monkeypatch, "n")
     assert setup.main([]) == 0
@@ -214,12 +210,11 @@ def test_ctrl_c_during_the_scoring_download_stops_setup(ran, tmp_path, monkeypat
     def interrupted(settings, transport=None):
         raise KeyboardInterrupt
 
-    (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     monkeypatch.setattr(score, "setup", interrupted)
     answers = answering(monkeypatch)  # no answer: any question fails the test
     assert setup.main([]) == 1
     out, err = capsys.readouterr()
-    assert err == "\nStopped. Nothing done so far is undone; run ./setup.sh again to continue.\n"
+    assert err == "\nStopped. Nothing is undone; run ./setup.sh again to continue.\n"
     assert "Setup is done." not in out
     assert answers.questions == []
 
@@ -259,7 +254,7 @@ def test_ctrl_c_or_ctrl_d_at_a_question_stops_cleanly(ran, monkeypatch, capsys, 
     monkeypatch.setattr(files, "is_correct", lambda path, file: not missing_files)
     answering(monkeypatch, stop)  # the first question: the scoring files when some are missing, else the dashboard
     assert setup.main([]) == 1
-    assert capsys.readouterr().err == "\nStopped. Nothing done so far is undone; run ./setup.sh again to continue.\n"
+    assert capsys.readouterr().err == "\nStopped. Nothing is undone; run ./setup.sh again to continue.\n"
     assert web_command not in ran
 
 

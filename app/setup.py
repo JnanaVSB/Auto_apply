@@ -1,6 +1,7 @@
 """The rest of the one-command setup, after `setup.sh` made the environment: `python -m app.setup`.
 
-Each step is skipped when it is already done, so running it again is safe: nothing is overwritten or asked twice.
+Each step is skipped when it is already done, so running it again is safe: nothing is overwritten, and the only
+questions asked again are the ones still open, plus whether to start the dashboard.
 """
 
 import argparse
@@ -17,7 +18,7 @@ from app.scoring import files
 from app.web import __main__ as web_command
 
 CHECK_NAME = "setup-check"  # the keychain test entry, always removed again
-STOPPED = "\nStopped. Nothing done so far is undone; run ./setup.sh again to continue."
+STOPPED = "\nStopped. Nothing is undone; run ./setup.sh again to continue."  # the same words as setup.sh
 SETTINGS_LEFT = "Settings: data/config.yaml is already there; left as it is."
 DATA_IS_A_FILE = "The project's data folder is a file: rename or move the file named data, then run ./setup.sh again."
 NO_KEYCHAIN_LINUX = (
@@ -40,10 +41,6 @@ OLLAMA_NOTE = (
     'AI scoring runs through Ollama on this computer: install it and its model as the README\'s "Scoring jobs" '
     "section says, or choose another on Settings → Scoring model."
 )
-
-
-class SetupError(Exception):
-    """A step that cannot go on; the message says why and what to do."""
 
 
 def _ask(question: str) -> bool:
@@ -73,7 +70,7 @@ def _check_keychain() -> None:
         if not same:
             raise KeychainError("The OS keychain gave back a different value than the one saved.")
     except KeychainError as error:
-        raise SetupError(f"{error}\n{_keychain_fix(missing)}".rstrip()) from None
+        raise KeychainError(f"{error}\n{_keychain_fix(missing)}".rstrip()) from None
     print("Keychain: works.")
 
 
@@ -86,7 +83,7 @@ def _copy_config() -> None:
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except FileExistsError:
-        raise SetupError(DATA_IS_A_FILE) from None
+        raise ConfigError(DATA_IS_A_FILE) from None
     example = (config.PROJECT_DIR / "config.example.yaml").read_text(encoding="utf-8")
     try:
         file = path.open("x", encoding="utf-8")  # "x": never overwrites, even a file made meanwhile
@@ -164,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if _ask("Start the dashboard now?"):
             return web_command.main([])
-    except (SetupError, ConfigError, KeychainError, OSError) as error:
+    except (ConfigError, KeychainError, OSError) as error:
         print(db.error_line(error), file=sys.stderr)
     except (EOFError, KeyboardInterrupt):
         print(STOPPED, file=sys.stderr)

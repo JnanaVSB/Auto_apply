@@ -38,7 +38,7 @@ need_space() { # only before something big: the Miniforge download, or building 
     '' | *[!0-9]*) stop "Could not check the free space in $HOME." ;;
     esac
     [ "$free_kb" -ge "$MIN_FREE_KB" ] ||
-        stop "Setup needs at least 3 GB free in $HOME, which has $(awk "BEGIN { printf \"%.1f\", $free_kb / 1048576 }") GB free."
+        stop "Setup needs at least $((MIN_FREE_KB / 1048576)) GB free in $HOME, which has $(awk "BEGIN { printf \"%.1f\", $free_kb / 1048576 }") GB free."
 }
 
 usage() {
@@ -139,8 +139,9 @@ conda=
 for candidate in "$miniforge_conda" "${CONDA_EXE:-}" "$(command -v conda || true)" \
     "$HOME/miniconda3/bin/conda" "$HOME/anaconda3/bin/conda"; do
     # a program file only: for a shell function or alias, `command -v` gives a bare name, which is no file here
-    if [ -z "$conda" ] && [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
         conda=$candidate
+        break
     fi
 done
 

@@ -19,7 +19,8 @@ PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-d
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
 RELEASE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1"
 MINIFORGE = f"{RELEASE}/Miniforge3-26.9.4-1-Linux-x86_64.sh"
-# What Macs' bash 3.2 lacks (or what reads oddly there), from the 8F reviews
+# Bash 4 forms that Macs' bash 3.2 lacks, plus a few 3.2 ones (local, [[ ]], =~, <<<, printf -v, ${!x}) kept out so
+# the script stays plain
 BASH_4_ONLY = "|".join(
     (
         r"\b(?:declare|local|mapfile|readarray|coproc|globstar)\b",
@@ -178,7 +179,7 @@ def test_the_real_script_uses_nothing_newer_than_bash_3_2():
         "exec {fd}>log", "${a[-1]}", "${x:0:-1}", "echo {01..10}",
     ],
 )  # fmt: skip
-def test_the_bash_3_2_check_catches_bash_4_forms(line):
+def test_the_bash_3_2_check_catches_what_the_script_avoids(line):
     assert re.search(BASH_4_ONLY, line)
 
 
@@ -223,6 +224,7 @@ def test_linux_on_x86_goes_on_and_hands_over_to_the_app_setup(sandbox):
     assert result.returncode == 0, result.stderr
     assert "macOS is untested" not in result.stdout
     assert "Environment auto_apply: ready (left as it is)." in result.stdout
+    assert all(line.startswith("run -n auto_apply python -c ") for line in sandbox.log("conda"))  # nothing built
     assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]  # the environment's Python, in the project
 
 
@@ -414,12 +416,6 @@ def test_miniforge_with_the_right_fingerprint_is_installed_then_the_environment_
     assert list(sandbox.temp.iterdir()) == []
     assert BUILD in sandbox.log("conda")
     assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
-
-
-def test_a_good_environment_is_left_alone(sandbox):
-    result = sandbox.run()
-    assert result.returncode == 0, result.stderr
-    assert all(line.startswith("run -n auto_apply python -c ") for line in sandbox.log("conda"))
 
 
 def test_a_broken_environment_is_rebuilt_only_after_yes(sandbox):
