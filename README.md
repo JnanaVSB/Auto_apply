@@ -12,8 +12,8 @@ nothing personal is ever stored in this repository.
 > Tracker cards, connected with your own Google project. Applying comes in later phases.
 
 ## Requirements
-- [Miniforge](https://github.com/conda-forge/miniforge): conda-forge only, so no Anaconda terms apply (any conda you
-  already have also works). The one-command setup installs it for you if there is no conda.
+- [Miniforge](https://github.com/conda-forge/miniforge): conda-forge only, so no Anaconda terms apply (any conda 26.1
+  or newer that you already have also works). The one-command setup installs it for you if there is no conda.
 - For the one-command setup: Linux on x86-64, or an Apple-silicon Mac
 - An OS keychain: macOS Keychain, Windows Credential Manager, or on Linux GNOME Keyring / KWallet
 

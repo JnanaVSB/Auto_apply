@@ -25,7 +25,10 @@ FAKES = {
     'echo "map auto home 100 50 $FAKE_FREE_KB 50% /System/My Volumes"',
     "curl": 'echo "$*" >> "$STATE/curl.log"\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
     'cp "$STATE/installer" "$out"',
-    "conda": """echo "$*" >> "$STATE/conda.log"
+    "conda": """if [ "$1" = --version ]; then
+    [ "$FAKE_CONDA_VERSION" != fails ] || exit 1; echo "$FAKE_CONDA_VERSION"; exit 0
+fi
+echo "$*" >> "$STATE/conda.log"
 case "$1 $2" in
 "env list") echo "# conda environments:"; echo "base  /fake/base"
     if [ -e "$STATE/listed" ]; then echo "auto_apply  $STATE/envs/auto_apply"; fi; exit 0 ;;
@@ -82,6 +85,7 @@ class Sandbox:
             "FAKE_MACOS": "14.5",
             "FAKE_TRANSLATED": "",
             "FAKE_FREE_KB": "10485760",
+            "FAKE_CONDA_VERSION": "conda 26.9.4",
         }
         (self.state / "works").touch()  # a good environment, unless a test says otherwise
         (self.state / "listed").touch()
@@ -191,6 +195,31 @@ def test_too_little_free_space_for_miniforge_stops_before_the_download(sandbox):
     assert result.returncode == 1
     assert result.stderr.startswith(f"Setup needs at least 3 GB free in {sandbox.home}")
     assert sandbox.log("curl") == []
+
+
+@pytest.mark.parametrize("version", ["conda 26.1.0", "conda 27.0.1"])
+def test_a_new_enough_conda_is_used(sandbox, version):
+    assert sandbox.run(FAKE_CONDA_VERSION=version).returncode == 0
+
+
+@pytest.mark.parametrize(("version", "shown"), [("conda 4.8.3", "4.8.3"), ("conda 26.0.9", "26.0.9")])
+def test_an_old_conda_stops_with_how_to_update_it(sandbox, version, shown):
+    result = sandbox.run(FAKE_CONDA_VERSION=version)
+    assert result.returncode == 1
+    conda = sandbox.fakes / "conda"
+    assert result.stderr == (
+        f'The conda at {conda} is version {shown}; setup needs 26.1 or newer. Update it with: "{conda}" update -n '
+        "base conda (then run ./setup.sh again), or install Miniforge.\n"
+    )
+    assert sandbox.log("conda") == []
+
+
+@pytest.mark.parametrize("version", ["fails", "hello", "conda 26", "conda 2x.1", ""])
+def test_a_conda_that_does_not_run_stops_and_names_it(sandbox, version):
+    result = sandbox.run(FAKE_CONDA_VERSION=version)
+    assert result.returncode == 1
+    assert result.stderr.startswith(f"The conda at {sandbox.fakes / 'conda'} doesn't run. If it is ~/miniforge3")
+    assert sandbox.log("conda") == []
 
 
 @pytest.mark.parametrize("place", ["CONDA_EXE", "miniconda3", "anaconda3"])

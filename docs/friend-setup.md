@@ -80,6 +80,10 @@ Each stop is one line saying why. Find yours here:
   it gives, or run `./setup.sh` again and answer yes.
 - **"…miniforge3 exists but has no conda in it"**: an earlier install was probably cut off. Setup never overwrites a
   folder: move or remove `~/miniforge3`, then run it again.
+- **"The conda at … doesn't run"**: if it is `~/miniforge3`, an earlier install was probably cut off: remove that
+  folder, then run it again. Otherwise repair or update that conda.
+- **"The conda at … is version …; setup needs 26.1 or newer"**: update it with the command the line gives, then run it
+  again. Or install Miniforge instead.
 - **"curl is needed…"**: install curl, then run it again.
 - **"Downloading Miniforge failed"**: check your internet connection, then run it again.
 - **"The download's fingerprint is wrong; nothing was installed"**: the file that arrived isn't the one setup expects.
@@ -102,7 +106,8 @@ Each stop is one line saying why. Find yours here:
   is somewhere else, it names the setting to check.
 
 ## 6. If you already have Miniconda or Anaconda
-Setup uses the conda you already have, as it is, and makes its own `auto_apply` environment with it. Setup itself only
+Setup uses the conda you already have, as it is, if it is version 26.1 or newer, and makes its own `auto_apply`
+environment with it. Setup itself only
 names conda-forge, the free community channel. If your conda still asks you to accept Anaconda's terms, that comes from
 your conda's own settings: read them and decide, or ask whoever gave you this.
 

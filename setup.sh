@@ -9,6 +9,9 @@ MINIFORGE_URL=https://github.com/conda-forge/miniforge/releases/download/$MINIFO
 LINUX_SHA256=571b410272cc434f28bc6c5c49ca8ffd4a4d1bcba9f57f1b6baccdb46446cfcc
 MAC_SHA256=63f8f5367cd3e52d1dba3e22d8ad91d10ea0e93675ba5b0822312a4342d962e0
 ENV_NAME=auto_apply
+# conda 26.1 or newer: the oldest this setup has really run with (the lock file, with its SHA-256 hashes, comes from it)
+MIN_CONDA_MAJOR=26
+MIN_CONDA_MINOR=1
 MIN_FREE_KB=3145728 # 3 GB: Miniforge, the environment (about 1 GB) and conda's package cache
 IMPORT_TEST="import sqlcipher3, app.setup, app.web.main"
 
@@ -122,6 +125,24 @@ if [ -z "$conda" ]; then
         stop "Installing Miniforge failed: remove the folder $HOME/miniforge3, then run ./setup.sh again."
     rm -rf "$workdir"
     conda=$HOME/miniforge3/bin/conda
+fi
+
+conda_version=$("$conda" --version 2>/dev/null || true)
+conda_version=${conda_version#conda }
+conda_major=${conda_version%%.*}
+case $conda_version in
+*.*) conda_minor=${conda_version#*.} ;;
+*) conda_minor= ;; # no "X.Y": not a version
+esac
+conda_minor=${conda_minor%%.*}
+case $conda_major:$conda_minor in
+:* | *: | *[!0-9:]*)
+    stop "The conda at $conda doesn't run. If it is ~/miniforge3 (perhaps a cut-off install), remove that folder and run ./setup.sh again; otherwise repair or update that conda."
+    ;;
+esac
+if [ "$conda_major" -lt "$MIN_CONDA_MAJOR" ] ||
+    { [ "$conda_major" -eq "$MIN_CONDA_MAJOR" ] && [ "$conda_minor" -lt "$MIN_CONDA_MINOR" ]; }; then
+    stop "The conda at $conda is version $conda_version; setup needs $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer. Update it with: \"$conda\" update -n base conda (then run ./setup.sh again), or install Miniforge."
 fi
 
 # 3. The environment, by name, so whichever one is active doesn't matter
