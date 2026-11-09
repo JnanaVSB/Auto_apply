@@ -16,6 +16,7 @@ from app.config import AIRole, AISettings, Config, ScoringSettings, SpendingSett
 from app.council import spending
 from app.documents import privacy, tile_sets
 from app.documents.tiles import Tile
+from app.keychain import KeychainError
 from app.resume import Resume
 from app.scoring import queue, stage_a, stage_b
 
@@ -411,6 +412,22 @@ def test_a_failed_paid_request_still_counts_what_it_may_have_cost(conn, tmp_path
         assert (tokens, cost) == ([4000, 0, 1000], pytest.approx(0.036))
     else:  # no answer, so perhaps charged up to what was set aside: far more than what it read
         assert tokens == [0, 0, 0] and cost > 0.036
+
+
+@pytest.mark.parametrize(
+    "error",
+    [KeychainError("The keychain is locked: unlock it, then try again."),
+     llm.StopScoring("No key is saved in the keychain under the name 'anthropic'.")],
+)  # fmt: skip
+def test_a_key_that_cannot_be_read_counts_nothing_and_stops_the_run(conn, tmp_path, error):
+    you_and_a_job(conn)
+
+    def no_key(*found, **options):
+        raise error
+
+    with pytest.raises(type(error), match=re.escape(str(error))):
+        run(conn, no_key, paid(tmp_path))
+    assert one(conn, MONEY) == (1, 0, 0, 0, 0, 0, 0)  # set aside, then given back: nothing was sent
 
 
 def test_what_a_stopped_run_set_aside_stays_counted_as_spent(conn):

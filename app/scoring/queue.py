@@ -16,6 +16,7 @@ from app import llm, questionnaire
 from app.config import AIRole, Config
 from app.council import spending
 from app.documents import privacy, tile_sets
+from app.keychain import KeychainError
 from app.resume import Resume, read_latex
 from app.scoring import stage_a, stage_b
 
@@ -234,6 +235,9 @@ def _counted(conn: sqlcipher3.Connection, config: Config, call: Callable[..., ll
             usage, cost = reply.usage, spending.charged(role, reply.usage)
             return reply.text
         except llm.TimedOut:
+            raise
+        except KeychainError:  # the key couldn't be read, so nothing was sent
+            cost = 0
             raise
         except llm.LLMError as error:  # refused or broken: what the service still charged for it
             usage, cost = error.usage, spending.charged(role, error.usage)
