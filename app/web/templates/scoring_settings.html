@@ -71,12 +71,13 @@
 <p>Change this key on the laptop.</p>
 {% else %}
 <form method="post" action="/settings/scoring-model/key" class="actions">{{ csrf_field() }}
-  <span>{{ "saved" if key else ("not saved" if key is false else "the keychain can't be read") }}</span>
+  <span>{% if key is none %}the keychain can't be read{% elif key %}saved for {{ key_host }}{% elif key_host %}not saved for {{ key_host }}{% else %}not saved{% endif %}</span>
   <label>Key <input name="key" type="password" autocomplete="off" maxlength="500"></label>
   <button type="submit">Save key</button>
   {% if key %}<button type="submit" name="remove" value="1">Remove key</button>{% endif %}
 </form>
-<p class="hint">Kept only in your computer's keychain, under "own-scoring": never shown again, never written to a file.</p>
+<p class="hint">Kept only in your computer's keychain, for {{ key_host or "your own address" }} only: never shown again, never
+  written to a file, and never sent to another address.</p>
 {% endif %}
 
 {% for kind, choice in paid.items() %}

@@ -1,8 +1,9 @@
 """Settings → Scoring model (/settings/scoring-model), kept apart from main.py: which model gives jobs their AI score.
 On this computer (Ollama, the default), or through OpenAI, Anthropic or your own address once you ticked the box for
 exactly that address. OpenAI and Anthropic use the Writer page's key; your own address's key goes only into the
-keychain, under a name of its own. A save writes the model and the ticked address together, or nothing."""
+keychain, under a name tied to its host. A save writes the model and the ticked address together, or nothing."""
 
+import hashlib
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
@@ -18,7 +19,6 @@ from app.web import actions, security
 from app.web.writer_settings import KEY, OPENAI_ADDRESS, number, saved_keys
 
 PAGE = "/settings/scoring-model"
-KEY_NAME = "own-scoring"  # its own slot, so a Writer on another address keeps its key
 ON_THE_LAPTOP = "Change this key on the laptop."
 ACCOUNT_ID = "YOUR-ACCOUNT-ID"
 PRESETS = {  # each fills in only the address; you make your own account and key
@@ -81,10 +81,17 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     async def save_key(request: Request) -> Response:
         security.laptop_only(request, ON_THE_LAPTOP)
         form, remove = request.state.form, bool(request.state.form.get("remove"))
+        try:
+            scorer = load_config().ai.evaluator
+        except ConfigError as error:
+            return page(request, "scoring_settings.html", file_problem=str(error))
+        if not scorer.own:
+            return await _view(request, page, problem="Not saved: save your own address first, then its key.")
         if not remove and not KEY.fullmatch(form.get("key", "")):
             return await _view(request, page, problem="Not saved: paste the whole key, without spaces.")
+        name = key_name(_host(scorer.address))
         try:
-            delete_secret(KEY_NAME) if remove else set_secret(KEY_NAME, form["key"])
+            delete_secret(name) if remove else set_secret(name, form["key"])
         except KeychainError as error:
             return await _view(request, page, problem=str(error))
         return RedirectResponse(f"{PAGE}?saved={'removed' if remove else 'key'}", 303)
@@ -111,7 +118,7 @@ def _own(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
     (https://, both prices or neither, a model name) are checked when it is saved."""
     address, model = form.get("address", "").strip().removesuffix("/"), form.get("model", "").strip()
     role = {"service": "openai-compatible", "model": model, "address": address, "thinking": "off"}
-    role |= {"key_name": KEY_NAME} if form.get("needs_key") else {}
+    role |= {"key_name": key_name(_host(address))} if form.get("needs_key") else {}
     role |= {name: number(form[name]) for name in ("price_input", "price_output") if form.get(name, "").strip()}
     if ACCOUNT_ID in address:
         return role, f"Not saved: put your own Cloudflare account id where the address says {ACCOUNT_ID}."
@@ -139,6 +146,11 @@ def _paid(form: dict[str, str], cloud_ok: str) -> tuple[dict, str | None]:
             f"{_host(address)}."
         )
     return role, None
+
+
+def key_name(host: str) -> str:
+    """The keychain name of your own address's key, tied to its host: a key saved for one host never goes to another."""
+    return f"own-scoring-{hashlib.sha256(host.encode()).hexdigest()[:16]}"
 
 
 def _host(address: str) -> str:
@@ -176,13 +188,14 @@ async def _view(
         paid[typed["kind"]]["model"] = typed.get("model", "")
     elif typed:
         own |= {name: typed.get(name, "") for name in OWN_FIELDS}
+    key_host = _host(scorer.address) if scorer.own else ""  # a key belongs to the saved address's host only
     try:
-        key = get_secret(KEY_NAME) is not None
+        key = bool(key_host) and get_secret(key_name(key_host)) is not None
     except KeychainError:
         key = None
     return page(
         request, "scoring_settings.html", scorer=scorer, host=_host(scorer.address), own=own,
         own_host=_host(own["address"]), ticked=bool(own["address"]) and own["address"] == config.scoring.cloud_ok,
-        presets=PRESETS, key=key, paid=paid, problem=problem, test=test,
+        presets=PRESETS, key=key, key_host=key_host, paid=paid, problem=problem, test=test,
         saved=SAVED.get(request.query_params.get("saved", "")),
     )  # fmt: skip

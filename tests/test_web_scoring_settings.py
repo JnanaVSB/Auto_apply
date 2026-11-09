@@ -2,6 +2,7 @@
 
 from html import unescape
 
+import httpx
 import pytest
 import yaml
 from helpers import csrf, log_in
@@ -9,7 +10,7 @@ from keyring.errors import KeyringLocked
 from markupsafe import escape
 from test_web_settings import ORIGINAL
 
-from app import config
+from app import config, llm
 from app.config import AISettings, load_config
 from app.keychain import SERVICE
 from app.llm import prices
@@ -93,7 +94,7 @@ def test_a_cloudflare_model_name_and_prices_are_saved_and_read_back(client, sett
     post(client, PAGE + "/own", address=address, **fields, needs_key="on", confirm="on")
     role, ticked = scoring(settings_file)
     assert (role.model, role.price_input, role.price_output, role.key_name, ticked) == (
-        "@cf/meta/llama-3.1-8b-instruct", 0.2, 0.6, "own-scoring", address
+        "@cf/meta/llama-3.1-8b-instruct", 0.2, 0.6, scoring_settings.key_name("api.cloudflare.com"), address
     )  # fmt: skip
     written = settings_file.read_text(encoding="utf-8")
     assert "model: '@cf/meta/llama-3.1-8b-instruct'" in written  # quoted: "@" can't start a bare value
@@ -126,26 +127,55 @@ def test_a_save_lets_a_run_the_old_setting_stopped_start_again(client):
     assert client.app.state.scorer.failed_at is None
 
 
-def test_the_key_is_saved_only_in_the_keychain_under_its_own_name_and_never_shown(client, settings_file, fake_keychain):
+def test_the_key_is_saved_only_in_the_keychain_for_its_host_and_never_shown(client, settings_file, fake_keychain):
     text = post(client, PAGE + "/key", key=FAKE_KEY).text
-    assert fake_keychain.store[(SERVICE, "own-scoring")] == FAKE_KEY
+    assert "Not saved: save your own address first, then its key." in text
+    assert FAKE_KEY not in fake_keychain.store.values()
+    post(client, PAGE + "/own", **OWN, needs_key="on", confirm="on")
+    name = scoring_settings.key_name("scoring.example.net")
+    assert scoring(settings_file)[0].key_name == name
+    text = post(client, PAGE + "/key", key=FAKE_KEY).text
+    assert fake_keychain.store[(SERVICE, name)] == FAKE_KEY
     assert (SERVICE, "own-address") not in fake_keychain.store  # the Writer's own-address key is a different one
     assert "Key saved." in text and FAKE_KEY not in text and FAKE_KEY not in settings_file.read_text(encoding="utf-8")
-    assert "Remove key" in text
+    assert "saved for scoring.example.net" in text and "Remove key" in text
     for bad in ("", "has spaces in it", "x" * 501):
         assert "Not saved: paste the whole key" in post(client, PAGE + "/key", key=bad).text
     assert "Key removed." in post(client, PAGE + "/key", remove="1").text
-    assert (SERVICE, "own-scoring") not in fake_keychain.store
+    assert (SERVICE, name) not in fake_keychain.store
     assert client.post(PAGE + "/key", data={"key": FAKE_KEY}).status_code == 403  # no form token
 
 
 def test_keychain_trouble_is_named_never_the_key(client, fake_keychain, monkeypatch):
+    post(client, PAGE + "/own", **OWN, needs_key="on", confirm="on")
+
     def locked(*args):
         raise KeyringLocked(f"locked while handling {FAKE_KEY}")
 
     monkeypatch.setattr(fake_keychain, "get_password", locked)
     text = unescape(client.get(PAGE).text)
     assert text.count("the keychain can't be read") == 3 and FAKE_KEY not in text  # yours, OpenAI's, Anthropic's
+
+
+def test_a_key_saved_for_one_host_never_goes_to_another(client, settings_file, fake_keychain, monkeypatch):
+    sent = []
+
+    def service(request):
+        sent.append((request.url.host, request.headers.get("authorization")))
+        return httpx.Response(200, json={"data": [{"id": "fake-model"}]})
+
+    fake, check = httpx.MockTransport(service), llm.check
+    monkeypatch.setattr(scoring_settings.llm, "check", lambda role: check(role, fake))  # the real check, fake service
+    groq, openrouter = scoring_settings.PRESETS["groq"][1], scoring_settings.PRESETS["openrouter"][1]
+    post(client, PAGE + "/own", address=groq, model="fake-model", needs_key="on", confirm="on")
+    post(client, PAGE + "/key", key=FAKE_KEY)
+    assert "saved for api.groq.com" in post(client, PAGE + "/test").text
+    post(client, PAGE + "/own", address=openrouter, model="fake-model", needs_key="on", confirm="on")
+    text = post(client, PAGE + "/test").text
+    assert "not saved for openrouter.ai" in text and "No key is saved in the keychain under the name" in text
+    with pytest.raises(llm.StopScoring, match="No key is saved in the keychain"):
+        llm.call(scoring(settings_file)[0], "Score this job.", "A job.", {}, transport=fake)
+    assert sent == [("api.groq.com", f"Bearer {FAKE_KEY}")]  # the Groq key went to Groq only: nothing to openrouter.ai
 
 
 def test_the_test_button_checks_the_scoring_model(client, monkeypatch):

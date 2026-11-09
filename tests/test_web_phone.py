@@ -651,12 +651,13 @@ def test_the_scoring_key_is_refused_on_the_phone_but_the_page_works(phone, data_
     cookie, session = phone_login(phone)
     page = phone.get(scoring_settings.PAGE, headers=cookie)
     assert page.status_code == 200 and scoring_settings.ON_THE_LAPTOP in words(page) and 'name="key"' not in page.text
-    set_secret(scoring_settings.KEY_NAME, "fake-key-1234")
+    name = scoring_settings.key_name("scoring.example.net")
+    set_secret(name, "fake-key-1234")
     for form in ({"key": "fake-key-5678"}, {"remove": "1"}):
         response = phone.post(scoring_settings.PAGE + "/key", data=form | {"csrf_token": session.csrf},
                               headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
         assert (response.status_code, scoring_settings.ON_THE_LAPTOP in words(response)) == (403, True)
-    assert get_secret(scoring_settings.KEY_NAME) == "fake-key-1234"  # neither changed nor removed
+    assert get_secret(name) == "fake-key-1234"  # neither changed nor removed
     model = next(iter(prices.models("openai")))
     response = phone.post(scoring_settings.PAGE + "/paid", data={"kind": "openai", "model": model, "confirm": "on",
                           "csrf_token": session.csrf}, headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
