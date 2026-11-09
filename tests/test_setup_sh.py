@@ -15,7 +15,8 @@ REAL_TOOLS = ("awk", "bash", "cat", "cp", "dirname", "mkdir", "mktemp", "rm", "s
 BUILD = "create -y -n auto_apply --override-channels -c conda-forge --file conda-linux-64.lock"  # conda-forge only
 PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-deps -r requirements-pip.txt"
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
-MINIFORGE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1/Miniforge3-26.9.4-1-Linux-x86_64.sh"
+RELEASE = "https://github.com/conda-forge/miniforge/releases/download/26.9.4-1"
+MINIFORGE = f"{RELEASE}/Miniforge3-26.9.4-1-Linux-x86_64.sh"
 FAKES = {
     "uname": 'case $1 in -s) echo "$FAKE_SYSTEM" ;; -m) echo "$FAKE_MACHINE" ;; esac',
     "sw_vers": 'echo "$FAKE_MACOS"',
@@ -32,14 +33,14 @@ echo "$*" >> "$STATE/conda.log"
 case "$1 $2" in
 "env list") echo "# conda environments:"; echo "base  /fake/base"
     if [ -e "$STATE/listed" ]; then echo "auto_apply  $STATE/envs/auto_apply"; fi; exit 0 ;;
-"env remove") rm -f "$STATE/listed" "$STATE/works"; exit 0 ;;
+"env remove") [ ! -e "$STATE/remove-fails" ] || exit 1; rm -f "$STATE/listed" "$STATE/works"; exit 0 ;;
 "env create") touch "$STATE/listed" "$STATE/works"; exit 0 ;;
 esac
 case "$1" in
 create) [ ! -e "$STATE/ctrl-c" ] || { kill -INT "$PPID"; exit 1; }  # stopped by Ctrl+C, as conda exits then
     [ ! -e "$STATE/build-fails" ] || exit 1; touch "$STATE/listed" "$STATE/works" ;;
 run) case "$*" in
-    *"print(sys.executable)"*) echo "$STATE/python" ;;
+    *"print(sys.executable)"*) if [ -e "$STATE/no-python" ]; then echo "$STATE/gone"; else echo "$STATE/python"; fi ;;
     *"pip install"*) ;;
     *) [ -e "$STATE/works" ] ;;
     esac ;;
@@ -66,18 +67,18 @@ class Sandbox:
         shutil.copy(SCRIPT, self.project / "setup.sh")
         for name in ("conda-linux-64.lock", "environment.yml", "requirements-pip.txt"):
             (self.project / name).write_text("made-up\n")
-        self.fakes, tools = root / "fakes", root / "tools"
+        self.fakes, self.tools = root / "fakes", root / "tools"
         for name, body in FAKES.items():
             executable(self.fakes / name, body)
         executable(self.state / "conda", FAKES["conda"])  # what the fake installer puts in ~/miniforge3
         executable(self.state / "python", 'echo "$PWD $*" >> "$STATE/python.log"')
         (self.state / "installer").write_bytes(INSTALLER)
-        tools.mkdir()
+        self.tools.mkdir()
         for name in REAL_TOOLS:
-            (tools / name).symlink_to(shutil.which(name))
+            (self.tools / name).symlink_to(shutil.which(name))
         self.env = {  # built from nothing, so no real CONDA_EXE or PATH leaks in
             "HOME": str(self.home),
-            "PATH": f"{self.fakes}:{tools}",
+            "PATH": f"{self.fakes}:{self.tools}",
             "TMPDIR": str(self.temp),
             "STATE": str(self.state),
             "FAKE_SYSTEM": "Linux",
@@ -113,13 +114,13 @@ class Sandbox:
         (self.fakes / "conda").unlink()
         self.no_environment()
 
-    def pin(self, data: bytes) -> None:
-        """The copy's Linux fingerprint replaced by that of these bytes: the real script's pin can't be changed."""
+    def pin(self, data: bytes, name: str = "LINUX_SHA256") -> None:
+        """The copy's fingerprint for one system replaced by that of these bytes: the real script's pin can't be
+        changed."""
         script = self.project / "setup.sh"
         lines = script.read_text().splitlines(keepends=True)
         lines = [
-            f"LINUX_SHA256={hashlib.sha256(data).hexdigest()}\n" if line.startswith("LINUX_SHA256=") else line
-            for line in lines
+            f"{name}={hashlib.sha256(data).hexdigest()}\n" if line.startswith(f"{name}=") else line for line in lines
         ]
         script.write_text("".join(lines))
 
@@ -381,4 +382,56 @@ def test_ctrl_c_while_building_says_stopped_not_failed(sandbox):
     result = sandbox.run()
     assert result.returncode == 130
     assert result.stderr == STOPPED
+    assert sandbox.log("python") == []
+
+
+@pytest.mark.skipif(not Path("/usr/bin/shasum").exists(), reason="needs shasum, the hashing tool a Mac has")
+def test_a_mac_installs_its_own_miniforge_checked_with_shasum(sandbox):
+    sandbox.no_conda()
+    sandbox.pin(INSTALLER, "MAC_SHA256")
+    (sandbox.tools / "sha256sum").unlink()  # a Mac has no sha256sum
+    (sandbox.tools / "shasum").symlink_to("/usr/bin/shasum")
+    result = sandbox.run(answers="y\n", FAKE_SYSTEM="Darwin", FAKE_MACHINE="arm64", FAKE_MACOS="14.5")
+    assert result.returncode == 0, result.stderr
+    assert "(about 90 MB download)" in result.stdout
+    (download,) = sandbox.log("curl")
+    assert download.endswith(f"/Miniforge3-26.9.4-1-MacOSX-arm64.sh {RELEASE}/Miniforge3-26.9.4-1-MacOSX-arm64.sh")
+    assert sandbox.log("installer") == [f"-b -p {sandbox.home}/miniforge3"]
+    assert "env create -f environment.yml" in sandbox.log("conda")
+    assert list(sandbox.temp.iterdir()) == []
+
+
+def test_unreadable_free_space_stops(sandbox):
+    sandbox.no_environment()
+    result = sandbox.run(FAKE_FREE_KB="junk")
+    assert result.returncode == 1
+    assert result.stderr == f"Could not check the free space in {sandbox.home}.\n"
+
+
+def test_a_failed_miniforge_install_says_to_remove_its_folder(sandbox):
+    sandbox.no_conda()
+    failing = b"#!/bin/bash\nexit 1\n"
+    (sandbox.state / "installer").write_bytes(failing)
+    sandbox.pin(failing)
+    result = sandbox.run(answers="y\n")
+    assert result.returncode == 1
+    assert result.stderr == (
+        f"Installing Miniforge failed: remove the folder {sandbox.home}/miniforge3, then run ./setup.sh again.\n"
+    )
+
+
+def test_a_failed_removal_of_the_broken_environment_stops(sandbox):
+    (sandbox.state / "works").unlink()
+    (sandbox.state / "remove-fails").touch()
+    result = sandbox.run(answers="y\n")
+    assert result.returncode == 1
+    assert result.stderr == "Removing the broken environment auto_apply failed.\n"
+    assert not any(line.startswith("create") for line in sandbox.log("conda"))
+
+
+def test_an_environment_python_that_is_not_there_stops(sandbox):
+    (sandbox.state / "no-python").touch()
+    result = sandbox.run()
+    assert result.returncode == 1
+    assert result.stderr == "Could not find the Python of environment auto_apply.\n"
     assert sandbox.log("python") == []
