@@ -40,6 +40,7 @@ ODD_SCORE = 85
 BY_HAND = ": check this job by hand"
 OTHER_LINK = "[other link]"  # a link left in your resume (a project's): none of the filter's, so never put back
 FIX_IT = "Settings → Scoring model"
+CHOOSES_FOR_YOU = "openrouter/"  # a model name that lets OpenRouter pick the model and who runs it
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
 HAS_SCORE = "SELECT 1 FROM ai_scores WHERE job_id = ? AND model = ? AND score IS NOT NULL"
@@ -64,7 +65,7 @@ def gate(role: AIRole, settings: ScoringSettings) -> None:
     if role.service == "ollama":
         return
     host = urlsplit(role.address).hostname
-    if role.model.lower().startswith("openrouter/"):
+    if role.model.lower().startswith(CHOOSES_FOR_YOU):
         raise llm.StopScoring(
             f"The model {role.model} lets OpenRouter choose the model and who runs it: name one model in {FIX_IT}."
         )
@@ -128,7 +129,7 @@ def score_job(
     Anywhere but this computer it needs the `shield` (the privacy filter), so no route can skip it."""
     gate(role, settings)
     if role.service != "ollama" and shield is None:
-        raise llm.StopScoring("Scoring through your own address needs the privacy filter, so nothing was sent.")
+        raise llm.StopScoring("Scoring anywhere but this computer needs the privacy filter, so nothing was sent.")
     text, ad = message(resume, title, description, shield)
     problems, started = [], time.monotonic()
     for retry in (False, True):

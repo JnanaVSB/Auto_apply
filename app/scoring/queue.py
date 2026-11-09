@@ -133,8 +133,10 @@ def run(
 
     settings, role = config.scoring, config.ai.evaluator
     _left_over(conn, out)
-    shield = None if role.service == "ollama" else _shield(conn, config)
-    ask = _counted(conn, config, call) if shield is not None else lambda *found, **options: call(*found, **options).text
+    if role.service == "ollama":
+        shield, ask = None, lambda *found, **options: call(*found, **options).text
+    else:
+        shield, ask = _shield(conn, config), _counted(conn, config, call)
     stage_a.run(conn, checker, setup, settings, pause_or_stop, out, only=job_ids)
     ids = waiting(conn, role.model, setup, resume.fingerprint) if job_ids is None else job_ids
     daily = job_ids is None  # the queue's own run: its time counts towards the scoring time per day
@@ -227,7 +229,7 @@ def _counted(conn: sqlcipher3.Connection, config: Config, call: Callable[..., ll
                 conn.execute(RESERVE, (day, largest or 0))
         if refusal:
             with conn:
-                conn.execute(USED_UP, (today(), config.scoring.minutes_per_day * 60))
+                conn.execute(USED_UP, (day, config.scoring.minutes_per_day * 60))
             raise llm.StopScoring(refusal)
         usage, cost = llm.NOTHING, largest  # no answer, or a time-out: perhaps charged up to what was set aside
         try:

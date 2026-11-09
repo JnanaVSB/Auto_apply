@@ -68,7 +68,7 @@
 
 <h3>Your own address's key</h3>
 {% if remote %}
-<p>Change this key on the laptop.</p>
+<p>{{ on_the_laptop }}</p>
 {% elif own_host != key_host %}
 <p>Save this address first (with its tick), then paste its key here.</p>
 {% else %}

@@ -15,6 +15,7 @@ from app import llm
 from app.config import DEFAULT_ADDRESSES, AISettings, ConfigError, load_config
 from app.keychain import KeychainError, delete_secret, get_secret, set_secret
 from app.llm import prices
+from app.scoring.stage_b import CHOOSES_FOR_YOU
 from app.web import actions, security
 from app.web.writer_settings import KEY, OPENAI_ADDRESS, number, saved_keys
 
@@ -71,19 +72,21 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.post(f"{PAGE}/key")
     async def save_key(request: Request) -> Response:
         security.laptop_only(request, ON_THE_LAPTOP)
-        form, remove = request.state.form, bool(request.state.form.get("remove"))
+        form = request.state.form
+        remove = bool(form.get("remove"))
         try:
             scorer = load_config().ai.evaluator
         except ConfigError as error:
             return page(request, "scoring_settings.html", file_problem=str(error))
         if not scorer.own:
             return await _view(request, page, problem="Not saved: save your own address first, then its key.")
-        if form.get("host", "") != _host(scorer.address):  # a page opened for another address, or before a switch
+        host = _host(scorer.address)
+        if form.get("host", "") != host:  # a page opened for another address, or before a switch
             problem = "Not saved: the address changed since this page was opened; reload it, then save the key."
             return await _view(request, page, problem=problem)
         if not remove and not KEY.fullmatch(form.get("key", "")):
             return await _view(request, page, problem="Not saved: paste the whole key, without spaces.")
-        name = key_name(_host(scorer.address))
+        name = key_name(host)
         try:
             delete_secret(name) if remove else set_secret(name, form["key"])
         except KeychainError as error:
@@ -130,7 +133,7 @@ def _own(form: dict[str, str]) -> tuple[dict, str | None]:
     role |= {name: number(form[name]) for name in ("price_input", "price_output") if form.get(name, "").strip()}
     if ACCOUNT_ID in address:
         return role, f"Not saved: put your own Cloudflare account id where the address says {ACCOUNT_ID}."
-    if model.lower().startswith("openrouter/"):  # the scoring gate refuses it too
+    if model.lower().startswith(CHOOSES_FOR_YOU):  # the scoring gate refuses it too
         return role, f"Not saved: the model {model} lets OpenRouter choose the model and who runs it: name one model."
     return role, None
 
@@ -194,6 +197,6 @@ async def _view(
     return page(
         request, "scoring_settings.html", scorer=scorer, host=_host(scorer.address), own=own,
         own_host=_host(own["address"]), ticked=bool(own["address"]) and own["address"] == config.scoring.cloud_ok,
-        presets=PRESETS, key=key, key_host=key_host, paid=paid, problem=problem, test=test,
+        presets=PRESETS, key=key, key_host=key_host, on_the_laptop=ON_THE_LAPTOP, paid=paid, problem=problem, test=test,
         saved=SAVED.get(request.query_params.get("saved", "")),
     )  # fmt: skip
