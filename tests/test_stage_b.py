@@ -151,6 +151,19 @@ def test_through_your_own_address_your_details_never_leave_but_the_rest_of_your_
     assert "Apply at https://jobs.example.org/42 or hr@example.org." in sent  # the ad's own addresses pass
 
 
+def test_your_resume_leaves_only_through_the_filters_one_way_out(monkeypatch):
+    expected, outgoing, asked = shield().outgoing(PRIVATE_RESUME, stage_b.OTHER_LINK), privacy.Shield.outgoing, []
+
+    def spy(self, text, other_link=None):
+        asked.append(other_link)
+        return outgoing(self, text, other_link)
+
+    monkeypatch.setattr(privacy.Shield, "outgoing", spy)
+    ai = FakeAI(GOOD)
+    stage_b.score_job(OWN, PRIVATE_RESUME, "Job", "Ad.", STRONG, TICKED, ask=ai, shield=shield())
+    assert asked == [stage_b.OTHER_LINK] and ai.asked[0]["user"].startswith(f"Candidate's resume:\n{expected}\n\n<job>")
+
+
 @pytest.mark.parametrize(
     ("left", "kind"),
     [

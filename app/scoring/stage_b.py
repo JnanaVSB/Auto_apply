@@ -39,7 +39,6 @@ COPIED = 20  # a whole reason this long found word for word in the ad was copied
 ODD_SCORE = 85
 BY_HAND = ": check this job by hand"
 OTHER_LINK = "[other link]"  # a link left in your resume (a project's): none of the filter's, so never put back
-WORD = re.compile(rf"(?:{privacy.PLACEHOLDER.pattern}|\S)+")  # no spaces, but a placeholder ([my name]) whole
 FIX_IT = "Settings → Scoring model"
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
@@ -87,24 +86,13 @@ def message(resume: str, title: str, description: str | None, shield: privacy.Sh
 
 
 def _outgoing(resume: str, shield: privacy.Shield) -> str:
-    hidden = WORD.sub(lambda word: _unlinked(word[0]), shield.hide(resume))
     try:
-        privacy.last_check(hidden)
+        return shield.outgoing(resume, OTHER_LINK)  # a link left in your resume (a project's) becomes OTHER_LINK
     except privacy.PrivacyStop as stop:
         raise llm.StopScoring(
             f"Your resume still holds {stop} after your details were hidden, so nothing was sent: remove it from "
             "resume.tex, or put it in your Questionnaire's contact details, then score again."
         ) from None
-    return hidden
-
-
-def _unlinked(word: str) -> str:
-    """A web address left in your resume becomes OTHER_LINK. Tech names such as ASP.NET stay, and so does a word holding
-    an e-mail address, which the last check then stops."""
-    seen = privacy.PLACEHOLDER.sub("x", word)  # as the last check reads it
-    if privacy.EMAIL.search(seen) or not privacy.WEB.search(privacy.ALONE.sub(" ", seen)):
-        return word
-    return OTHER_LINK
 
 
 def checked(text: str) -> tuple[int, list[str]] | None:

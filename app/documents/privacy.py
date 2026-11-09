@@ -47,6 +47,7 @@ NAMES = [*(name for name in OLD_NAMES if name != "link"), *SITES, WEBSITE]  # ev
 PLACEHOLDER = re.compile(
     rf"\[(?:(?:{'|'.join(OLD_NAMES.values())})(?:-[0-9]+)?|(?i:(?:{'|'.join(NAMES)})(?: [0-9]+)?))\]"
 )
+WORD = re.compile(rf"(?:{PLACEHOLDER.pattern}|\S)+")  # no spaces, but a placeholder ([my name]) whole
 LINKS = ("linkedin", "github", "portfolio", "scholar", "other_link")
 NO_NAME = "Fill in your full name in the Questionnaire first: the privacy filter needs it to hide your name."
 # The name at the top of a source: \name{..} or \author{..}, else its first big line, as in {\Huge Alex Example}
@@ -70,9 +71,12 @@ class Shield:
 
     values: tuple[tuple[re.Pattern, str, str], ...]  # (how it is found, the real text, its placeholder)
 
-    def outgoing(self, text: str) -> str:
-        """The only way text leaves this computer: your details hidden, then the last check (else PrivacyStop)."""
+    def outgoing(self, text: str, other_link: str | None = None) -> str:
+        """The only way text leaves this computer: your details hidden, then the last check (else PrivacyStop). With
+        `other_link`, a web address left in the text (none of yours) becomes that instead of stopping it."""
         hidden = self.hide(text)
+        if other_link:
+            hidden = WORD.sub(lambda word: other_link if _only_a_link(word[0]) else word[0], hidden)
         last_check(hidden)
         return hidden
 
@@ -140,6 +144,13 @@ def last_check(text: str) -> None:
         raise PrivacyStop("a web address")
     if STREET.search(text):
         raise PrivacyStop("a street address")
+
+
+def _only_a_link(word: str) -> bool:
+    """A web address, as the last check reads it. Tech names such as ASP.NET aren't, and neither is a word holding an
+    e-mail address, which the last check then stops."""
+    seen = PLACEHOLDER.sub("x", word)
+    return not EMAIL.search(seen) and bool(WEB.search(ALONE.sub(" ", seen)))
 
 
 def _numbered(kind: str, found: list[str], pattern, same, old: bool) -> list[tuple[re.Pattern, str, str]]:
