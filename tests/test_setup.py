@@ -12,7 +12,7 @@ from app.scoring import files
 from app.web import __main__ as web_command
 
 SETTINGS = b"data_dir: {data}\n# made-up settings of the test's own\n"
-CORRECT = files._correct  # the real check, before a test replaces it
+CORRECT = files.is_correct  # the real check, before a test replaces it
 
 
 class Answers:
@@ -38,7 +38,7 @@ def ran(tmp_path, monkeypatch):
     path.write_bytes(SETTINGS.replace(b"{data}", str(tmp_path / "data").encode()))
     monkeypatch.setattr(config, "CONFIG_PATH", path)
     monkeypatch.setattr(getpass, "getpass", lambda prompt="": pytest.fail("asked for a password"))
-    monkeypatch.setattr(files, "_correct", lambda path, file: True)
+    monkeypatch.setattr(files, "is_correct", lambda path, file: True)
     calls = []
     for module in (db, web_command):
         monkeypatch.setattr(module, "main", lambda argv, module=module: calls.append(module) or 0)
@@ -148,7 +148,7 @@ def test_an_unreadable_scoring_cache_counts_as_files_missing(ran, tmp_path, monk
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     (tmp_path / "cache").write_bytes(b"a file where the cache folder should be")
     monkeypatch.setattr(files, "cache_dir", lambda: tmp_path / "cache" / "auto_apply")
-    monkeypatch.setattr(files, "_correct", CORRECT)
+    monkeypatch.setattr(files, "is_correct", CORRECT)
     answers = answering(monkeypatch, "n", "n")
     assert setup.main([]) == 0
     assert answers.questions[0] == "Download the scoring files now (about 137 MB)? [y/N] "
@@ -166,7 +166,7 @@ def test_a_missing_database_is_set_up_and_its_failure_stops_setup(ran, monkeypat
 
 def test_missing_scoring_files_are_offered_with_their_size(ran, later, tmp_path, monkeypatch, capsys):
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
-    monkeypatch.setattr(files, "_correct", lambda path, file: file is files.SKILLS)
+    monkeypatch.setattr(files, "is_correct", lambda path, file: file is files.SKILLS)
     answers = answering(monkeypatch, "  N ", "no")
     assert setup.main([]) == 0
     assert answers.questions[0] == "Download the scoring files now (about 134 MB)? [y/N] "
@@ -256,7 +256,7 @@ def test_the_start_command_has_the_real_paths_and_yes_starts_the_dashboard(ran, 
 @pytest.mark.parametrize("stop", [KeyboardInterrupt(), EOFError()])
 @pytest.mark.parametrize("missing_files", [True, False])
 def test_ctrl_c_or_ctrl_d_at_a_question_stops_cleanly(ran, monkeypatch, capsys, stop, missing_files):
-    monkeypatch.setattr(files, "_correct", lambda path, file: not missing_files)
+    monkeypatch.setattr(files, "is_correct", lambda path, file: not missing_files)
     answering(monkeypatch, stop)  # the first question: the scoring files when some are missing, else the dashboard
     assert setup.main([]) == 1
     assert capsys.readouterr().err == "\nStopped. Nothing done so far is undone; run ./setup.sh again to continue.\n"

@@ -62,7 +62,7 @@ def _check_keychain() -> None:
     """Save, read and remove a random test value, before any password is asked for."""
     missing = True  # until the keychain itself is found
     try:
-        keychain._keychain()  # the same check every read and write makes: refused here means there is none
+        keychain.safe_backend()  # the same check every read and write makes: refused here means there is none
         missing = False
         value = secrets.token_hex(16)
         keychain.set_secret(CHECK_NAME, value)
@@ -111,7 +111,7 @@ def _later(command: str) -> str:
 def _scoring(settings: Config) -> None:
     folder = files.cache_dir()
     try:
-        missing = [file for file in files.FILES if not files._correct(folder / file.name, file)]
+        missing = [file for file in files.FILES if not files.is_correct(folder / file.name, file)]
     except OSError:  # an unreadable cache folder: the download then says what is wrong
         missing = list(files.FILES)
     size = sum(file.size for file in missing) / 1_000_000
