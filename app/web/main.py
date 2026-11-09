@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException
 
 from app import db
 from app.collect import MAX_PASTED
-from app.config import ConfigError, ScoringSettings, load_config
+from app.config import AISettings, ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
@@ -42,6 +42,7 @@ from app.web import (
     plugin_settings,
     prepare,
     queries,
+    scoring_settings,
     security,
     submit,
     tracker,
@@ -263,13 +264,15 @@ def create_app(
     async def answer_key_page(request: Request) -> Response:
         conn, scoring = request.app.state.conn, _scoring()
         try:
-            settings = load_config().scoring
+            found = load_config()
+            settings, scorer = found.scoring, found.ai.evaluator
         except ConfigError:  # shown on the Settings page; the defaults meanwhile
-            settings = ScoringSettings()
+            settings, scorer = ScoringSettings(), AISettings().evaluator
         return _page(
             request, "answer_key.html", marks=answer_key.marks(conn), suggestions=answer_key.suggestions(conn),
             ai=answer_key.ai_agreement(conn, scoring.resume), quick=answer_key.quick_agreement(conn, settings),
-            routes=answer_key.pass_through(conn, scoring), scoring=scoring, settings=settings,
+            routes=answer_key.pass_through(conn, scoring), scoring=scoring, settings=settings, scorer=scorer,
+            scorer_host=urlsplit(scorer.address).hostname,
             models=await _installed(), labels=answer_key.LABELS, thresholds=answer_key.AI_THRESHOLDS,
         )  # fmt: skip
 
@@ -400,6 +403,7 @@ def create_app(
     export_settings.add_routes(app, _page, data_dir)
     phone_settings.add_routes(app, _page)
     usajobs_settings.add_routes(app, _page)
+    scoring_settings.add_routes(app, _page)
     plugin.add_routes(app, data_dir)
     plugin_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
@@ -489,13 +493,13 @@ async def _settings_page(
     except ConfigError as error:
         return _page(request, "settings.html", file_problem=str(error))
     rows = sum(1 for name in form if actions.LIST_ROW.fullmatch(name)) + 1  # every list, plus one empty row
-    if config.ai.evaluator.service == "ollama":
-        _, ollama_line = await run_in_threadpool(ollama.status, config.ai.evaluator)  # waits up to 5 s for Ollama
-    else:  # a cloud service is never asked from here
-        ollama_line = "Phase 3b scores jobs only on this computer: set ai.evaluator.service to ollama."
+    scorer, ollama_line = config.ai.evaluator, ""
+    if scorer.service == "ollama":  # a cloud service is never asked from here
+        _, ollama_line = await run_in_threadpool(ollama.status, scorer)  # waits up to 5 s for Ollama
     return _page(
         request, "settings.html", form=form, problem=problem, saved=request.method == "POST" and not problem,
         rows=rows, stopped=queries.stopped_boards(request.app.state.conn), ollama_line=ollama_line,
+        scorer=scorer, scorer_host=urlsplit(scorer.address).hostname,
         feeds={name: feed.LABEL for name, feed in FEEDS.items()},
         usajobs_missing=usajobs_settings.still_missing(config),
     )  # fmt: skip

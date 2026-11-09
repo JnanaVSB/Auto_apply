@@ -1,5 +1,5 @@
 """Score jobs: `python -m app.score` runs the quick check and the AI score; `python -m app.score setup` only
-downloads the scoring files and checks Ollama."""
+downloads the scoring files and checks the scoring model."""
 
 import argparse
 import sqlite3
@@ -9,15 +9,15 @@ from contextlib import closing
 from pathlib import Path
 from typing import NamedTuple
 
+import httpx
 import sqlcipher3
 
 from app import collect, db, llm
 from app.config import Config, ConfigError, load_config
 from app.fetch import Fetcher
 from app.keychain import KeychainError
-from app.llm import ollama
 from app.resume import Resume, ResumeError, read_resume
-from app.scoring import files, queue, stage_a
+from app.scoring import files, queue, stage_a, stage_b
 from app.scoring.meaning import Meaning
 
 SCORE_LOCK = "score-lock.db"  # one scoring run at a time, from the terminal or the dashboard
@@ -46,12 +46,14 @@ def open_database(data_dir: Path, out: queue.Output = print) -> sqlcipher3.Conne
             return db.connect(data_dir)
 
 
-def setup(config: Config) -> bool:
-    """Download what is missing and check Ollama; True when everything is ready."""
+def setup(config: Config, transport: httpx.BaseTransport | None = None) -> bool:
+    """Download what is missing and check the scoring model as the Test button does (free: nothing of yours is sent);
+    True when everything is ready. A cloud scorer must first pass the scoring gate, else llm.StopScoring."""
     with closing(Fetcher()) as fetcher:
         files.ensure_files(fetcher)
     print("Scoring files: all present and correct.")
-    ready, line = ollama.status(config.ai.evaluator)
+    stage_b.gate(config.ai.evaluator, config.scoring)
+    ready, line = llm.check(config.ai.evaluator, transport)
     print(line)
     return ready
 
@@ -80,7 +82,9 @@ def score(config: Config) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.score", description="Score the collected jobs.")
-    parser.add_argument("command", nargs="?", choices=["setup"], help="only download the scoring files, check Ollama")
+    parser.add_argument(
+        "command", nargs="?", choices=["setup"], help="only download the scoring files, check the scoring model"
+    )
     args = parser.parse_args(argv)
     try:
         config = load_config()

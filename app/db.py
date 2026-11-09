@@ -768,6 +768,18 @@ UPGRADES = (
     ALTER TABLE fills ADD COLUMN pdfs TEXT;  -- JSON by slot: the version and SHA-256 of each PDF handed out
     ALTER TABLE submissions ADD COLUMN checked_on TEXT;  -- when the read behind this record was saved
     """,
+    """
+    -- Paid scoring's money per day, within your spending limits as the council's calls are; seconds stay the automatic
+    -- scoring time. Scoring on this computer is free and adds nothing here.
+    ALTER TABLE scoring_days ADD COLUMN calls INTEGER NOT NULL DEFAULT 0 CHECK (calls >= 0);  -- paid requests
+    ALTER TABLE scoring_days ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0);
+    ALTER TABLE scoring_days ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cached_tokens >= 0);
+    ALTER TABLE scoring_days ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0);
+    ALTER TABLE scoring_days ADD COLUMN cost REAL NOT NULL DEFAULT 0 CHECK (cost >= 0);  -- dollars, counted requests
+    ALTER TABLE scoring_days ADD COLUMN reserved REAL NOT NULL DEFAULT 0 CHECK (reserved >= 0);  -- awaiting an answer
+    -- 1: some went to your own address without a price, so the day's dollars are "at least"
+    ALTER TABLE scoring_days ADD COLUMN uncounted INTEGER NOT NULL DEFAULT 0 CHECK (uncounted IN (0, 1));
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

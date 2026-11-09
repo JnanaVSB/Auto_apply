@@ -369,9 +369,9 @@ def _from_form(old: dict, form: dict[str, str]) -> dict:
         name: read(form[name]) for name, read in SCORING_FIELDS.items() if name in form
     }
     ai = dict(old.get("ai") or {})
-    evaluator = dict(ai.get("evaluator") or {}) | {
-        name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form
-    }
+    evaluator = dict(ai.get("evaluator") or {})
+    if evaluator.get("service", "ollama") == "ollama":  # a cloud scorer changes only on Settings → Scoring model
+        evaluator |= {name: read(form[field]) for field, (name, read) in EVALUATOR_FIELDS.items() if field in form}
     ai |= {"evaluator": evaluator} if evaluator else {}
     # on other pages
     kept = {name: dict(old.get(name) or {}) for name in ("documents", "spending", "council", "export")}

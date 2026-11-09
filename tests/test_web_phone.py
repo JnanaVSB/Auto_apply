@@ -22,9 +22,10 @@ from app.config import PROJECT_DIR, Config, load_config
 from app.fetch import Fetcher
 from app.gmail.client import CLIENT_ID, CLIENT_SECRET, REFRESH, SCOPE
 from app.keychain import get_secret, set_secret
+from app.llm import prices
 from app.sources import usajobs
 from app.web import __main__ as web_command
-from app.web import gmail_settings, main, preparer, security, usajobs_settings
+from app.web import gmail_settings, main, preparer, scoring_settings, security, usajobs_settings
 
 PHONE = "https://laptop.tail0000.ts.net"
 HOST = "laptop.tail0000.ts.net"
@@ -642,6 +643,25 @@ def test_the_usajobs_key_page_is_refused_on_the_phone_and_saves_nothing(phone):
         assert (response.status_code, usajobs_settings.ON_THE_LAPTOP in words(response)) == (403, True)
     assert get_secret(usajobs.KEY) == "fake-key-1234"  # neither changed nor removed
     assert get_secret(usajobs.EMAIL) is None
+
+
+def test_the_scoring_key_is_refused_on_the_phone_but_the_page_works(phone, data_dir, tmp_path, monkeypatch):
+    (tmp_path / "config.yaml").write_text(f"data_dir: {data_dir}\n", encoding="utf-8")
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.yaml")  # the page shows the scoring model
+    cookie, session = phone_login(phone)
+    page = phone.get(scoring_settings.PAGE, headers=cookie)
+    assert page.status_code == 200 and scoring_settings.ON_THE_LAPTOP in words(page) and 'name="key"' not in page.text
+    name = scoring_settings.key_name("scoring.example.net")
+    set_secret(name, "fake-key-1234")
+    for form in ({"key": "fake-key-5678"}, {"remove": "1"}):
+        response = phone.post(scoring_settings.PAGE + "/key", data=form | {"csrf_token": session.csrf},
+                              headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
+        assert (response.status_code, scoring_settings.ON_THE_LAPTOP in words(response)) == (403, True)
+    assert get_secret(name) == "fake-key-1234"  # neither changed nor removed
+    model = next(iter(prices.models("openai")))
+    response = phone.post(scoring_settings.PAGE + "/paid", data={"kind": "openai", "model": model, "confirm": "on",
+                          "csrf_token": session.csrf}, headers=cookie | ORIGIN, follow_redirects=False)  # fmt: skip
+    assert response.status_code == 303 and load_config().ai.evaluator.model == model  # saves no key: works here
 
 
 def test_settings_on_the_phone_says_where_to_change_the_usajobs_key(phone, settings):

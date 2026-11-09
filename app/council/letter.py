@@ -25,8 +25,8 @@ from app.resume import CONTROL
 SKILL_FILE = PROJECT_DIR / "skills" / "cover-letter.md"
 RULES = DATA_RULE + """
 Write only the letter's paragraphs: no greeting, sign-off, name, date or contact details, and never a placeholder such
-as [ME] or [LINK-1]. Never write a long dash (— or –) or two hyphens (--): use a plain hyphen (-) or rewrite the
-sentence. Answer only with JSON of this shape: {"paragraphs": ["...", "...", "..."], "from": ["E1", "E3"], "notes":
+as [my name] or [github link]. Never write a long dash (— or –) or two hyphens (--): use a plain hyphen (-) or rewrite
+the sentence. Answer only with JSON of this shape: {"paragraphs": ["...", "...", "..."], "from": ["E1", "E3"], "notes":
 "...", "responses": []}. "from" lists the entries the letter draws on."""  # fmt: skip
 SHAPE = {
     "type": "object",

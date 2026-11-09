@@ -1,5 +1,6 @@
 """Stage B, the AI score for a job that passed the quick check: a whole number from 0 to 100 and up to three short
-reasons. The whole resume and the whole ad are sent; every answer is checked on this computer before it is saved."""
+reasons. The whole resume and the whole ad are sent; every answer is checked on this computer before it is saved.
+Anywhere else only once you ticked the box for that address, and only through the privacy filter."""
 
 import json
 import re
@@ -7,11 +8,13 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 import sqlcipher3
 
 from app import llm
 from app.config import AIRole, ScoringSettings
+from app.documents import privacy
 from app.resume import CONTROL, LOOK_ALIKES
 from app.scoring.stage_a import Check
 
@@ -35,6 +38,9 @@ NOT_ALLOWED = re.compile(r"https?:|www\.", re.IGNORECASE)  # links
 COPIED = 20  # a whole reason this long found word for word in the ad was copied from it
 ODD_SCORE = 85
 BY_HAND = ": check this job by hand"
+OTHER_LINK = "[other link]"  # a link left in your resume (a project's): none of the filter's, so never put back
+FIX_IT = "Settings → Scoring model"
+CHOOSES_FOR_YOU = "openrouter/"  # a model name that lets OpenRouter pick the model and who runs it
 SAVE = """INSERT OR REPLACE INTO ai_scores (job_id, model, score, reasons, failed, odd, resume, scored_on)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
 HAS_SCORE = "SELECT 1 FROM ai_scores WHERE job_id = ? AND model = ? AND score IS NOT NULL"
@@ -53,10 +59,41 @@ class Score(NamedTuple):
     seconds: float  # time spent asking
 
 
-def message(resume: str, title: str, description: str | None) -> tuple[str, str]:
-    """The text sent after the instructions, and the ad as the model sees it (markers inside it neutralised)."""
+def gate(role: AIRole, settings: ScoringSettings) -> None:
+    """Scoring runs on this computer, or through the one address you ticked the box for. Anything else raises
+    llm.StopScoring before a word is sent; the line names the host only."""
+    if role.service == "ollama":
+        return
+    host = urlsplit(role.address).hostname
+    if role.model.lower().startswith(CHOOSES_FOR_YOU):
+        raise llm.StopScoring(
+            f"The model {role.model} lets OpenRouter choose the model and who runs it: name one model in {FIX_IT}."
+        )
+    if settings.cloud_ok != role.address:
+        raise llm.StopScoring(
+            f"The box for sending your resume to {host} isn't ticked for this address: tick it in {FIX_IT}, or score "
+            "on this computer."
+        )
+
+
+def message(resume: str, title: str, description: str | None, shield: privacy.Shield | None = None) -> tuple[str, str]:
+    """The text sent after the instructions, and the ad as the model sees it (markers inside it neutralised). With a
+    `shield`, your details are hidden in both, and your resume must pass the last check (else llm.StopScoring)."""
     ad = f"{title}\n{description or ''}".strip().translate(LOOK_ALIKES)
-    return f"Candidate's resume:\n{resume}\n\n<job>\n{ad}\n</job>", ad
+    sent = ad
+    if shield is not None:  # an ad holds web addresses, so it skips the last check
+        resume, sent = _outgoing(resume, shield), shield.hide(ad)
+    return f"Candidate's resume:\n{resume}\n\n<job>\n{sent}\n</job>", ad
+
+
+def _outgoing(resume: str, shield: privacy.Shield) -> str:
+    try:
+        return shield.outgoing(resume, OTHER_LINK)  # a link left in your resume (a project's) becomes OTHER_LINK
+    except privacy.PrivacyStop as stop:
+        raise llm.StopScoring(
+            f"Your resume still holds {stop} after your details were hidden, so nothing was sent: remove it from "
+            "resume.tex, or put it in your Questionnaire's contact details, then score again."
+        ) from None
 
 
 def checked(text: str) -> tuple[int, list[str]] | None:
@@ -86,24 +123,29 @@ def score_job(
     quick: Check,
     settings: ScoringSettings,
     ask: Ask = llm.ask,
+    shield: privacy.Shield | None = None,
 ) -> Score:
-    """Ask the evaluator; a bad answer or a timeout gets one retry. Raises llm.StopScoring when no job can be scored."""
-    if role.service != "ollama":
-        raise llm.StopScoring("Phase 3b scores jobs only on this computer: set ai.evaluator.service to ollama.")
-    text, ad = message(resume, title, description)
+    """Ask the evaluator; a bad answer or a timeout gets one retry. Raises llm.StopScoring when no job can be scored.
+    Anywhere but this computer it needs the `shield` (the privacy filter), so no route can skip it."""
+    gate(role, settings)
+    if role.service != "ollama" and shield is None:
+        raise llm.StopScoring("Scoring anywhere but this computer needs the privacy filter, so nothing was sent.")
+    text, ad = message(resume, title, description, shield)
     problems, started = [], time.monotonic()
     for retry in (False, True):
         try:
             answer = checked(ask(role, INSTRUCTIONS, text, SHAPE, retry=retry))
         except llm.TooLong as error:
             return Score(None, [], f"AI score failed: {error}", None, time.monotonic() - started)
-        except llm.StopScoring:
+        except (llm.StopScoring, llm.Limited):  # no job can be scored now, or not until the queue has waited
             raise
         except llm.LLMError as error:  # timed out, busy, cut off, refused this once
             problems.append(str(error))
             continue
         if answer:
             score, reasons = answer
+            if shield is not None:  # your details back, on this computer only
+                reasons = [shield.restore(reason) for reason in reasons]
             odd = _odd(score, reasons, ad, quick, settings)
             return Score(score, reasons, None, odd, time.monotonic() - started)
         problems.append("the answer was not in the agreed shape")

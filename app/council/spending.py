@@ -1,4 +1,5 @@
-"""Money for paid AI calls, added up from the saved steps (one per call) and kept within your daily and monthly limits.
+"""Money for paid AI calls, added up from the saved steps (one per call) and paid scoring's days (scoring_days), and
+kept within your daily and monthly limits.
 
 Before a paid call, its largest possible cost is set aside; it is sent only if that still fits within both limits.
 Once it answers, the amount set aside becomes what it really cost. Ollama on this computer is free and never limited;
@@ -15,12 +16,17 @@ from app.llm import Usage, most_output, prices
 
 BYTES_PER_TOKEN = 2  # a token is usually about 4 English letters: 2 bytes over-estimates on purpose
 CENT = 0.005  # rounding: a total that shows as the limit is still within it
-SPENT = """SELECT coalesce(sum(coalesce(cost, 0) + reserved) FILTER (WHERE day = ?), 0),
-    coalesce(sum(coalesce(cost, 0) + reserved), 0) FROM steps WHERE substr(day, 1, 7) = ?"""
+SPENT = """SELECT coalesce(sum(spent) FILTER (WHERE day = ?), 0), coalesce(sum(spent), 0) FROM (
+    SELECT day, coalesce(cost, 0) + reserved AS spent FROM steps UNION ALL SELECT day, cost + reserved FROM scoring_days
+) WHERE substr(day, 1, 7) = ?"""
 OF_JOB = """SELECT coalesce(sum(coalesce(cost, 0) + reserved), 0), coalesce(max(cost IS NULL), 0)
     FROM steps JOIN preparations ON preparations.id = steps.preparation_id WHERE preparations.job_id = ?"""
-DAYS = """SELECT day, count(*), sum(service = 'ollama'), sum(input_tokens), sum(cached_tokens), sum(output_tokens),
-    sum(coalesce(cost, 0) + reserved), max(cost IS NULL) FROM steps GROUP BY day ORDER BY day DESC"""
+DAYS = """SELECT day, sum(calls), sum(laptop), sum(input), sum(cached), sum(output), sum(dollars), max(uncounted) FROM (
+    SELECT day, 1 AS calls, service = 'ollama' AS laptop, input_tokens AS input, cached_tokens AS cached,
+        output_tokens AS output, coalesce(cost, 0) + reserved AS dollars, cost IS NULL AS uncounted FROM steps
+    UNION ALL SELECT day, calls, 0, input_tokens, cached_tokens, output_tokens, cost + reserved, uncounted
+        FROM scoring_days WHERE calls > 0
+) GROUP BY day ORDER BY day DESC"""  # scoring on this computer is free and not counted
 
 
 class Spent(NamedTuple):
@@ -30,7 +36,7 @@ class Spent(NamedTuple):
 
 class Period(NamedTuple):
     start: str  # its first day: the day itself, the Monday of a week, the 1st of a month, January 1st
-    calls: int  # AI calls, local and paid
+    calls: int  # AI calls: the council's, local and paid, and scoring's paid ones
     laptop: int  # of them, on the laptop (Ollama); the rest went to a paid service or your own address
     input: int  # tokens read, at the normal price
     cached: int  # tokens read from a service's cache

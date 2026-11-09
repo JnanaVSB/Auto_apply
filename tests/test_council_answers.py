@@ -176,7 +176,7 @@ def test_good_answers_are_kept_by_field_with_new_numbers_flagged():
         (reply("One.", "y" * 601), "Q2 is over its limit"),
         (reply("One — two.", "Two."), "Q1 uses a long dash"),
         (reply("One -- two.", "Two."), "Q1 uses a long dash"),
-        (reply("I am [ME].", "Two."), "Q1 uses a placeholder"),
+        (reply("I am [my name].", "Two."), "Q1 uses a placeholder"),
         (reply("Mail sam@example.com.", "Two."), "Q1 holds an email address"),
         (reply("See https://example.com.", "Two."), "Q1 holds a web address"),
         (reply("Hi\x07there.", "Two."), "invisible characters"),

@@ -59,6 +59,9 @@
   <span class="muted">Your open marked jobs only. Each model's scores are kept apart, so you can compare them: this
     does not change the chosen model or use up the day's scoring time. Progress shows on the Collect page.</span>
 </form>
+{% elif scorer.service != "ollama" %}
+<p>Comparing models runs only with Ollama on this computer. Scoring now uses <strong>{{ scorer.model }}</strong> at
+  {{ scorer_host }}: change it in <a href="/settings/scoring-model">Settings → Scoring model</a>.</p>
 {% else %}
 <p class="error">No models found: start Ollama with <code>ollama serve</code>, and download a model with
   <code>ollama pull</code> and its name.</p>

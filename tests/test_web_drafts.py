@@ -219,6 +219,14 @@ def test_the_usage_page_shows_each_period_and_todays_spend(client, conn, job, mo
     assert 'href="/usage"' in text  # in the menu
 
 
+def test_the_usage_page_counts_paid_scoring_too(client, conn, monkeypatch):
+    with conn:
+        conn.execute("INSERT INTO scoring_days (day, calls, input_tokens, cost) VALUES ('2026-10-30', 2, 4000, 0.25)")
+    monkeypatch.setattr(drafts.spending, "today", lambda: "2026-10-30")
+    text = client.get("/usage").text
+    assert "Today: $0.25 of your $15.00 daily limit." in text and "<td>2026-10-30</td><td>0</td><td>2</td>" in text
+
+
 TRY = """INSERT INTO failed_tries (step_id, try_number, output_tokens, cost, reason, reply, reply_length, saved_on)
     SELECT id, ?, 8192, ?, ?, ?, ?, '2026-10-30T10:05:00+00:00' FROM steps WHERE preparation_id = ?"""
 
@@ -648,6 +656,26 @@ def test_the_top_bar_shows_the_line_up_spend_and_a_pause(client, conn, job, data
     with conn:
         conn.execute("UPDATE steps SET cost = 15, day = ?", (drafts.spending.today(),))
     assert "Paused: today&#39;s limit reached" in client.get("/ready").text
+
+
+OWN_SCORER = "service: openai-compatible\n    model: my-model\n    address: https://scoring.example.net/v1"
+
+
+@pytest.mark.parametrize(
+    ("evaluator", "line"),
+    [
+        ("service: anthropic\n    model: claude-opus-5-5\n    key_name: anthropic",
+         "Scoring: api.anthropic.com, counted in your limits"),
+        (f"{OWN_SCORER}\n    price_input: 0.2\n    price_output: 0.6",
+         "Scoring: scoring.example.net, counted in your limits"),
+        (OWN_SCORER, "Scoring: scoring.example.net, not counted in your limits"),
+    ],
+)  # fmt: skip
+def test_the_top_bar_says_where_scoring_goes_and_whether_your_limits_count_it(client, job, evaluator, line):
+    with config.CONFIG_PATH.open("a", encoding="utf-8") as settings:
+        settings.write(f"  evaluator:\n    {evaluator}\n")
+    text = client.get("/ready").text
+    assert line in text and "laptop, free" not in text
 
 
 ASK = "Scoring is currently running. Do you wish to override it with your Writer and council request?"

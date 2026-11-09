@@ -80,7 +80,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse]) -> None:
     @app.post("/settings/limits")
     async def save_limits(request: Request) -> Response:
         form = request.state.form
-        spending = {name: _number(form.get(name, "")) for name in ("daily", "monthly")}
+        spending = {name: number(form.get(name, "")) for name in ("daily", "monthly")}
         one_page = {"one_page": form.get("one_page") == "on"}
         problem = actions.update_settings(
             lambda old: old | {"spending": spending, "documents": dict(old.get("documents") or {}) | one_page}
@@ -133,7 +133,7 @@ def _role(form: dict[str, str], current: AIRole | None, installed: list[str]) ->
     address = form.get("address", "").strip().rstrip("/")
     role = {"service": "openai-compatible", "model": model, "address": address, "thinking": thinking}
     role |= {"key_name": "own-address"} if form.get("needs_key") else {}
-    role |= {name: _number(form[name]) for name in ("price_input", "price_output") if form.get(name, "").strip()}
+    role |= {name: number(form[name]) for name in ("price_input", "price_output") if form.get(name, "").strip()}
     confirmed = current is not None and current.own and current.address == address
     if not confirmed and not form.get("confirm"):
         host = urlsplit(address).hostname or "this address"
@@ -141,7 +141,7 @@ def _role(form: dict[str, str], current: AIRole | None, installed: list[str]) ->
     return role, None
 
 
-def _number(text: str) -> float | str:
+def number(text: str) -> float | str:
     text = text.strip()
     return float(text) if NUMBER.fullmatch(text) else text
 

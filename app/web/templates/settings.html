@@ -92,8 +92,13 @@
     <input name="fill_pause_minutes" type="number" min="0" max="60" step="1" value="{{ form.fill_pause_minutes }}"></label>
 
   <h2>Scoring</h2>
+  {% if scorer.service == "ollama" %}
   <p class="hint">Nothing leaves this computer: the quick check and the AI both run here.
     <strong>{{ ollama_line }}</strong></p>
+  {% else %}
+  <p class="hint">Your resume (contact details hidden) and job ads go to {{ scorer_host }} for the AI score; the quick
+    check runs here.</p>
+  {% endif %}
   <label>Automatic scoring while the dashboard is open
     <select name="automatic">
       {% for value, label in [("on", "on: score new, changed and waiting jobs by itself"), ("off", "off: only on request")] %}
@@ -114,13 +119,16 @@
     <textarea name="extra_skills" rows="5">{{ form.extra_skills }}</textarea></label>
 
   <h2>AI model</h2>
-  <p class="hint">The evaluator scores jobs with Ollama on this computer. Download a model first with
-    <code>ollama pull</code> and its name. The model that writes your resumes, its keys and your spending limits are
+  <p class="hint">{% if scorer.service == "ollama" %}The evaluator scores jobs with Ollama on this computer. Download a
+    model first with <code>ollama pull</code> and its name. {% endif %}The model that writes your resumes, its keys and
+    your spending limits are
     on the <a href="/settings/writer">Writer settings</a> page; the council's members on the
     <a href="/settings/council">Council settings</a> page. Reading your applications' e-mails:
     <a href="/settings/gmail">Settings → Gmail</a>. Your applications as files in a folder:
     <a href="/settings/export">Settings → Export</a>. Your phone: <a href="/settings/phone">Settings → Phone</a>.
-    The plugin that fills job forms: <a href="/settings/plugin">Settings → Browser plugin</a>.</p>
+    The plugin that fills job forms: <a href="/settings/plugin">Settings → Browser plugin</a>.
+    Scoring model: <a href="/settings/scoring-model">Settings → Scoring model</a>.</p>
+  {% if scorer.service == "ollama" %}
   <label>Model name <input name="ai_model" maxlength="100" value="{{ form.ai_model }}"></label>
   <label>Thinking (off is fastest; scoring is a simple task)
     <select name="ai_thinking">
@@ -130,6 +138,10 @@
     </select></label>
   <label>Working size in word-pieces (2048 to 262144; the whole resume and job ad must fit)
     <input name="ai_context" type="number" min="2048" max="262144" step="1" value="{{ form.ai_context }}"></label>
+  {% else %}
+  <p>Scoring uses <strong>{{ scorer.model }}</strong> at {{ scorer_host }}: change it in
+    <a href="/settings/scoring-model">Settings → Scoring model</a>.</p>
+  {% endif %}
 
   <h2>Boards you stopped</h2>
   {% if stopped %}

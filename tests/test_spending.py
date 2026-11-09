@@ -139,5 +139,16 @@ def test_the_history_shows_every_day_week_month_and_year_newest_first(conn):
     assert years[0].dollars == pytest.approx(3.40)
 
 
+def test_paid_scoring_counts_in_the_same_totals_and_history(conn):
+    calls(conn, ("done", 1.00, 0, "2026-10-30", 1000, 0, 100))
+    with conn:
+        conn.execute("""INSERT INTO scoring_days (day, seconds, calls, input_tokens, output_tokens, cost, reserved,
+            uncounted) VALUES ('2026-10-30', 60, 3, 900, 30, 0.25, 0.10, 1), ('2026-10-29', 500, 0, 0, 0, 0, 0, 0)""")
+    assert spending.spent(conn, "2026-10-30") == pytest.approx((1.35, 1.35))
+    assert [tuple(day) for day in spending.history(conn, "day")] == [
+        ("2026-10-30", 4, 0, 1900, 0, 130, pytest.approx(1.35), True)
+    ]  # a day of scoring only on this computer is free, and not listed
+
+
 def test_no_calls_means_no_history(conn):
     assert spending.history(conn, "week") == []

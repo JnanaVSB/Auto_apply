@@ -1,6 +1,6 @@
 """Any service that accepts OpenAI's chat-completions request (OpenAI itself, Groq, Ollama Cloud and others).
 
-Used from Phase 4; in Phase 3b no role may use a cloud service.
+Used by the Writer and the council, and for scoring once you tick the box for it.
 """
 
 from urllib.parse import urlsplit
@@ -8,11 +8,12 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.config import OPENAI_HOST, AIRole
-from app.llm import LLMError, Reply, TooLong, Usage, answer_data, refused, tokens
+from app.llm import LLMError, Reply, TooLong, Usage, answer_data, limited, refused, tokens
 
 ANSWER_LIMIT = 4096  # word-pieces, unless the request asks for more
 THINKING_ROOM, XHIGH_ROOM = 8000, 16000  # with thinking on, the model needs this much more room
 FLEX_SECONDS = 900  # OpenAI's half price (Flex) answers more slowly
+OPENROUTER_HOST = "openrouter.ai"
 
 
 def most_output(role: AIRole, limit: int | None) -> int:
@@ -25,7 +26,7 @@ def check(client: httpx.Client, role: AIRole, key: str | None) -> tuple[bool, st
     name = urlsplit(role.address).hostname if role.own else "OpenAI"
     reply = client.get(f"{role.address}/models", headers={"Authorization": f"Bearer {key}"} if key else {})
     if reply.status_code == 404 and role.own:
-        return False, f"{name} answers, but doesn't list its models: your first Prepare will show whether it works."
+        return False, f"{name} answers, but doesn't list its models: your first use will show whether it works."
     if reply.status_code != 200:
         return False, str(refused(name, reply.status_code, role.model))
     try:
@@ -47,14 +48,19 @@ def answer(
         "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": True}},
         "max_completion_tokens": most_output(role, limit),
     } | ({} if role.thinking == "off" else {"reasoning_effort": role.thinking})
-    if urlsplit(role.address).hostname == OPENAI_HOST:
+    host = urlsplit(role.address).hostname
+    if host == OPENAI_HOST:
         body["store"] = False  # OpenAI keeps nothing (owner decision D6); other hosts may refuse the setting
         if half:
             body["service_tier"] = "flex"  # half price: slower, and "busy" means wait and send again
+    elif host == OPENROUTER_HOST:  # only hosts that collect and keep nothing; none left means a refusal
+        body["provider"] = {"data_collection": "deny", "zdr": True}
     headers = {"Authorization": f"Bearer {key}"} if key else {}  # your own server may need no key
     reply = client.post(f"{role.address}/chat/completions", json=body, headers=headers)
     if reply.status_code == 400 and "context" in reply.text.lower():
         raise TooLong("the texts are longer than the model can read at once")
+    if reply.status_code == 429:
+        raise limited(reply, role)
     if reply.status_code != 200:
         raise refused("The AI service", reply.status_code, role.model)
     data = answer_data(reply)

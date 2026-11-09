@@ -19,6 +19,7 @@ from app.keychain import get_secret
 
 TIMEOUT_SECONDS = 120  # per answer; the first answer of the day also loads the model (about 20 s)
 CHECK_SECONDS = 10
+MAX_WAIT_DIGITS = 6  # a Retry-After longer than this (over 11 days) is not a number of seconds we believe
 
 
 class Usage(NamedTuple):
@@ -47,6 +48,15 @@ class LLMError(Exception):
 class Busy(LLMError):  # noqa: N818
     """The service is busy or failing for now (OpenAI's half-price "resource unavailable" too): not charged; the
     council waits and sends it again, never at full price."""
+
+
+class Limited(Busy):  # noqa: N818
+    """The service says too many requests (status 429): not charged. `wait` is the seconds it asked for
+    (Retry-After), else None; scoring's queue decides between waiting and stopping for the day."""
+
+    def __init__(self, message: str, wait: float | None = None) -> None:
+        super().__init__(message)
+        self.wait = wait
 
 
 class Expired(LLMError):  # noqa: N818
@@ -184,6 +194,13 @@ def _key(role: AIRole) -> str:
     if not key:
         raise StopScoring(f"No key is saved in the keychain under the name '{role.key_name}'.")
     return key
+
+
+def limited(reply: httpx.Response, role: AIRole) -> Limited:
+    """A 429's error, with the wait it asks for: whole seconds only, as the date form is rare and ignored."""
+    wait = reply.headers.get("Retry-After", "")
+    seconds = float(wait) if wait.isascii() and wait.isdigit() and len(wait) <= MAX_WAIT_DIGITS else None
+    return Limited(f"{urlsplit(role.address).hostname} says too many requests for now (status 429)", seconds)
 
 
 def refused(service: str, status: int, model: str) -> LLMError:

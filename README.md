@@ -180,8 +180,10 @@ for 15 minutes after 5 wrong passwords and logs you out after 30 idle minutes. E
 token, pages load nothing from the internet, and job text is always shown as plain text.
 
 ## Scoring jobs
-Scoring tells you which collected jobs fit your resume. **Nothing leaves this computer:** both stages run here, and
-your resume is never logged or sent anywhere.
+Scoring tells you which collected jobs fit your resume. **By default nothing leaves this computer:** both stages run
+here, and your resume is never logged or sent anywhere. You can instead send the AI score to OpenAI, Anthropic or your
+own address, only after you tick its box and with your contact details hidden: see
+[docs/own-ai-address.md](docs/own-ai-address.md).
 - **Quick check** (every open job, free, on the processor): it passes a job with one of your `roles` keywords in its
   title, or a job that shares skills with your resume (at least one, and at least `skills_threshold` of the skills
   it names) and is close enough in meaning (`meaning_threshold`). Skill names come from O*NET® software skills data,
@@ -207,7 +209,8 @@ your resume is never logged or sent anywhere.
    ```
    **Never change Ollama's `OLLAMA_HOST` setting.** Ollama has no password, so it must only listen on this computer
    (its default); the app refuses any other Ollama address.
-3. Download the quick-check files once and check that Ollama and the model are ready:
+3. Download the quick-check files once and check that the scoring model is ready (Ollama and its model, or the cloud
+   scoring model you chose: see [docs/own-ai-address.md](docs/own-ai-address.md)):
    ```bash
    python -m app.score setup
    ```
@@ -238,7 +241,8 @@ On the dashboard:
   model to compare, and shows how many jobs each route through the quick check sends to the AI and how many of
   those the AI finds ready. Choose the model and the thresholds from these numbers.
 - **Settings:** the scoring settings, the AI model, and whether Ollama is running with the model downloaded (or the
-  exact command that fixes it).
+  exact command that fixes it). **Settings → Scoring model** chooses where the AI score runs: on this computer, or
+  through OpenAI, Anthropic or your own address once you tick its box.
 
 "Score looks odd" marks a score worth checking by hand: for example a reason copied word for word from the ad, or an
 ad with phrases aimed at AI screening tools ("ignore previous instructions"). The AI is always told that job ads are
@@ -311,8 +315,10 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 - Secrets live only in your OS keychain; the database is encrypted with SQLCipher.
 - Collecting jobs sends nothing about you: only public read requests, identified as
   "auto_apply personal job search". Job descriptions are stored as plain text.
-- Scoring sends nothing anywhere: the quick check and the AI (Ollama, on this computer only) both run here. Its
-  only downloads are the three public quick-check files, once, checked by their fingerprints.
+- By default, scoring sends nothing anywhere: the quick check and the AI (Ollama, on this computer only) both run
+  here. Its only downloads are the three public quick-check files, once, checked by their fingerprints. A cloud
+  scoring model gets your resume and the job ads only after you tick its box, with your contact details replaced by
+  placeholders first: see [docs/own-ai-address.md](docs/own-ai-address.md).
 - The Laptop council sends nothing anywhere. A paid council sends the job ad and your resume and Profile text to
   Anthropic or OpenAI, with your name and contact details replaced by placeholders first; they are put back only
   on this computer, when the PDF is built.

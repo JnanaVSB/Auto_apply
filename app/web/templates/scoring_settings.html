@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Scoring model{% endblock %}
+{% macro csrf_field() %}<input type="hidden" name="csrf_token" value="{{ csrf }}">{% endmacro %}
+{% macro tick(host, ticked) %}<label class="tick"><input type="checkbox" name="confirm" value="on"{% if ticked %} checked{% endif %}> <span>Send my resume to
+    {{ host or "this address" }} to score jobs. My name, e-mail, phone number, links and street address are replaced
+    with placeholders first. <strong>Everything else in my resume still leaves this computer: my employers, projects,
+    schools, dates and skills.</strong> Each job ad goes too. {{ host or "This address" }}'s own terms decide what it
+    keeps and whether it trains on it, so I have read them.</span></label>{% endmacro %}
+{% block content %}
+<h1>Scoring model</h1>
+<p><a href="/settings">Back to Settings</a></p>
+{% if file_problem %}
+<p class="error" role="alert">{{ file_problem }}</p>
+<p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
+{% else %}
+{% if problem %}<p class="error" role="alert">{{ problem }}</p>{% endif %}
+{% if saved %}<p class="result" role="status">{{ saved }}</p>{% endif %}
+
+{% if scorer.service == "ollama" %}
+<p>Now: <strong>{{ scorer.model }}</strong> on this computer (free; nothing leaves it).</p>
+{% else %}
+<p>Now: <strong>{{ scorer.model }}</strong> through <code>{{ host }}</code>.</p>
+{% endif %}
+<form method="post" action="/settings/scoring-model/test" class="inline">{{ csrf_field() }}
+  <button type="submit">Test</button></form>
+<span class="hint">Free: it only asks whether the model can be used, and sends nothing of yours.</span>
+{% if test %}<p class="{{ 'result' if test[0] else 'error' }}" role="status">{{ test[1] }}</p>{% endif %}
+<p class="hint">Switching the scoring model scores jobs again with the new one; earlier scores stay saved under the old
+  model's name. A scoring run already going keeps its settings; the next one uses the new ones.</p>
+
+<h2>On this computer</h2>
+<form method="post" action="/settings/scoring-model/local" class="stacked">{{ csrf_field() }}
+  <p class="hint">Free, and nothing leaves this computer. Scores with the app's usual local model; change its name on
+    <a href="/settings">Settings</a> under AI model.</p>
+  <button type="submit">Score on this computer</button>
+</form>
+
+<h2>Your own address</h2>
+<p class="hint">A service that accepts OpenAI-style requests, with your own account and key: none comes with the app.
+  These fill in the address only; none is chosen for you, and none is a recommendation:</p>
+<p class="actions">{% for name, (label, _) in presets.items() %}<a class="button" href="/settings/scoring-model?preset={{ name }}">{{ label }}</a> {% endfor %}</p>
+<ul class="hint">
+  <li>Groq: Groq's terms say its services are "not for consumer use"; read them and decide whether that fits a personal
+    tool. Groq says it keeps nothing by default, and that customers can switch on zero data retention under Data
+    Controls. Its page doesn't say whether that includes the free plan: switch it on, and check that it stays on.</li>
+  <li>Cloudflare: Put your own Cloudflare account id where the address says YOUR-ACCOUNT-ID (the app refuses to save it
+    until you do). Cloudflare's model names start with @, such as @cf/... .</li>
+  <li>OpenRouter: The app asks OpenRouter, with every request, to use only hosts that keep nothing and don't collect
+    your data. If no host of your model agrees, OpenRouter refuses the request and the app says so. Model names
+    starting with openrouter/ (such as openrouter/free) are refused: OpenRouter would pick the model and host for
+    you.</li>
+</ul>
+<form method="post" action="/settings/scoring-model/own" class="stacked">{{ csrf_field() }}
+  <label>Address <input name="address" type="url" maxlength="300" value="{{ own.address }}"></label>
+  <label>Model name, as the service knows it <input name="model" maxlength="100" value="{{ own.model }}"></label>
+  <label class="tick"><input type="checkbox" name="needs_key" value="on"{% if own.needs_key %} checked{% endif %}> This address needs a key (saved below)</label>
+  <p class="hint">Prices per 1M tokens, if you know them: both, or leave both empty.</p>
+  <label>Price for text read, $ <input name="price_input" inputmode="decimal" maxlength="12" value="{{ own.price_input }}"></label>
+  <label>Price for text written, $ <input name="price_output" inputmode="decimal" maxlength="12" value="{{ own.price_output }}"></label>
+  {{ tick(own_host, ticked) }}
+  <p class="hint">Use only a service whose terms say it doesn't train on what you send. The app can't check this, and a
+    preset is not a recommendation.</p>
+  <p class="hint">OpenAI and Anthropic count towards your spending limits (<a href="/settings/writer">Settings → Writer</a>).
+    Your own address counts only if you give its prices; without them its costs aren't counted, so the limits can't
+    protect you.</p>
+  <button type="submit">Save</button>
+</form>
+
+<h3>Your own address's key</h3>
+{% if remote %}
+<p>{{ on_the_laptop }}</p>
+{% elif own_host != key_host %}
+<p>Save this address first (with its tick), then paste its key here.</p>
+{% else %}
+<form method="post" action="/settings/scoring-model/key" class="actions">{{ csrf_field() }}
+  <input type="hidden" name="host" value="{{ key_host }}">
+  <span>{% if key is none %}the keychain can't be read{% elif key %}saved for {{ key_host }}{% elif key_host %}not saved for {{ key_host }}{% else %}not saved{% endif %}</span>
+  <label>Key <input name="key" type="password" autocomplete="off" maxlength="500"></label>
+  <button type="submit">Save key</button>
+  {% if key %}<button type="submit" name="remove" value="1">Remove key</button>{% endif %}
+</form>
+<p class="hint">Kept only in your computer's keychain, for {{ key_host or "your own address" }} only: never shown again, never
+  written to a file, and never sent to another address.</p>
+{% endif %}
+
+{% for kind, choice in paid.items() %}
+<h2>{{ choice.label }}</h2>
+<form method="post" action="/settings/scoring-model/paid" class="stacked">{{ csrf_field() }}
+  <input type="hidden" name="kind" value="{{ kind }}">
+  <label>Model, with its price per 1M tokens (read / written)
+    <select name="model">
+      {% if choice.model not in choice.models %}<option value="">Choose a model</option>{% endif %}
+      {% for model, (name, price) in choice.models.items() %}
+      <option value="{{ model }}"{% if choice.model == model %} selected{% endif %}>{{ name }}: ${{ price.input }} / ${{ price.output }}</option>
+      {% endfor %}
+    </select></label>
+  <p>{{ choice.label }} key: {% if choice.key %}saved{% elif choice.key is none %}the keychain can't be read{% else %}no key saved yet: add it in
+    <a href="/settings/writer">Settings → Writer</a>{% endif %}</p>
+  {{ tick(choice.host, choice.ticked) }}
+  <button type="submit">Save</button>
+</form>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -4,6 +4,7 @@ computer only, the cost, the failed tries. Messages name the cause and the fix, 
 answer."""
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -52,9 +53,10 @@ CHANGED = "Your entries changed since version {}: press Prepare for a fresh vers
 TOO_LONG = "Too long for the model ({}): raise the working size on the Writer settings page."
 DETAIL_CHANGED = ("PDF built, but a bullet still shows {} you have changed since: update that entry on the Resume "
                   "Profile page, then press Prepare for a fresh version.")  # fmt: skip
-DETAIL_KINDS = {
-    "ME": "your name", "EMAIL": "an email address", "PHONE": "a phone number", "ADDRESS": "a street address",
-    "LINK": "a link",
+DETAIL_KINDS = {  # by a placeholder's name, today's or the one before 8E; any other name is a link's
+    "my name": "your name", "me": "your name", "my email": "an email address", "email": "an email address",
+    "my phone": "a phone number", "phone": "a phone number", "my street address": "a street address",
+    "address": "a street address",
 }  # fmt: skip
 
 
@@ -183,11 +185,12 @@ def put_back(
     """How a draft's placeholders are put back (on this computer only): each with the exact text it stood for when the
     draft was written, kept with it, so a later change to your details can't put a different link or name in its
     place; and a note when a bullet still shows a detail you have changed since (today's filter no longer knows it as
-    one of your details). A draft from before the details were kept: with today's, as then."""
+    one of your details). A draft from before the details were kept: with today's details, in the names it was
+    written with, as then."""
+    if "details" not in draft:  # written before 2026-11-01, so with the names before 8E
+        return shield_for(conn, config, entries, contact, old_names=True).restore, None
     today = shield_for(conn, config, entries, contact)
-    if "details" not in draft:
-        return today.restore, None
-    changed = [DETAIL_KINDS[placeholder[1:-1].split("-")[0]]
+    changed = [DETAIL_KINDS.get(re.sub(r"[- ][0-9]+$", "", placeholder[1:-1].lower()), "a link")
                for placeholder, value in draft["details"].items()
                if not privacy.PLACEHOLDER.fullmatch(today.hide(value))]  # fmt: skip
     note = DETAIL_CHANGED.format(" and ".join(dict.fromkeys(changed))) if changed else None
@@ -207,14 +210,14 @@ def originals(conn: sqlcipher3.Connection, sources: str) -> list[writer.Entry]:
 
 
 def shield_for(
-    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], contact: dict
+    conn: sqlcipher3.Connection, config: Config, entries: list[writer.Entry], contact: dict, old_names: bool = False
 ) -> privacy.Shield:
     """The privacy filter for these entries and their sources (and your Questionnaire's contact details), as the
-    Writer's text is hidden with."""
+    Writer's text is hidden with (`old_names`: privacy.shield's)."""
     sources = list(dict.fromkeys(entry.source for entry in entries))
     latex_texts = [read_latex(config.data_dir) if source == writer_sources.PROFILE else uploads.latex(conn, source)
                    for source in sources]  # fmt: skip
-    return privacy.shield(contact, latex_texts, [entry.tile for entry in entries])
+    return privacy.shield(contact, latex_texts, [entry.tile for entry in entries], old_names)
 
 
 def _tailored(tile, chosen: dict, restore: Callable[[str], str]):

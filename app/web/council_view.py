@@ -4,6 +4,7 @@ page), and the top bar on every page. What the box shows of the council is in ap
 
 import json
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import sqlcipher3
 from fastapi import FastAPI, Request
@@ -14,6 +15,7 @@ from starlette.exceptions import HTTPException
 from app.config import ConfigError, load_config
 from app.council import estimate, flow, reviewers, runs, spending
 from app.documents import pdf, privacy
+from app.llm import prices
 from app.resume import CONTROL, ResumeError
 from app.web import drafts, prepare, queries
 from app.web.council_settings import tier
@@ -24,12 +26,14 @@ CONTINUE = """UPDATE preparations SET status = 'writing', waived = ?, problem = 
 
 def topbar(conn: sqlcipher3.Connection) -> dict | None:
     """The top bar: the line-up with its estimate per job, today's and this month's spend against your limits, a
-    pause notice, and per member the model, company and estimate at 3 and 5 rounds."""
+    pause notice, where scoring goes (none: this computer) and whether your limits count it, and per member the model,
+    company and estimate at 3 and 5 rounds."""
     try:
         config = load_config()
     except ConfigError:
         return None
-    turns, found = config.council.turns, spending.spent(conn, spending.today())
+    turns, found, scorer = config.council.turns, spending.spent(conn, spending.today()), config.ai.evaluator
+    counted = prices.price(scorer) is not None  # as scoring counts it: only with a known price
     members = [("Writer", "writer", config.ai.writer)] + [
         (reviewers.name(member, config.ai.names), member, role) for member, role in config.ai.members.items()
     ]
@@ -43,6 +47,7 @@ def topbar(conn: sqlcipher3.Connection) -> dict | None:
     )  # fmt: skip
     return {
         "tier": tier(config), "per_job": per_job, "today": found.today, "month": found.month, "paused": paused,
+        "scoring": None if scorer.service == "ollama" else (urlsplit(scorer.address).hostname, counted),
         "daily": config.spending.daily, "monthly": config.spending.monthly, "rows": rows,
         "per_job5": _total([row["at5"] for row in rows]) if per_job is not None else None,
         "per_month": per_job * config.council.daily_jobs * 30 if per_job is not None else None,
