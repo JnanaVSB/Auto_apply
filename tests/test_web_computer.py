@@ -13,6 +13,7 @@ NO_FORM = "https://careers.example/1"  # a site the app reads no form from: the 
 RECORD = """INSERT INTO submissions (job_id, submitted_on, saved_on, how, address, fields, files)
     VALUES (?, '2026-11-05', 'then', 'by hand', 'https://careers.example/1', '[]', '[]')"""
 MARKED = "SELECT for_computer FROM jobs"
+TRACKER = "INSERT INTO tracker (job_id, stage, applied_on, changed_on) VALUES (?, ?, ?, 'then')"
 
 
 @pytest.fixture
@@ -62,6 +63,31 @@ def test_a_recorded_job_shows_the_mark_nowhere_and_keeps_it(both, conn):
     assert MARK not in part and ON_LIST not in part
     assert LIST not in words(laptop.get("/ready")) and LIST not in on_phone(phone, "/ready")
     assert one(conn, MARKED) == (1,)  # unseen, but left in the row
+
+
+@pytest.mark.parametrize(("stage", "listed"), [("ready", True), ("applied", False), ("rejected", False)])
+def test_a_card_moved_on_from_ready_on_the_tracker_leaves_the_list_and_the_button(both, conn, stage, listed):
+    laptop, phone = both
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=NO_FORM, for_computer=1)
+        conn.execute(TRACKER, (job, stage, None if stage == "ready" else "2026-11-01"))  # by hand, or by Gmail
+    assert (LIST in words(laptop.get("/ready")), LIST in on_phone(phone, "/ready")) == (listed, listed)
+    assert (ON_LIST in on_phone(phone, f"/jobs/{job}/form")) == listed
+    assert one(conn, MARKED) == (1,)  # unseen, but left in the row
+
+
+@pytest.mark.parametrize("marked", [0, 1], ids=["not marked", "marked"])
+@pytest.mark.parametrize(
+    "change",
+    [{"status": "closed"}, {"status": "no longer available"}, {"not_interested": 1}],
+    ids=["closed", "gone", "skipped"],
+)
+def test_the_phone_offers_no_mark_on_a_job_the_list_leaves_out(both, conn, change, marked):
+    _, phone = both
+    with conn:
+        job = add_job(conn, "ML Intern", apply_url=NO_FORM, for_computer=marked, **change)
+    part = on_phone(phone, f"/jobs/{job}/form")
+    assert MARK not in part and ON_LIST not in part
 
 
 @pytest.mark.parametrize("marked", [0, 1], ids=["not marked", "marked"])

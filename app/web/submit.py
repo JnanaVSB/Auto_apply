@@ -365,6 +365,7 @@ def add_routes(app: FastAPI, page: Callable[..., HTMLResponse], data_dir: Path) 
             fill_address=fill_address, fill_reason=fill_reason, last_fill=fill_words.latest(conn, job_id),
             read_address=read_address, read_reason=read_reason,
             job=job, record=recorded, heading=recorded and record.heading(recorded),
+            markable=request.state.remote and queries.listable(conn, job_id),
             caution=recorded and record.caution(recorded), no_copy=record.NO_COPY, another_file=record.ANOTHER_FILE,
             moved_back=back and record.MOVED_BACK.format(_day(back)),
             today=date.today().isoformat(),

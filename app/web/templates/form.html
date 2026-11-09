@@ -161,7 +161,7 @@
   {% elif fill_reason %}<p class="muted">{{ fill_reason }}</p>{% endif %}
   <p id="fill-status" role="status"></p>
   {% endif %}
-  {% if remote and not record %}
+  {% if markable %}
   {% if job.for_computer %}<p>On the computer list</p>{{ post("computer", "Take it off", {"value": "0"}) }}
   {% else %}{{ post("computer", "Do this on a computer", {"value": "1"}) }}{% endif %}
   {% endif %}

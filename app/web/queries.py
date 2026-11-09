@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException
 from app import jobs
 from app.collect import DISCOVERED, source_label, source_state
 from app.config import AISettings, ScoringSettings
-from app.scoring.ready import STATUS
+from app.scoring.ready import AT_READY, PREPARABLE, STATUS
 from app.sources import is_simplify_site
 from app.sources.boards import BOARDS
 from app.sources.feeds import FEEDS
@@ -88,6 +88,11 @@ OTHER_SCORES = """SELECT model, score, failed, scored_on FROM ai_scores WHERE jo
 SOURCES_OF = """SELECT s.source, s.listed, s.unlisted_on, s.unlisted_reason, r.retired_on, r.last_ok, r.stopped_on,
         r.name IS NOT NULL AND s.source NOT LIKE 'simplify:%', s.source_job_id
     FROM job_sources s LEFT JOIN sources r ON r.name = s.source WHERE s.job_id = ? ORDER BY s.rowid"""
+# A job the "To do on a computer" list can show: open and not skipped, still at Ready on the Tracker (or not on it),
+# and no application recorded
+LISTABLE = f"{PREPARABLE} AND {AT_READY} AND jobs.id NOT IN (SELECT job_id FROM submissions)"  # noqa: S608
+FOR_COMPUTER = f"SELECT id, title, company FROM jobs WHERE for_computer = 1 AND {LISTABLE} ORDER BY id DESC"  # noqa: S608
+LISTABLE_JOB = f"SELECT 1 FROM jobs WHERE id = ? AND {LISTABLE}"  # noqa: S608 (fixed text)
 
 
 @dataclass(frozen=True)
@@ -568,9 +573,11 @@ def stopped_boards(conn: sqlcipher3.Connection) -> list[tuple[str, str]]:
 
 
 def for_computer(conn: sqlcipher3.Connection) -> list[dict]:
-    """Jobs marked "Do this on a computer" still to do: open, not skipped, no application recorded; newest first."""
-    rows = conn.execute(
-        "SELECT id, title, company FROM jobs WHERE for_computer = 1 AND status = 'open' AND NOT not_interested "
-        "AND id NOT IN (SELECT job_id FROM submissions) ORDER BY id DESC"
-    )
+    """Jobs marked "Do this on a computer" that the list can show (LISTABLE); newest first."""
+    rows = conn.execute(FOR_COMPUTER)
     return [{"id": job_id, "title": title, "company": company} for job_id, title, company in rows]
+
+
+def listable(conn: sqlcipher3.Connection, job_id: int) -> bool:
+    """Whether the job could be on "To do on a computer", so the phone offers the mark."""
+    return conn.execute(LISTABLE_JOB, (job_id,)).fetchone() is not None
