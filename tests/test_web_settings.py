@@ -9,7 +9,7 @@ import yaml
 from helpers import LIST, FakeWeb, csrf, log_in
 
 from app import config, db, fetch, keychain, phonebook
-from app.config import ExportSettings, load_config
+from app.config import AIRole, ExportSettings, load_config
 from app.sources import usajobs
 from app.web import actions
 
@@ -111,6 +111,17 @@ def test_a_cloud_scorer_shows_where_jobs_go_and_its_settings_survive_a_save(clie
     assert (found.ai.evaluator.address, found.ai.evaluator.model, found.scoring.cloud_ok) == (
         "https://scoring.example.net/v1", "my-model", "https://scoring.example.net/v1"
     )  # fmt: skip
+
+
+def test_a_settings_tab_opened_before_a_cloud_scorer_was_chosen_leaves_it_as_it_is(client, settings_file):
+    with settings_file.open("a", encoding="utf-8") as file:
+        file.write("scoring:\n  cloud_ok: https://scoring.example.net/v1\n")
+        file.write("ai:\n  evaluator:\n    service: openai-compatible\n    model: my-model\n"
+                   "    address: https://scoring.example.net/v1\n")  # fmt: skip
+    assert "Saved." in save(client, ai_model="qwen3:8b", ai_thinking="high", ai_context="8192").text  # its old boxes
+    found, address = load_config(settings_file), "https://scoring.example.net/v1"
+    assert found.ai.evaluator == AIRole(service="openai-compatible", model="my-model", address=address)
+    assert found.scoring.cloud_ok == address
 
 
 def test_scoring_on_this_computer_shows_todays_words_and_boxes(client):

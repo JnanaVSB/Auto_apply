@@ -222,7 +222,7 @@ def _counted(conn: sqlcipher3.Connection, config: Config, call: Callable[..., ll
 
     def ask(role: AIRole, system: str, user: str, shape: dict, *, retry: bool) -> str:
         largest, day = spending.largest(role, system + user), spending.today()
-        with conn:  # checked and set aside together, so the council can't take the same room
+        with conn:  # checked, then set aside (two runs at the very same moment could both pass: a Phase 10 item)
             if not (refusal := spending.refusal(conn, role, largest, config.spending, day)):
                 conn.execute(RESERVE, (day, largest or 0))
         if refusal:

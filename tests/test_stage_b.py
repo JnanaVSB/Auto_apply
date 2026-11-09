@@ -191,6 +191,13 @@ OPENAI = AIRole(service="openai-compatible", model="gpt-6.1-sol", address="https
            "lets OpenRouter choose the model") for model in ("openrouter/free", "openrouter/auto", "OpenRouter/Free")),
         (OWN, "", "isn't ticked for this address"),
         (OWN, "https://scoring.example.net/accounts/fake-account-1111/v1", "isn't ticked for this address"),
+        *((AIRole(service="openai-compatible", model="my-model", address=address), ticked,
+           "isn't ticked for this address") for address, ticked in (
+            ("https://scoring.example.net/v1.evil.example", "https://scoring.example.net/v1"),  # longer than ticked
+            ("https://scoring.example.net.evil.example/v1", "https://scoring.example.net"),  # another host
+            ("https://scoring.example.net/v1/longer", "https://scoring.example.net/v1"),
+            ("https://scoring.example.net/v1", "https://Scoring.Example.net/v1"),  # exactly as ticked, capitals too
+        )),
     ],
 )  # fmt: skip
 def test_scoring_elsewhere_is_refused_unless_ticked_for_exactly_that_address(role, ticked, line):
