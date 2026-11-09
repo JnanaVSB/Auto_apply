@@ -161,6 +161,10 @@
   {% elif fill_reason %}<p class="muted">{{ fill_reason }}</p>{% endif %}
   <p id="fill-status" role="status"></p>
   {% endif %}
+  {% if remote and not record %}
+  {% if job.for_computer %}<p>On the computer list</p>{{ post("computer", "Take it off", {"value": "0"}) }}
+  {% else %}{{ post("computer", "Do this on a computer", {"value": "1"}) }}{% endif %}
+  {% endif %}
   {% if last_fill %}
   <p class="muted">Last fill: {{ last_fill.when }}{% if last_fill.taken and last_fill.taken != last_fill.when %}, opened {{ last_fill.taken }}{% endif %}, from {{ "the toolbar" if last_fill.toolbar else "Open and fill" }}{% if last_fill.browser %}, in {{ last_fill.browser }}{% endif %}: {{ last_fill.what }}{{ "." if not last_fill.what.endswith(".") }}{% if last_fill.files %} PDF went to the browser: {{ last_fill.files }}.{% endif %}{% if last_fill.read_at %} Last read of the form: {{ last_fill.read_at }}.{% endif %}</p>
   {% if last_fill.filled %}

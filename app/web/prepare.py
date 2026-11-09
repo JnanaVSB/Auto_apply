@@ -182,7 +182,7 @@ def add_routes(
         skipped = request.query_params.get("skipped", "")
         return page(
             request, "ready.html", listing=listing, view=view, states=states, uses=uses, missing=missing,
-            labels=runs.LABELS, forms=forms,
+            labels=runs.LABELS, forms=forms, computer=queries.for_computer(conn),
             skipped=int(skipped) if queries.PAGE_NUMBER.fullmatch(skipped) else None,
             problem=PROBLEMS.get(request.query_params.get("problem", "")),
         )  # fmt: skip

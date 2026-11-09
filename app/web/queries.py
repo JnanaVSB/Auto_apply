@@ -78,7 +78,7 @@ SCORE_COLUMNS = f""", s.score, s.reasons, {ODD} AS odd, a.title_only, s.resume, 
         AND o.model != chosen.model AND o.score IS NOT NULL ORDER BY o.scored_on DESC LIMIT 1) AS other"""  # noqa: S608 (fixed text)
 JOB_COLUMNS = """id, apply_url, company, title, locations, us_location, remote, level, role_category, sponsorship,
     terms, description, salary, date_posted, first_seen, last_seen, status, status_reason, open_manually_only,
-    added_by_you, check_location, location_by_you, not_interested"""
+    added_by_you, check_location, location_by_you, not_interested, for_computer"""
 JOB_SCORING = f"""{STATUS} AS status, s.score, s.reasons, s.failed, s.odd, s.scored_on, s.resume,
     s.changed AS ad_changed, f.failed AS new_try_failed, f.resume AS new_try_resume, f.tried_on AS new_try_on,
     a.keywords, a.job_skills, a.shared_skills, a.meaning, a.title_only, a.trick, a.passed, a.checked_on,
@@ -565,3 +565,12 @@ def last_refreshes(conn: sqlcipher3.Connection, count: int = 3) -> list[dict]:
 def stopped_boards(conn: sqlcipher3.Connection) -> list[tuple[str, str]]:
     """Boards you stopped reading, with the day you stopped them."""
     return conn.execute("SELECT name, stopped_on FROM sources WHERE stopped_on IS NOT NULL ORDER BY name").fetchall()
+
+
+def for_computer(conn: sqlcipher3.Connection) -> list[dict]:
+    """Jobs marked "Do this on a computer" still to do: open, not skipped, no application recorded; newest first."""
+    rows = conn.execute(
+        "SELECT id, title, company FROM jobs WHERE for_computer = 1 AND status = 'open' AND NOT not_interested "
+        "AND id NOT IN (SELECT job_id FROM submissions) ORDER BY id DESC"
+    )
+    return [{"id": job_id, "title": title, "company": company} for job_id, title, company in rows]
