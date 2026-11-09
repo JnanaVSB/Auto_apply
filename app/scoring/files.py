@@ -73,7 +73,7 @@ def ensure_files(fetcher: Fetcher, out: Callable[[str], None] = print, folder: P
     for file in FILES:
         try:
             folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-            if not _correct(folder / file.name, file):
+            if not is_correct(folder / file.name, file):
                 out(f"Downloading {file.label} ({file.size / 1_000_000:.1f} MB), only this once...")
                 fetcher.download_file(file.url, folder / file.name, file.size, file.sha256)
         except FetchError as error:
@@ -86,7 +86,7 @@ def ensure_files(fetcher: Fetcher, out: Callable[[str], None] = print, folder: P
     return folder
 
 
-def _correct(path: Path, file: SetupFile) -> bool:
+def is_correct(path: Path, file: SetupFile) -> bool:
     try:
         if path.stat().st_size != file.size:
             return False

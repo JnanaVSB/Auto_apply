@@ -18,7 +18,7 @@ class KeychainError(Exception):
     """The OS keychain is missing, unsafe or failed. Messages never include secret values."""
 
 
-def _keychain() -> keyring.backend.KeyringBackend:
+def safe_backend() -> keyring.backend.KeyringBackend:
     backend = keyring.get_keyring()
     parts = getattr(backend, "backends", [backend])  # a "chainer" backend combines several keychains
     unsafe = [type(part).__module__ for part in parts if type(part).__module__ not in SAFE_BACKENDS]
@@ -28,7 +28,7 @@ def _keychain() -> keyring.backend.KeyringBackend:
 
 
 def set_secret(name: str, value: str) -> None:
-    backend = _keychain()
+    backend = safe_backend()
     try:
         backend.set_password(SERVICE, name, value)
     except KeyringError as error:
@@ -36,7 +36,7 @@ def set_secret(name: str, value: str) -> None:
 
 
 def get_secret(name: str) -> str | None:
-    backend = _keychain()
+    backend = safe_backend()
     try:
         return backend.get_password(SERVICE, name)
     except KeyringError as error:
@@ -45,7 +45,7 @@ def get_secret(name: str) -> str | None:
 
 def delete_secret(name: str) -> None:
     """Remove a secret; one that isn't saved is fine."""
-    backend = _keychain()
+    backend = safe_backend()
     try:
         backend.delete_password(SERVICE, name)
     except PasswordDeleteError:

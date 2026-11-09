@@ -12,14 +12,25 @@ nothing personal is ever stored in this repository.
 > Tracker cards, connected with your own Google project. Applying comes in later phases.
 
 ## Requirements
-- [Miniconda](https://docs.anaconda.com/miniconda/) (or any conda)
+- [Miniforge](https://github.com/conda-forge/miniforge): conda-forge only, so no Anaconda terms apply (any conda 26.1
+  or newer that you already have also works). The one-command setup installs it for you if there is no conda 26.1 or
+  newer.
+- For the one-command setup: Linux on x86-64, or an Apple-silicon Mac
 - An OS keychain: macOS Keychain, Windows Credential Manager, or on Linux GNOME Keyring / KWallet
 
 ## Setup
+```bash
+git clone https://github.com/JnanaVSB/Auto_apply.git && cd Auto_apply && ./setup.sh
+```
+It checks the system, installs Miniforge if there is no conda 26.1 or newer (after asking), builds the `auto_apply`
+environment, then makes your settings file and the encrypted database, offers to download the scoring files and to
+start the dashboard; running it again is safe. Step by step, with every question and stop: [docs/friend-setup.md](docs/friend-setup.md).
+
+**Or by hand** (still the way on Windows):
 1. Create and activate the environment.
    On Linux (exact, locked versions of every package):
    ```bash
-   conda create -n auto_apply --file conda-linux-64.lock
+   conda create -n auto_apply --override-channels -c conda-forge --file conda-linux-64.lock
    conda activate auto_apply
    pip install --require-hashes --no-deps -r requirements-pip.txt
    ```
@@ -29,7 +40,7 @@ nothing personal is ever stored in this repository.
    conda activate auto_apply
    ```
 2. Create your private settings file (the `data/` folder is never committed), then set your own
-   `roles` (Simplify categories and keywords) in `data/config.yaml`:
+   `roles` (Simplify categories and keywords) on the dashboard's Settings page (or in `data/config.yaml`):
    ```bash
    mkdir -p data && cp config.example.yaml data/config.yaml
    ```
