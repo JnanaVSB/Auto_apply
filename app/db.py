@@ -780,6 +780,10 @@ UPGRADES = (
     -- 1: some went to your own address without a price, so the day's dollars are "at least"
     ALTER TABLE scoring_days ADD COLUMN uncounted INTEGER NOT NULL DEFAULT 0 CHECK (uncounted IN (0, 1));
     """,
+    """
+    -- 1: you marked the job "Do this on a computer"; Ready lists it while it is open, not skipped and not recorded
+    ALTER TABLE jobs ADD COLUMN for_computer INTEGER NOT NULL DEFAULT 0 CHECK (for_computer IN (0, 1));
+    """,
 )
 SCHEMA_VERSION = len(UPGRADES)
 

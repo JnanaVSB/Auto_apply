@@ -713,6 +713,34 @@ def test_version_26_adds_paid_scorings_money_to_its_days_and_changes_nothing_els
         assert sorted(path.glob(f"{db.DB_FILE}.bak-v25")), "a backup is made before the upgrade"
 
 
+def test_version_27_adds_the_computer_mark_to_jobs_and_changes_nothing_else(tmp_path, monkeypatch):
+    path = tmp_path / "upgraded"
+    with monkeypatch.context() as version_26:
+        version_26.setattr(db, "UPGRADES", db.UPGRADES[:26])
+        version_26.setattr(db, "SCHEMA_VERSION", 26)
+        db.setup(path, PASSWORD)
+        with closing(db.connect(path)) as conn:
+            with conn:
+                _scored_job(conn)
+            before = _everything(conn)
+            old = [row[1] for row in conn.execute("PRAGMA table_info(jobs)")]
+    with monkeypatch.context() as version_27:
+        version_27.setattr(db, "UPGRADES", db.UPGRADES[:27])
+        version_27.setattr(db, "SCHEMA_VERSION", 27)
+        with closing(db.connect(path)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 27
+            found, rows = _everything(conn)
+            assert [row for row in found if row[1] != "jobs"] == [row for row in before[0] if row[1] != "jobs"]
+            assert {name: rows[name] for name in rows if name != "jobs"} == {
+                name: before[1][name] for name in before[1] if name != "jobs"
+            }
+            assert [row[1] for row in conn.execute("PRAGMA table_info(jobs)")] == [*old, "for_computer"]
+            assert rows["jobs"] == [(*before[1]["jobs"][0], 0)]  # the old job is not marked
+            with pytest.raises(sqlcipher3.IntegrityError), conn:
+                conn.execute("UPDATE jobs SET for_computer = 2")
+        assert sorted(path.glob(f"{db.DB_FILE}.bak-v26")), "a backup is made before the upgrade"
+
+
 def _scored_job(conn) -> None:
     """One job with a quick check and an AI score, both up to date."""
     conn.execute(
