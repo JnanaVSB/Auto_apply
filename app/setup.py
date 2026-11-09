@@ -97,6 +97,12 @@ def _copy_config() -> None:
     print("Settings: data/config.yaml made from config.example.yaml.")
 
 
+def _later(command: str) -> str:
+    """The exact line that runs an app command later: real paths, shell-quoted, with this environment's Python, so it
+    works with no environment activated."""
+    return f"cd {shlex.quote(str(config.PROJECT_DIR))} && {shlex.quote(sys.executable)} -m {command}"
+
+
 def _scoring(settings: Config) -> None:
     folder = files.cache_dir()
     missing = [file for file in files.FILES if not files._correct(folder / file.name, file)]
@@ -104,11 +110,11 @@ def _scoring(settings: Config) -> None:
     if not missing or _ask(f"Download the scoring files now (about {size:.0f} MB)?"):
         if score.main(["setup"]) != 0:  # not ready yet doesn't stop setup
             print(
-                "Scoring isn't ready yet (see the line above); once that's fixed, check again with: "
-                "python -m app.score setup"
+                "Scoring isn't ready yet (see the line above); once that's fixed, check again with:\n"
+                f"  {_later('app.score setup')}"
             )
     else:
-        print("Scoring files not downloaded; get them later with: python -m app.score setup")
+        print(f"Scoring files not downloaded; get them later with:\n  {_later('app.score setup')}")
     evaluator = settings.ai.evaluator
     if evaluator.service == "ollama":
         print(OLLAMA_NOTE)
@@ -132,9 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         elif db.main(["setup"]) != 0:  # it prints its own reason
             return 1
         _scoring(settings)
-        start = f"cd {shlex.quote(str(config.PROJECT_DIR))} && {shlex.quote(sys.executable)} -m app.web"
         print(
-            f"Setup is done. To open the dashboard later, run:\n  {start}\n"
+            f"Setup is done. To open the dashboard later, run:\n  {_later('app.web')}\n"
             "Roles and every other setting are chosen on its Settings page; nobody needs to edit the settings file."
         )
         if _ask("Start the dashboard now?"):

@@ -44,6 +44,14 @@ def ran(tmp_path, monkeypatch):
     return calls
 
 
+@pytest.fixture
+def later(tmp_path, monkeypatch):
+    """A project folder and a Python path with spaces in them; returns the start of the quoted command setup prints."""
+    monkeypatch.setattr(config, "PROJECT_DIR", tmp_path / "my projects" / "auto_apply")
+    monkeypatch.setattr(sys, "executable", "/home/fake user/miniforge3/envs/auto_apply/bin/python")
+    return f"cd '{tmp_path}/my projects/auto_apply' && '/home/fake user/miniforge3/envs/auto_apply/bin/python'"
+
+
 def answering(monkeypatch, *answers):
     answers = Answers(*answers)
     monkeypatch.setattr("builtins.input", answers)
@@ -124,28 +132,31 @@ def test_a_missing_database_is_set_up_and_its_failure_stops_setup(ran, monkeypat
     assert ran[2:] == ["failed"]
 
 
-def test_missing_scoring_files_are_offered_with_their_size(ran, tmp_path, monkeypatch, capsys):
+def test_missing_scoring_files_are_offered_with_their_size(ran, later, tmp_path, monkeypatch, capsys):
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     monkeypatch.setattr(files, "_correct", lambda path, file: file is files.SKILLS)
     answers = answering(monkeypatch, "  N ", "no")
     assert setup.main([]) == 0
     assert answers.questions[0] == "Download the scoring files now (about 134 MB)? [y/N] "
     assert ran == []
-    assert "Scoring files not downloaded; get them later with: python -m app.score setup\n" in capsys.readouterr().out
+    assert (
+        f"Scoring files not downloaded; get them later with:\n  {later} -m app.score setup\n" in capsys.readouterr().out
+    )
     answering(monkeypatch, " Yes ", "n")
     assert setup.main([]) == 0
     assert ran == [score]
     assert "not downloaded" not in capsys.readouterr().out
 
 
-def test_scoring_not_ready_says_how_to_check_again_and_setup_goes_on(ran, tmp_path, monkeypatch, capsys):
+def test_scoring_not_ready_says_how_to_check_again_and_setup_goes_on(ran, later, tmp_path, monkeypatch, capsys):
     (tmp_path / "data" / db.DB_FILE).write_bytes(b"made-up database")
     answering(monkeypatch, "n")
     assert setup.main([]) == 0  # the stand-in scoring check says "not ready"
     out = capsys.readouterr().out
-    assert (
-        "Scoring isn't ready yet (see the line above); once that's fixed, check again with: python -m app.score" in out
+    again = (
+        f"Scoring isn't ready yet (see the line above); once that's fixed, check again with:\n  {later} -m app.score"
     )
+    assert f"{again} setup\n" in out
     assert "Setup is done." in out
     monkeypatch.setattr(score, "main", lambda argv: 0)
     answering(monkeypatch, "n")
@@ -172,13 +183,10 @@ def test_the_scoring_note_names_ollama_or_the_address(ran, monkeypatch, capsys, 
     assert note in capsys.readouterr().out
 
 
-def test_the_start_command_has_the_real_paths_and_yes_starts_the_dashboard(ran, tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(config, "PROJECT_DIR", tmp_path / "my projects" / "auto_apply")
-    monkeypatch.setattr(sys, "executable", "/home/fake user/miniforge3/envs/auto_apply/bin/python")
+def test_the_start_command_has_the_real_paths_and_yes_starts_the_dashboard(ran, later, monkeypatch, capsys):
     answering(monkeypatch, "n")
     assert setup.main([]) == 0
-    expected = f"cd '{tmp_path}/my projects/auto_apply' && '/home/fake user/miniforge3/envs/auto_apply/bin/python'"
-    assert f"  {expected} -m app.web\n" in capsys.readouterr().out
+    assert f"To open the dashboard later, run:\n  {later} -m app.web\n" in capsys.readouterr().out
     assert web_command not in ran
     monkeypatch.setattr(web_command, "main", lambda argv: 7)
     answering(monkeypatch, "y")
