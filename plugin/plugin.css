@@ -14,7 +14,7 @@
      the dashboard derives from its tokens). */
   --fields:
     radial-gradient(28rem 20rem at 10% 0, light-dark(rgb(255 255 255 / 80%), rgb(0 94 113 / 60%)), transparent 65%),
-    radial-gradient(30rem 22rem at 100% 100%, light-dark(rgb(52 127 149 / 60%), rgb(0 6 8 / 70%)), transparent 70%),
+    radial-gradient(30rem 22rem at 100% 100%, light-dark(rgb(72 146 167 / 50%), rgb(0 6 8 / 70%)), transparent 70%),
     linear-gradient(155deg, light-dark(#e7f7fc, #031f25), light-dark(#fae7d7, #181005));
 }
 /* Browsers without light-dark(): the light colours as plain values. */
@@ -39,11 +39,11 @@ body {
 }
 h1 { margin: 0 0 0.25rem; font-size: 1.125rem; line-height: 1.3; font-weight: 650; text-wrap: balance; }
 p { margin: 0.5rem 0; text-wrap: pretty; }
-a { color: color-mix(in srgb, var(--accent) 70%, var(--text));  /* kept at 4.5:1 over the fields */
+a { color: color-mix(in srgb, var(--accent) 50%, var(--text));  /* kept at 4.5:1 over the fields */
    text-decoration-thickness: 1px; text-underline-offset: 0.18em; }
 a:hover { text-decoration-thickness: 2px; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-.muted { color: color-mix(in srgb, var(--muted) 70%, var(--text)); }
+.muted { color: color-mix(in srgb, var(--muted) 50%, var(--text)); }
 
 /* The one action at a time (Fill, Connect): the accent fill, a pill, feedback the moment it is pressed. */
 button {
@@ -59,7 +59,7 @@ button {
   transition: filter 160ms var(--ease-out), transform 120ms var(--ease-out);
 }
 button:hover { filter: brightness(1.08); }
-button:active { transform: scale(0.97); }
+button:active { transform: scale(0.97, 0.94); }  /* a slight squash the moment it is pressed */
 button:disabled { border-color: var(--line); background: var(--surface); color: var(--muted); cursor: not-allowed;
   filter: none; transform: none; }
 label { font-weight: 600; }

@@ -39,40 +39,48 @@
   --bd-warm: color-mix(in srgb, var(--warn) 8%, var(--bg));
   --bd-glow: light-dark(rgb(255 255 255 / 80%), color-mix(in srgb, var(--accent) 16%, transparent));
   --bd-depth: light-dark(color-mix(in srgb, var(--accent) 18%, transparent), rgb(0 0 0 / 50%));
-  /* Ink: grey, warning and error text pulled toward --text, as Apple's vibrant labels are, so they keep 4.5:1 on
-     thin glass over the deepest part of the backdrop. Used for the whole page (set on body, below). */
-  --ink-muted: color-mix(in srgb, var(--muted) 70%, var(--text));
-  --ink-danger: color-mix(in srgb, var(--danger) 70%, var(--text));
-  --ink-warn: color-mix(in srgb, var(--warn) 70%, var(--text));
-  --link: color-mix(in srgb, var(--accent) 70%, var(--text));
+  --bd-mid: light-dark(color-mix(in srgb, var(--accent) 9%, transparent),
+    color-mix(in srgb, var(--accent) 10%, transparent));
+  /* Ink: grey, warning and error text and links pulled halfway toward --text, as Apple's vibrant labels are, so they
+     keep 4.5:1 on thin glass and on the backdrop's deepest part. Used for the whole page (set on body, below). */
+  --ink-muted: color-mix(in srgb, var(--muted) 50%, var(--text));
+  --ink-danger: color-mix(in srgb, var(--danger) 50%, var(--text));
+  --ink-warn: color-mix(in srgb, var(--warn) 50%, var(--text));
+  --link: color-mix(in srgb, var(--accent) 50%, var(--text));
   --ink-title: color-mix(in srgb, var(--title, var(--text)) 75%, var(--text));
 
   /* Glass, in three thicknesses, so layers read as layers: content panes are the thinnest and clearest (cards, boxes,
      tables, forms, the login card); floating pieces are thicker and brighter (rail, bars, switch, buttons); thick
      glass where text-heavy content scrolls beneath (phone bar, menu panel, dialog, the job table's header). Each fill
      is the least that keeps text at 4.5:1 (hand-over: contrast numbers); blur and saturation do the rest. */
-  --glass-pane: color-mix(in srgb, var(--surface) 26%, transparent);
-  --glass: color-mix(in srgb, var(--surface) 36%, transparent);
-  --glass-thick: color-mix(in srgb, var(--surface) 58%, transparent);
-  --glass-blur: blur(30px) saturate(200%) brightness(1.06);
-  --glass-blur-pane: blur(18px) saturate(185%) brightness(1.03);  /* lighter on repeated cards: blurs cost frames */
+  --glass-pane: color-mix(in srgb, var(--surface) 22%, transparent);
+  --glass: color-mix(in srgb, var(--surface) 30%, transparent);
+  --glass-thick: color-mix(in srgb, var(--surface) 50%, transparent);
+  /* Bigger pieces are thicker glass: more blur. Small ones (the switch) bend less. */
+  --glass-blur: blur(36px) saturate(240%) brightness(1.1);
+  --glass-blur-pane: blur(20px) saturate(220%) brightness(1.05);  /* one blur per card, nothing nested */
+  --glass-blur-small: blur(10px) saturate(240%) brightness(1.08);
   --glass-line: light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 16%));  /* the outer hairline rim */
   --hairline: color-mix(in srgb, var(--text) 12%, transparent);  /* a divider drawn on glass */
   /* The crystal edge, showing the glass's thickness: a crisp bright top-left rim, a darker refracted bottom-right rim,
      an inner light line just inside the outer hairline (a double edge) and a faint inner shade at the bottom. */
-  --glass-edge: inset 1px 1px 0 light-dark(rgb(255 255 255 / 100%), rgb(255 255 255 / 32%)),
-    inset -1px -1px 0 light-dark(rgb(0 0 0 / 14%), rgb(0 0 0 / 55%)),
-    inset 0 0 0 2px light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 6%)),
-    inset 0 -14px 24px -18px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 40%));
+  --glass-edge: inset 1.5px 1.5px 0 light-dark(rgb(255 255 255 / 100%), rgb(255 255 255 / 40%)),
+    inset -1px -1.5px 0 light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 60%)),
+    inset 0 0 0 3px light-dark(rgb(255 255 255 / 22%), rgb(255 255 255 / 7%)),
+    inset 0 -18px 28px -20px light-dark(rgb(0 0 0 / 14%), rgb(0 0 0 / 45%)),
+    inset 0 14px 22px -18px light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 14%));
+  /* Repeated cards get the top band only: one diagonal streak per big surface reads as light, fifty read as a
+     pattern. */
+  --glass-band: linear-gradient(180deg, light-dark(rgb(255 255 255 / 34%), rgb(255 255 255 / 12%)),
+    light-dark(rgb(255 255 255 / 6%), rgb(255 255 255 / 3%)) 1.25rem, transparent 3rem);
   /* Light on the surface: a highlight band along the top and a diagonal sheen across it. */
-  --glass-sheen: linear-gradient(180deg, light-dark(rgb(255 255 255 / 42%), rgb(255 255 255 / 12%)),
-    light-dark(rgb(255 255 255 / 8%), rgb(255 255 255 / 3%)) 1.5rem, transparent 3.5rem),
-    linear-gradient(115deg, transparent 18%, light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 6%)) 30%,
-    transparent 44%);
+  --glass-sheen: var(--glass-band),
+    linear-gradient(118deg, transparent 12%, light-dark(rgb(255 255 255 / 30%), rgb(255 255 255 / 8%)) 26%,
+    transparent 38%, transparent 62%, light-dark(rgb(255 255 255 / 14%), rgb(255 255 255 / 4%)) 72%, transparent 80%);
   /* Floating pieces are thicker: more light inside, a deeper coloured shadow. */
   --glass-shadow: var(--glass-edge), inset 0 0 1.5rem light-dark(rgb(255 255 255 / 30%), rgb(255 255 255 / 5%)),
-    0 2px 4px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 35%)),
-    0 18px 44px -16px light-dark(color-mix(in srgb, var(--accent) 55%, transparent), rgb(0 0 0 / 70%));
+    0 2px 6px light-dark(rgb(0 0 0 / 7%), rgb(0 0 0 / 40%)),
+    0 24px 56px -18px light-dark(color-mix(in srgb, var(--accent) 60%, transparent), rgb(0 0 0 / 75%));
   --shadow: var(--glass-edge), 0 1px 2px light-dark(rgb(0 0 0 / 5%), rgb(0 0 0 / 30%)),
     0 10px 26px -14px light-dark(color-mix(in srgb, var(--accent) 35%, transparent), rgb(0 0 0 / 60%));
   --shadow-raised: var(--glass-edge), 0 2px 4px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 35%)),
@@ -83,6 +91,8 @@
   --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 20%)),
     light-dark(rgb(255 255 255 / 25%), rgb(255 255 255 / 6%)) 44%, transparent 48%);
   --gloss-tint: linear-gradient(180deg, rgb(255 255 255 / 34%), rgb(255 255 255 / 6%) 38%, transparent 42%);
+  --pill-edge: inset 1px 1px 0 light-dark(rgb(255 255 255 / 95%), rgb(255 255 255 / 35%)),
+    inset -1px -1px 0 light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 50%));  /* a small glass piece's rims */
 
   /* Text sizes: eight named steps, each with its line spacing; rem, so they grow with the browser's text size. */
   --text-caption: 0.75rem;   --leading-caption: 1.4;   /* 12 px: rail words, phone-bar caption, Tracker days */
@@ -95,10 +105,11 @@
   --text-display: 2rem;      --leading-display: 1.2;   /* 32 px: h1 (26 px on phones) */
 
   --radius-s: 10px; --radius: 14px; --radius-l: 20px; --radius-pill: 999px;
+  --radius-float: 1.75rem;  /* the floating frame pieces: rail, cost bar, phone bar, menu panel */
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
   --tap: 3rem;           /* 48 px touch targets below 64rem */
   --control: 2.5rem;     /* 40 px controls with a mouse */
-  --rail: 6rem;          /* the icon rail, with the clear border that lets it float */
+  --rail: 6.5rem;        /* the icon rail, with the clear margin that lets it float */
   --lane-min: 11rem;     /* Tracker: lanes share the width down to this, then the board scrolls inside its box */
   color-scheme: light dark;
 }
@@ -108,7 +119,8 @@
     --bd-pearl: light-dark(oklch(from var(--accent) 0.965 0.018 h), oklch(from var(--accent) 0.22 0.035 h));
     --bd-warm: light-dark(oklch(from var(--warn) 0.94 0.03 h), oklch(from var(--warn) 0.18 0.025 h));
     --bd-glow: light-dark(oklch(from var(--accent) 0.995 0.01 h / 0.8), oklch(from var(--accent) 0.44 0.09 h / 0.6));
-    --bd-depth: light-dark(oklch(from var(--accent) 0.56 0.08 h / 0.6), oklch(from var(--accent) 0.11 0.02 h / 0.7));
+    --bd-depth: light-dark(oklch(from var(--accent) 0.62 0.08 h / 0.5), oklch(from var(--accent) 0.11 0.02 h / 0.7));
+    --bd-mid: light-dark(oklch(from var(--accent) 0.74 0.06 h / 0.5), oklch(from var(--accent) 0.32 0.07 h / 0.55));
   }
 }
 
@@ -185,11 +197,11 @@
 :root:is([data-palette="E"], [data-palette="F"], [data-palette="G"]) {
   --chrome-warn: #e3b46a;  /* the paused notice: A-G's dark warn, in both modes */
   --chrome-glass: color-mix(in srgb, var(--chrome) 90%, transparent);
-  .rail, .topbar, .dock > summary { --glass-line: var(--chrome-line); --hairline: var(--chrome-line);
+  .rail, .rail::before, .topbar, .dock > summary { --glass-line: var(--chrome-line); --hairline: var(--chrome-line);
     --glass-sheen: linear-gradient(135deg, rgb(255 255 255 / 10%), transparent 42%);
     --glass-edge: inset 1px 1px 0 rgb(255 255 255 / 16%), inset -1px -1px 0 rgb(0 0 0 / 45%); }
-  :is(.rail, .topbar, .dock > summary) { background-color: var(--chrome-glass); }
-  .topbar, .dock > summary { box-shadow: var(--glass-edge), 0 12px 32px -12px rgb(0 0 0 / 45%); }
+  .rail::before, .topbar, .dock > summary { background-color: var(--chrome-glass);
+    box-shadow: var(--glass-edge), 0 18px 40px -16px rgb(0 0 0 / 55%); }
   .rail :is(.nav-group a, .logout button) { color: var(--on-chrome); }
   .rail :is(.nav-group a, .logout button) .icon { color: var(--chrome-muted); }
   .rail :is(.nav-group li:first-child, .logout) { border-top-color: var(--chrome-line); }
@@ -218,10 +230,11 @@
     --ok: #2e6b34; --ok-soft: #e7f4e8; --warn: #8a4f00; --warn-soft: #fdf0d9; --danger: #b3261e;
     --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
-    --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent;
+    --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent; --bd-mid: transparent;
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
-    --glass-blur-pane: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff; --glass-sheen: none;
+    --glass-blur-pane: none; --glass-blur-small: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff;
+    --glass-sheen: none; --glass-band: none; --pill-edge: inset 0 1px 0 #ffffff;
     --glass-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
     --shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 6px 18px -8px rgb(0 0 0 / 12%);
     --shadow-raised: 0 2px 4px rgb(0 0 0 / 5%), 0 14px 34px -10px rgb(0 0 0 / 18%);
@@ -239,9 +252,13 @@ body { margin: 0; padding-top: env(safe-area-inset-top); background: var(--bg); 
 /* The page's grey, warning and error text use their ink versions (the originals stay the source of the ink). */
 body { --muted: var(--ink-muted); --warn: var(--ink-warn); --danger: var(--ink-danger); }
 /* The backdrop: fixed, never moving, so the glass above bends and blurs it as the page scrolls. A smooth diagonal
-   from pearl to the warm neutral, a soft glow at the top left, a quiet deeper area at the bottom right. */
+   from pearl to the warm neutral, a soft glow at the top left, a quiet deeper area at the bottom right, and a few
+   large soft shapes of the same hue, lighter and deeper, so every pane has tone to refract. */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-  background: radial-gradient(75vmax 60vmax at 12% 8%, var(--bd-glow), transparent 65%),
+  background: radial-gradient(28vmax 22vmax at 72% 22%, var(--bd-mid), transparent 70%),
+    radial-gradient(34vmax 26vmax at 30% 62%, var(--bd-mid), transparent 70%),
+    radial-gradient(22vmax 18vmax at 55% 88%, var(--bd-glow), transparent 70%),
+    radial-gradient(75vmax 60vmax at 12% 8%, var(--bd-glow), transparent 65%),
     radial-gradient(85vmax 70vmax at 100% 100%, var(--bd-depth), transparent 70%),
     linear-gradient(155deg, var(--bd-pearl), var(--bd-warm)); }
 h1, h2 { font-family: var(--serif); font-weight: 600; }
@@ -267,9 +284,10 @@ table { font-variant-numeric: tabular-nums; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Clear glass for the frame: a translucent fill, a blur that bends and brightens the colours behind it, a sheen
    across it, a bright rim, crystal edges and a soft tinted shadow. Each piece below adds its own shape. */
-.skip, .rail, .topbar, .dock > summary, .sheet, dialog.ask, .view-switch {
+.skip, .rail::before, .topbar, .dock > summary, .sheet, dialog.ask, .view-switch {
   background: var(--glass-sheen), var(--glass); -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow); }
+.view-switch { -webkit-backdrop-filter: var(--glass-blur-small); backdrop-filter: var(--glass-blur-small); }
 /* Over content that scrolls beneath, or lots of text: thicker. */
 .dock > summary, .sheet, dialog.ask { background: var(--glass-sheen), var(--glass-thick); }
 .skip { position: absolute; left: var(--space-4); top: -5rem; z-index: 40; display: inline-flex; align-items: center;
@@ -287,16 +305,17 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
   background: var(--glass-sheen), var(--glass-pane); -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-raised); }
 
-/* The rail: icons with short words, one block per group (a block can later become a fold-out). It floats: a clear
-   border of --inset round it shows the backdrop between the glass and the window's edges. The glass, blur included,
-   is clipped to inside that border, and its rim and edges are inner shadows, so they sit on the glass too. */
-.rail { --floor: 2.25rem; --inset: var(--space-2); position: sticky; top: env(safe-area-inset-top);
+/* The rail: icons with short words, one block per group (a block can later become a fold-out). The rail itself is a
+   clear column; its glass is a separate slab (::before) floating --inset in from the window's edges, with a deep
+   soft shadow, so the backdrop shows all round it. */
+.rail { --floor: 2.25rem; --inset: var(--space-3); position: sticky; top: env(safe-area-inset-top);
   height: calc(100dvh - env(safe-area-inset-top)); overflow-y: auto; display: flex;
-  flex-direction: column; gap: 2px; padding: var(--space-2) 0.375rem;
-  margin-left: env(safe-area-inset-left); border: var(--inset) solid transparent;
-  border-radius: calc(var(--radius-l) + var(--inset)); background-clip: padding-box;
-  clip-path: inset(var(--inset) round var(--radius-l));
-  box-shadow: var(--glass-edge), inset 0 0 0 1px var(--glass-line); scrollbar-width: none; }
+  flex-direction: column; gap: 2px; padding: calc(var(--inset) + var(--space-2)) calc(var(--inset) + 0.375rem);
+  margin-left: env(safe-area-inset-left); scrollbar-width: none; }
+.rail::before { content: ""; position: fixed; z-index: -1; pointer-events: none;
+  top: calc(env(safe-area-inset-top) + var(--inset)); bottom: var(--inset);
+  left: calc(env(safe-area-inset-left) + var(--inset)); width: calc(var(--rail) - 2 * var(--inset));
+  border: 1px solid var(--glass-line); border-radius: var(--radius-float); }
 .brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; margin: var(--space-1) auto var(--space-2);
   border-radius: var(--radius-s); background: var(--text); color: var(--surface); font-size: var(--text-ui);
   font-weight: 700; }
@@ -334,10 +353,17 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 .logout { margin: 0; }
 .rail .logout { margin-top: auto; }
 
-/* The council cost bar: a compact glass strip floating above the page, level with the rail's top; the member table
-   under its summary. */
-.topbar { margin: var(--space-2) var(--space-5) 0; border: 1px solid var(--glass-line);
-  border-radius: var(--radius-l); font-size: var(--text-ui); line-height: var(--leading-ui); color: var(--ink-muted); }
+/* The council cost bar: a glass capsule floating above the page, level with the rail's top; the member table under
+   its summary. From 40rem it stays in view while the page scrolls beneath it (open, it scrolls inside itself). */
+.topbar { margin: var(--space-3) var(--space-5) 0; border: 1px solid var(--glass-line);
+  border-radius: var(--radius-float);
+  font-size: var(--text-ui); line-height: var(--leading-ui); color: var(--ink-muted); }
+@media (width >= 40rem) {
+  .topbar { position: sticky; top: calc(env(safe-area-inset-top) + var(--space-3)); z-index: 20;
+    max-height: calc(100dvh - 6rem); overflow-y: auto; }
+}
+/* The job list's header row stays in view just under the floating cost bar (one line from 64rem). */
+@media (width >= 64rem) { .content:has(> .topbar) table.jobs th { top: 3.75rem; } }
 .topbar > summary { position: relative; padding: var(--space-2) 2.75rem var(--space-2) var(--space-4);
   border-radius: inherit; cursor: pointer; font-variant-numeric: tabular-nums;
   transition: color 160ms var(--ease-out); }
@@ -358,7 +384,9 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
    longest word can't sit beside it. On one line the bar is still a pill (radius = half of 3.5rem). */
 .dock > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
   min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem;
-  border: 1px solid var(--glass-line); border-radius: 1.75rem; cursor: pointer; }
+  border: 1px solid var(--glass-line); border-radius: var(--radius-float); cursor: pointer;
+  box-shadow: var(--glass-shadow), 0 24px 48px -18px light-dark(color-mix(in srgb, var(--accent) 55%, transparent),
+    rgb(0 0 0 / 75%)); }
 .dock-where { display: grid; flex: 1 1 auto; width: min-content; line-height: 1.25; }
 .dock-where .caption { font-size: var(--text-caption); letter-spacing: 0.01em; color: var(--ink-muted); }
 .dock-where strong { font-weight: 650; }
@@ -371,7 +399,7 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 /* The menu panel materialises out of the bar it belongs to: it grows from the bar's right end (where Menu is) as
    its blur, size and opacity arrive together. Closing is instant. */
 .sheet { position: absolute; left: 0; right: 0; bottom: calc(100% + var(--space-2)); max-height: calc(100dvh - 8rem);
-  overflow-y: auto; padding: var(--space-4); border: 1px solid var(--glass-line); border-radius: var(--radius-l);
+  overflow-y: auto; padding: var(--space-4); border: 1px solid var(--glass-line); border-radius: var(--radius-float);
   transform-origin: calc(100% - 3rem) 100%; animation: sheet-in 260ms var(--ease-out); }
 @keyframes sheet-in {
   from { opacity: 0; transform: translateY(0.75rem) scale(0.94);
@@ -404,29 +432,36 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 
 /* ---------- Controls ---------- */
 button, .button, input, select, textarea { font: inherit; color: var(--text); }
+/* Every button is a polished glass capsule: a glossy cap, a bright top-left rim and a darker lower one. Under the
+   pointer the cap lifts and brightens; pressed, it squashes a little and its rim lights up (under 150 ms). */
 button, .button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
   min-height: var(--control); padding: 0 1.125rem; border: 1px solid var(--line-strong);
   border-radius: var(--radius-pill); background-color: var(--glass); background-image: var(--gloss);
-  box-shadow: inset 0 1px 0 var(--glass-line), 0 1px 2px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 30%));
+  background-size: 100% 140%; background-position: 0 0; background-repeat: no-repeat;
+  box-shadow: var(--pill-edge), 0 2px 6px -2px light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 45%));
   font-weight: 600; line-height: 1.25; text-decoration: none; cursor: pointer;
-  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), color 160ms var(--ease-out),
-    box-shadow 160ms var(--ease-out), filter 160ms var(--ease-out), transform 120ms var(--ease-out); }
-button:hover, .button:hover { background-color: var(--glass-thick); border-color: var(--text); }
-button:active, .button:active { transform: scale(0.97); }  /* feedback the moment it is pressed */
-/* "Press this": accent-tinted glass with a gloss and a glow (Log in is its page's only action). */
-:is(button, .button).primary, .login button { border-color: color-mix(in srgb, var(--accent) 80%, var(--surface));
-  background-color: color-mix(in srgb, var(--accent) 94%, transparent); background-image: var(--gloss-tint);
-  color: var(--on-accent);
-  box-shadow: var(--lit), 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent),
-    0 6px 16px -6px light-dark(color-mix(in srgb, var(--accent) 60%, transparent), rgb(0 0 0 / 55%)); }
-:is(:is(button, .button).primary, .login button):hover { background-color: var(--accent);
-  border-color: var(--accent); filter: brightness(1.08); }
+  transition: background-color 160ms var(--ease-out), background-position 220ms var(--ease-out),
+    border-color 160ms var(--ease-out), color 160ms var(--ease-out), box-shadow 160ms var(--ease-out),
+    filter 160ms var(--ease-out), transform 120ms var(--ease-out); }
+button:hover, .button:hover { background-color: var(--glass-thick); background-position: 0 -0.375rem;
+  border-color: var(--text); }
+button:active, .button:active { transform: scale(0.97, 0.94);  /* feedback the moment it is pressed */
+  box-shadow: var(--pill-edge), inset 0 0 0 1px light-dark(#ffffff, rgb(255 255 255 / 45%)); }
+/* "Press this": accent crystal with a glossy cap, a dark lower rim and a glow (Log in is its page's only action). */
+:is(button, .button).primary, .login button { border-color: color-mix(in srgb, var(--accent) 75%, #ffffff);
+  background-color: var(--accent); background-image: var(--gloss-tint); color: var(--on-accent);
+  box-shadow: var(--lit), 0 1px 2px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 8px 22px -8px light-dark(color-mix(in srgb, var(--accent) 70%, transparent), rgb(0 0 0 / 60%)); }
+:is(:is(button, .button).primary, .login button):hover { border-color: var(--accent); filter: brightness(1.1)
+  saturate(1.15); }
 :is(button, .button).quiet { border-color: transparent; background: transparent; box-shadow: none; color: var(--link); }
 :is(button, .button).quiet:hover { background: var(--accent-soft); }
 :is(button, .button).danger { border-color: var(--danger); color: var(--danger); }
-/* The chosen one of a set (answer key, usage period): tinted, bold and outlined, not colour alone. */
-button[aria-pressed="true"], .button[aria-current] { border-color: var(--accent); background-color: var(--accent-soft);
-  color: var(--accent); font-weight: 700; }
+/* The chosen one of a set (answer key, usage period): a brighter, tinted glass lozenge with an accent rim and glow,
+   bold, not colour alone. */
+button[aria-pressed="true"], .button[aria-current] { border-color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent-soft) 85%, transparent); color: var(--accent); font-weight: 700;
+  box-shadow: var(--pill-edge), 0 4px 14px -6px color-mix(in srgb, var(--accent) 55%, transparent); }
 button:disabled { border-color: var(--line); background: var(--sunken); box-shadow: none; color: var(--muted);
   cursor: not-allowed; transform: none; filter: none; }
 input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea { max-width: 100%;
@@ -501,9 +536,11 @@ dialog.ask { position: fixed; inset-block-start: 30%; z-index: 35; max-inline-si
   background: var(--sunken); color: var(--muted); font-size: var(--text-small); line-height: 1.5;
   letter-spacing: 0.01em;
   font-weight: 600; white-space: nowrap; }
-.mark.ok { background: var(--ok-soft); color: var(--ok); }
-.mark.warn { background: var(--warn-soft); color: var(--warn); }
-.mark.danger { background: var(--danger-soft); color: var(--danger); }
+/* Each a small glass capsule tinted with its meaning. */
+.mark { background-color: color-mix(in srgb, var(--sunken) 85%, transparent); box-shadow: var(--pill-edge); }
+.mark.ok { background-color: color-mix(in srgb, var(--ok-soft) 85%, transparent); color: var(--ok); }
+.mark.warn { background-color: color-mix(in srgb, var(--warn-soft) 85%, transparent); color: var(--warn); }
+.mark.danger { background-color: color-mix(in srgb, var(--danger-soft) 85%, transparent); color: var(--danger); }
 .mark:is(.warn, .danger)::before { content: "!" / ""; display: inline-grid; place-items: center; width: 1.1em;
   height: 1.1em; margin-right: 0.3em; border-radius: 50%; color: var(--surface);
   font-size: 0.85em; font-weight: 800; vertical-align: 0.05em; }
@@ -536,8 +573,8 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .filters p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
   margin: 0 0 var(--space-3); }
 .filters fieldset { display: inline-block; min-width: 0; max-width: 100%; margin: 0 var(--space-2) var(--space-2) 0;
-  padding: var(--space-1) var(--space-3) var(--space-2); border: 1px solid var(--hairline);
-  border-radius: var(--radius); }
+  padding: var(--space-1) var(--space-3) var(--space-2); border: 1px solid var(--glass-line); border-radius: 1.125rem;
+  background: color-mix(in srgb, var(--surface) 30%, transparent); box-shadow: var(--pill-edge); }  /* glass chips */
 .filters label { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); max-width: 100%;
   margin-right: var(--space-3); }
 .filters label:has(> input[type="checkbox"]) { white-space: nowrap; }
@@ -589,8 +626,7 @@ main > p:not(.counts) { max-width: 60ch; }
 .view-switch { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 100%; margin: 0 0 var(--space-4);
   padding: 3px; border: 1px solid var(--glass-line); border-radius: calc(var(--control) / 2 + 4px); }
 .view-switch button { flex: 1 1 auto; }
-.view-switch button[aria-pressed="true"] { background-color: var(--glass-thick); background-image: var(--gloss);
-  box-shadow: var(--glass-edge), 0 2px 8px -2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.view-switch button[aria-pressed="true"] { background-color: var(--glass-thick); }  /* the bright lozenge */
 .view-switch button:not([aria-pressed="true"]) { border-color: transparent; background: transparent;
   box-shadow: none; color: var(--ink-muted); }
 .view-switch button:hover { color: var(--text); }
@@ -605,10 +641,10 @@ main > p:not(.counts) { max-width: 60ch; }
      moves would redraw its blur every frame). */
   .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; align-content: start;
     gap: var(--space-1) var(--space-3); padding: var(--space-4); border: 1px solid var(--glass-line);
-    border-radius: var(--radius-l); background: var(--glass-sheen), var(--glass-pane);
+    border-radius: var(--radius-l); background: var(--glass-band), var(--glass-pane);
     -webkit-backdrop-filter: var(--glass-blur-pane); backdrop-filter: var(--glass-blur-pane);
     box-shadow: var(--shadow); transition: box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out); }
-  .jobs tr:hover { background: var(--glass-sheen), var(--glass-pane); box-shadow: var(--shadow-raised);
+  .jobs tr:hover { background: var(--glass-band), var(--glass-pane); box-shadow: var(--shadow-raised);
     border-color: light-dark(#ffffff, rgb(255 255 255 / 30%)); }
   .jobs .hidden-job { background: color-mix(in srgb, var(--surface) 35%, transparent); box-shadow: none; }
   .jobs td { display: block; padding: 0; border: 0; overflow-wrap: anywhere; }
@@ -655,7 +691,7 @@ main:has(.board) { max-width: none; }
 /* A frosted pane; under the pointer its edges and shadow brighten (shadow only: SortableJS moves the card itself
    while dragging, and a blurred pane that moves would redraw its blur every frame). */
 .tcard { position: relative; display: grid; gap: 0.125rem; padding: var(--space-3); border: 1px solid var(--glass-line);
-  border-radius: var(--radius); background: var(--glass-sheen), var(--glass-pane);
+  border-radius: var(--radius); background: var(--glass-band), var(--glass-pane);
   -webkit-backdrop-filter: var(--glass-blur-pane); backdrop-filter: var(--glass-blur-pane); box-shadow: var(--shadow);
   transition: box-shadow 200ms var(--ease-out), border-color 200ms var(--ease-out); }
 .tcard:not(.stale):hover { box-shadow: var(--shadow-raised);
@@ -725,6 +761,12 @@ main:has(.board) { max-width: none; }
     transition: block-size 260ms var(--ease-out), content-visibility 260ms allow-discrete; }
   :is(.topbar, .filters-fold, main details:not(.lane))[open]::details-content { block-size: auto; }
   .filters-fold[open] .filters { transform-origin: top center; animation: pane-in 260ms var(--ease-out); }
+  /* The "Scoring is running" question materialises where it appears (HTMX inserts it once per press). */
+  dialog.ask { transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out),
+    backdrop-filter 240ms var(--ease-out), -webkit-backdrop-filter 240ms var(--ease-out); }
+  @starting-style {
+    dialog.ask { opacity: 0; transform: scale(0.94); -webkit-backdrop-filter: blur(0); backdrop-filter: blur(0); }
+  }
 }
 @media (prefers-reduced-motion: no-preference) and (width < 40rem) {
   .lane::details-content { block-size: 0; overflow-y: clip; overflow-clip-margin: 0.375rem;
@@ -743,7 +785,8 @@ main:has(.board) { max-width: none; }
   :root, :root[data-palette] { --line: var(--line-strong); --glass-line: var(--line-strong);
     --hairline: var(--line-strong); --glass: color-mix(in srgb, var(--surface) 96%, transparent);
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
-    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent; }
+    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
+    --bd-mid: transparent; }
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -755,6 +798,8 @@ main:has(.board) { max-width: none; }
 /* Reduce transparency: a plain background and solid surfaces, no blur, no sheen. */
 @media (prefers-reduced-transparency: reduce) {
   :root, :root[data-palette] { --glass: var(--surface); --glass-pane: var(--surface); --glass-thick: var(--surface);
-    --glass-blur: none; --glass-blur-pane: none; --glass-sheen: none; --chrome-glass: var(--chrome);
-    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent; }
+    --glass-blur: none; --glass-blur-pane: none; --glass-blur-small: none; --glass-sheen: none; --glass-band: none;
+    --chrome-glass: var(--chrome);
+    --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
+    --bd-mid: transparent; }
 }
