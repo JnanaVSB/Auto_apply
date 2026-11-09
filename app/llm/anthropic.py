@@ -1,8 +1,8 @@
 """The Anthropic API (Claude models), over plain HTTPS with the project's own httpx: no extra library.
 
-Used from Phase 4; in Phase 3b no role may use a cloud service. API version 2026-10-21: temperature is no longer
-accepted, thinking cannot be switched off on current models (`thinking` sets the effort instead), and the answer's
-shape is given as a JSON schema in output_config.
+Used by the Writer and the council, and for scoring once you tick the box for it. API version 2026-10-21:
+temperature is no longer accepted, thinking cannot be switched off on current models (`thinking` sets the effort
+instead), and the answer's shape is given as a JSON schema in output_config.
 
 Half price is Anthropic's Message Batches: many requests sent at once, each answered within 24 hours, collected
 later. The app builds every batch address itself from the role's own address, so your key only goes to Anthropic.

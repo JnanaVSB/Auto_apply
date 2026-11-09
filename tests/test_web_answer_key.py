@@ -5,7 +5,7 @@ import pytest
 from helpers import add_job, csrf, log_in, settings
 from test_web_scoring import CHOSEN, MODEL, scored
 
-from app.config import ScoringSettings
+from app.config import AIRole, AISettings, ScoringSettings
 from app.web import answer_key, main
 from app.web.answer_key import Counts, Route
 
@@ -131,6 +131,22 @@ def test_a_model_ollama_does_not_have_is_refused(client, jobs, starts):
 def test_without_ollama_the_page_says_how_to_start_it(client, jobs, monkeypatch):
     monkeypatch.setattr(main.ollama, "installed", lambda role: [])
     assert "No models found: start Ollama with <code>ollama serve</code>" in client.get("/answer-key").text
+
+
+def test_with_a_cloud_scorer_comparing_models_runs_only_with_ollama_and_ollama_is_never_asked(
+    client, jobs, data_dir, monkeypatch
+):
+    role = AIRole(service="anthropic", model="claude-opus-5-5", key_name="anthropic")
+    monkeypatch.setattr(
+        main, "load_config", lambda: settings(data_dir).model_copy(update={"ai": AISettings(evaluator=role)})
+    )
+    monkeypatch.setattr(main.ollama, "installed", lambda role: pytest.fail("Ollama was asked"))
+    text = " ".join(client.get("/answer-key").text.split())
+    assert (
+        "Comparing models runs only with Ollama on this computer. Scoring now uses <strong>claude-opus-5-5</strong> at "
+        'api.anthropic.com: change it in <a href="/settings/scoring-model">Settings → Scoring model</a>.'
+    ) in text
+    assert "No models found" not in text and 'action="/answer-key/score"' not in text
 
 
 def test_with_nothing_marked_or_scored_the_page_still_shows(client):

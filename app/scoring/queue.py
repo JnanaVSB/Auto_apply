@@ -23,7 +23,7 @@ AGE_GROUPS = (7, 30, 90)  # days since posting: 0-7 first, then 8-30, then 31-90
 COLLECTION_HOURS = 6  # an unfinished collection record older than this was left by a crash or a power cut
 PAUSE_CHECK_SECONDS = 10
 PROGRESS_EVERY = 25
-SAME_FAILURES = 3  # jobs in a row failing the same way: the cause is Ollama or a setting, not the jobs
+SAME_FAILURES = 3  # jobs in a row failing the same way: the cause is the scoring service or a setting, not the jobs
 # "Too many requests": wait what the service asks, up to LONGEST_WAIT seconds, NO_WAIT_GIVEN once when it says nothing,
 # and at most WAITS_PER_JOB times for one job; anything more is the day's limit
 LONGEST_WAIT, NO_WAIT_GIVEN, WAITS_PER_JOB = 120, 60, 3
@@ -167,10 +167,18 @@ def run(
                     with conn:
                         conn.execute(stage_b.ADD_TIME, (today(), _seconds(held[1:])))
                 reason = result.failed.removesuffix(stage_b.BY_HAND)
+                cause, fix = (
+                    ("Ollama or the AI model settings", "Restart Ollama with `ollama serve`")
+                    if role.service == "ollama"
+                    else (
+                        f"{urlsplit(role.address).hostname} or the scoring model settings",
+                        "Check Settings → Scoring model (its Test button is free)",
+                    )
+                )
                 raise llm.StopScoring(
-                    f"{SAME_FAILURES} jobs in a row failed the same way: {reason}. The cause is most likely Ollama or "
-                    "the AI model settings, not the jobs. The first job is saved as failed; the other "
-                    f"{SAME_FAILURES - 1} stay not scored yet. Restart Ollama with `ollama serve` and try again."
+                    f"{SAME_FAILURES} jobs in a row failed the same way: {reason}. The cause is most likely {cause}, "
+                    f"not the jobs. The first job is saved as failed; the other {SAME_FAILURES - 1} stay not scored "
+                    f"yet. {fix} and try again."
                 )
         else:
             _save(conn, [(job_id, result)], role.model, resume.fingerprint, daily)

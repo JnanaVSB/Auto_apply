@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException
 
 from app import db
 from app.collect import MAX_PASTED
-from app.config import ConfigError, ScoringSettings, load_config
+from app.config import AISettings, ConfigError, ScoringSettings, load_config
 from app.fetch import Fetcher
 from app.llm import ollama
 from app.resume import ResumeError, read_resume
@@ -264,13 +264,15 @@ def create_app(
     async def answer_key_page(request: Request) -> Response:
         conn, scoring = request.app.state.conn, _scoring()
         try:
-            settings = load_config().scoring
+            found = load_config()
+            settings, scorer = found.scoring, found.ai.evaluator
         except ConfigError:  # shown on the Settings page; the defaults meanwhile
-            settings = ScoringSettings()
+            settings, scorer = ScoringSettings(), AISettings().evaluator
         return _page(
             request, "answer_key.html", marks=answer_key.marks(conn), suggestions=answer_key.suggestions(conn),
             ai=answer_key.ai_agreement(conn, scoring.resume), quick=answer_key.quick_agreement(conn, settings),
-            routes=answer_key.pass_through(conn, scoring), scoring=scoring, settings=settings,
+            routes=answer_key.pass_through(conn, scoring), scoring=scoring, settings=settings, scorer=scorer,
+            scorer_host=urlsplit(scorer.address).hostname,
             models=await _installed(), labels=answer_key.LABELS, thresholds=answer_key.AI_THRESHOLDS,
         )  # fmt: skip
 

@@ -260,6 +260,20 @@ def test_three_jobs_failing_the_same_way_stop_the_run_and_a_repeat_moves_on(conn
     assert ai.titles == ["RL Intern 2", "RL Intern 3", "RL Intern 4"]  # the other two of the 3 waited
 
 
+def test_three_failures_through_your_own_address_name_it_and_the_scoring_model_page(conn, tmp_path):
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
+    for number in range(3):
+        add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
+    with pytest.raises(llm.StopScoring) as stopped:
+        run(conn, lambda *args, **kwargs: "not JSON", own_address(tmp_path))
+    assert str(stopped.value).endswith(
+        "The cause is most likely scoring.example.net or the scoring model settings, not the jobs. The first job is "
+        "saved as failed; the other 2 stay not scored yet. Check Settings → Scoring model (its Test button is free) "
+        "and try again."
+    )
+    assert "Ollama" not in str(stopped.value)
+
+
 def test_held_failures_are_saved_when_the_days_time_is_used_up(conn, monkeypatch):
     for number in range(3):
         add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))

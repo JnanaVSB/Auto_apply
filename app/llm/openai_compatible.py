@@ -1,6 +1,6 @@
 """Any service that accepts OpenAI's chat-completions request (OpenAI itself, Groq, Ollama Cloud and others).
 
-Used from Phase 4; in Phase 3b no role may use a cloud service.
+Used by the Writer and the council, and for scoring once you tick the box for it.
 """
 
 from urllib.parse import urlsplit
@@ -26,7 +26,7 @@ def check(client: httpx.Client, role: AIRole, key: str | None) -> tuple[bool, st
     name = urlsplit(role.address).hostname if role.own else "OpenAI"
     reply = client.get(f"{role.address}/models", headers={"Authorization": f"Bearer {key}"} if key else {})
     if reply.status_code == 404 and role.own:
-        return False, f"{name} answers, but doesn't list its models: your first Prepare will show whether it works."
+        return False, f"{name} answers, but doesn't list its models: your first use will show whether it works."
     if reply.status_code != 200:
         return False, str(refused(name, reply.status_code, role.model))
     try:

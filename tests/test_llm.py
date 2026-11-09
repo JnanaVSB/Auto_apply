@@ -420,7 +420,7 @@ def test_your_own_address_without_a_key_is_sent_no_key(fake_keychain):
         (OPENAI, httpx.Response(200, json={"data": [{"id": "gpt-6.1-sol"}]}), True, "OpenAI accepted the request"),
         (OPENAI, httpx.Response(200, json={"data": [{"id": "gpt-6.1-terra"}]}), False, "does not list the model"),
         (OPENAI, httpx.Response(200, text="<html>"), False, "did not answer as expected"),
-        (OWN, httpx.Response(404), False, "192.168.1.5 answers, but doesn't list its models"),
+        (OWN, httpx.Response(404), False, "192.168.1.5 answers, but doesn't list its models: your first use will"),
         (OPENAI, httpx.Response(404), False, "OpenAI does not know the model"),
         (CLAUDE, httpx.ConnectError("no route"), False, "Could not reach api.anthropic.com"),
         (OWN, httpx.ReadTimeout("slow"), False, "Could not reach 192.168.1.5"),

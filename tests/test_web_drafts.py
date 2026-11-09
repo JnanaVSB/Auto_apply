@@ -658,6 +658,26 @@ def test_the_top_bar_shows_the_line_up_spend_and_a_pause(client, conn, job, data
     assert "Paused: today&#39;s limit reached" in client.get("/ready").text
 
 
+OWN_SCORER = "service: openai-compatible\n    model: my-model\n    address: https://scoring.example.net/v1"
+
+
+@pytest.mark.parametrize(
+    ("evaluator", "line"),
+    [
+        ("service: anthropic\n    model: claude-opus-5-5\n    key_name: anthropic",
+         "Scoring: api.anthropic.com, counted in your limits"),
+        (f"{OWN_SCORER}\n    price_input: 0.2\n    price_output: 0.6",
+         "Scoring: scoring.example.net, counted in your limits"),
+        (OWN_SCORER, "Scoring: scoring.example.net, not counted in your limits"),
+    ],
+)  # fmt: skip
+def test_the_top_bar_says_where_scoring_goes_and_whether_your_limits_count_it(client, job, evaluator, line):
+    with config.CONFIG_PATH.open("a", encoding="utf-8") as settings:
+        settings.write(f"  evaluator:\n    {evaluator}\n")
+    text = client.get("/ready").text
+    assert line in text and "laptop, free" not in text
+
+
 ASK = "Scoring is currently running. Do you wish to override it with your Writer and council request?"
 CLOUD_WRITER = '{"service": "anthropic", "model": "claude-opus-5-5"}'
 GIVING_WAY = "Scoring stops after its current job, then the Writer starts."
