@@ -120,6 +120,13 @@ def test_an_ad_too_long_for_the_model_fails_at_once_without_a_retry():
     assert len(ai.asked) == 1
 
 
+def test_too_many_requests_goes_to_the_queue_at_once_and_is_no_failed_try():
+    ai = FakeAI(llm.Limited("scoring.example.net says too many requests for now (status 429)", 30))
+    with pytest.raises(llm.Limited):
+        score(ai)
+    assert len(ai.asked) == 1  # no retry here: the queue waits, then scores the job again
+
+
 def test_problems_that_stop_all_scoring_are_passed_on():
     with pytest.raises(llm.StopScoring, match="ollama serve"):
         score(FakeAI(llm.StopScoring("Ollama isn't running: start it with `ollama serve`.")))

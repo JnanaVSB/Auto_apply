@@ -129,7 +129,7 @@ def test_anthropic_service(keys):
         (GROQ, httpx.Response(401), llm.StopScoring, "refused the key"),
         (CLAUDE, httpx.Response(404), llm.StopScoring, "does not know the model 'claude-sonnet-5-5'"),
         *((role, httpx.Response(status), llm.Busy, "busy or failing") for role, status in (
-            (CLAUDE, 529), (CLAUDE, 500), (CLAUDE, 429), (GROQ, 503),
+            (CLAUDE, 529), (CLAUDE, 500), (GROQ, 503),
         )),  # not charged: the council waits and sends it again
         (GROQ, httpx.Response(400, text="maximum context length exceeded"), llm.TooLong, "longer than the model"),
         (CLAUDE, httpx.Response(400, text="prompt is too long"), llm.TooLong, "longer than the model"),
@@ -169,13 +169,6 @@ def test_too_many_requests_from_your_own_address_is_limited_with_its_wait(keys, 
         llm.call(GROQ, "rules", "texts", SHAPE, transport=transport)
     assert raised.value.wait == wait and isinstance(raised.value, llm.Busy)  # the council and Writer wait, as today
     assert FAKE_KEY not in str(raised.value) and "[KEY]" in raised.value.reply
-
-
-def test_too_many_requests_from_openai_stays_busy_not_limited(keys):
-    transport, _ = fake(httpx.Response(429, headers={"Retry-After": "30"}))
-    with pytest.raises(llm.Busy, match="busy or failing") as raised:
-        llm.call(OPENAI, "rules", "texts", SHAPE, transport=transport)
-    assert not isinstance(raised.value, llm.Limited)
 
 
 def test_missing_key_is_named_and_nothing_is_sent():
@@ -254,6 +247,14 @@ ANTHROPIC_ANSWER = {
     "usage": {"input_tokens": 900, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 50,
               "output_tokens": 400},
 }  # fmt: skip
+
+
+@pytest.mark.parametrize(("role", "host"), [(OPENAI, "api.openai.com"), (CLAUDE, "api.anthropic.com")])
+def test_too_many_requests_from_openai_and_anthropic_is_limited_too(keys, role, host):
+    transport, _ = fake(httpx.Response(429, headers={"Retry-After": "30"}))
+    with pytest.raises(llm.Limited, match=rf"^{host} says too many requests for now \(status 429\)$") as raised:
+        llm.call(role, "rules", "texts", SHAPE, transport=transport)
+    assert raised.value.wait == 30 and isinstance(raised.value, llm.Busy)  # the council and Writer wait, as today
 
 
 @pytest.mark.parametrize(

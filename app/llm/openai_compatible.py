@@ -8,13 +8,12 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.config import OPENAI_HOST, AIRole
-from app.llm import Limited, LLMError, Reply, TooLong, Usage, answer_data, refused, tokens
+from app.llm import LLMError, Reply, TooLong, Usage, answer_data, limited, refused, tokens
 
 ANSWER_LIMIT = 4096  # word-pieces, unless the request asks for more
 THINKING_ROOM, XHIGH_ROOM = 8000, 16000  # with thinking on, the model needs this much more room
 FLEX_SECONDS = 900  # OpenAI's half price (Flex) answers more slowly
 OPENROUTER_HOST = "openrouter.ai"
-MAX_WAIT_DIGITS = 6  # a Retry-After longer than this (over 11 days) is not a number of seconds we believe
 
 
 def most_output(role: AIRole, limit: int | None) -> int:
@@ -60,10 +59,8 @@ def answer(
     reply = client.post(f"{role.address}/chat/completions", json=body, headers=headers)
     if reply.status_code == 400 and "context" in reply.text.lower():
         raise TooLong("the texts are longer than the model can read at once")
-    if reply.status_code == 429 and role.own:
-        wait = reply.headers.get("Retry-After", "")  # whole seconds only: the date form is rare and ignored
-        seconds = float(wait) if wait.isascii() and wait.isdigit() and len(wait) <= MAX_WAIT_DIGITS else None
-        raise Limited(f"{host} says too many requests for now (status 429)", seconds)
+    if reply.status_code == 429:
+        raise limited(reply, role)
     if reply.status_code != 200:
         raise refused("The AI service", reply.status_code, role.model)
     data = answer_data(reply)

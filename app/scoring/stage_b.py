@@ -148,7 +148,7 @@ def score_job(
             answer = checked(ask(role, INSTRUCTIONS, text, SHAPE, retry=retry))
         except llm.TooLong as error:
             return Score(None, [], f"AI score failed: {error}", None, time.monotonic() - started)
-        except llm.StopScoring:
+        except (llm.StopScoring, llm.Limited):  # no job can be scored now, or not until the queue has waited
             raise
         except llm.LLMError as error:  # timed out, busy, cut off, refused this once
             problems.append(str(error))

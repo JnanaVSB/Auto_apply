@@ -16,7 +16,20 @@ from typing import NamedTuple
 import httpx
 
 from app.config import AIRole
-from app.llm import Busy, Expired, LLMError, Reply, StopScoring, TimedOut, TooLong, Usage, answer_data, refused, tokens
+from app.llm import (
+    Busy,
+    Expired,
+    LLMError,
+    Reply,
+    StopScoring,
+    TimedOut,
+    TooLong,
+    Usage,
+    answer_data,
+    limited,
+    refused,
+    tokens,
+)
 
 API_VERSION = "2026-10-21"
 ANSWER_LIMIT = 8000  # word-pieces, unless the request asks for more
@@ -58,6 +71,8 @@ def answer(
     )
     if reply.status_code == 400 and "too long" in reply.text.lower():
         raise TooLong("the texts are longer than the model can read at once")
+    if reply.status_code == 429:  # batches stay "busy": they wait at Anthropic anyway
+        raise limited(reply, role)
     if reply.status_code != 200:
         raise refused("Anthropic", reply.status_code, role.model)
     return _reply(answer_data(reply))

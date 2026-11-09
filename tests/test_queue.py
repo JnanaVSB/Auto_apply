@@ -2,6 +2,7 @@
 
 import json
 import re
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,7 +11,7 @@ from test_spending import calls
 from test_stage_a import RESUME, FakeMeaning
 from test_tiles import RESUME_CLS
 
-from app import llm, questionnaire
+from app import db, llm, questionnaire
 from app.config import AIRole, AISettings, Config, ScoringSettings, SpendingSettings
 from app.council import spending
 from app.documents import privacy, tile_sets
@@ -95,6 +96,26 @@ def paid(data_dir, role=OPUS, daily=15, monthly=150):
 def you_and_a_job(conn):
     questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
     return add_job(conn, "RL Intern", description="Taxes.", date_posted=posted(1))
+
+
+def limited(*waits, title="RL Intern"):
+    """A stand-in service that says too many requests about `title` once for each wait given (its Retry-After, or
+    None), then answers."""
+    left = list(waits)
+
+    def answer(role, system, user, shape, *, retry):
+        if title in user and left:
+            raise llm.Limited("the service says too many requests for now (status 429)", left.pop(0))
+        return '{"score": 90, "reasons": ["Robots."]}'
+
+    return answer
+
+
+@pytest.fixture
+def slept(monkeypatch):
+    found = []
+    monkeypatch.setattr(queue.time, "sleep", found.append)
+    return found
 
 
 def test_newest_first_then_strongest_match_and_nothing_older_than_90_days(conn):
@@ -386,6 +407,68 @@ def test_what_a_stopped_run_set_aside_stays_counted_as_spent(conn):
     assert "The last scoring run stopped while waiting for an answer: up to $0.50 is counted as spent." in lines
     _, lines = run(conn, FakeAI())
     assert not any("stopped while waiting" in line for line in lines)  # said once
+
+
+@pytest.mark.parametrize(
+    ("waits", "pauses"), [((30,), [10, 10, 10]), ((0, 0, 0), []), ((None, 120), [10] * 18), ((2.5,), [2.5])]
+)
+def test_a_wait_the_service_asks_for_is_waited_and_the_same_job_scored(conn, tmp_path, slept, waits, pauses):
+    job = you_and_a_job(conn)
+    tally, lines = run(conn, limited(*waits), own_address(tmp_path))
+    assert tally.scored == 1 and slept == pauses  # in short steps, so Stop still works
+    assert one(conn, "SELECT score FROM ai_scores WHERE job_id = ?", job) == (90,)
+    assert queue.used_today(conn) < 10 and not any("tomorrow" in line for line in lines)  # waiting isn't scoring
+
+
+@pytest.mark.parametrize(
+    ("waits", "pauses"), [((0, 0, 0, 0), []), ((None, None), [10] * 6), ((180,), []), ((30, None, None), [10] * 9)]
+)
+def test_more_than_that_is_the_days_limit_and_the_job_stays_waiting(conn, data_dir, tmp_path, slept, waits,
+                                                                    pauses):  # fmt: skip
+    you_and_a_job(conn)
+    tally, lines = run(conn, limited(*waits), own_address(tmp_path))
+    assert tally.scored == 0 and slept == pauses
+    assert "scoring.example.net's limit is used up; scoring continues tomorrow." in lines
+    assert lines[-1].startswith("Scored 0 jobs") and "Still waiting: 1 jobs." in lines[-1]  # the run ends as usual
+    nothing = "SELECT (SELECT count(*) FROM ai_scores) + (SELECT count(*) FROM ai_failures)"
+    assert one(conn, nothing) == (0,)  # no failure saved: it is scored another day
+    with closing(db.connect(data_dir)) as again:  # even after a restart, automatic scoring waits until midnight
+        assert queue.used_today(again) == 120 * 60
+
+
+def test_score_these_and_a_paid_service_end_the_same_way_counting_nothing(conn, tmp_path, slept):
+    job = you_and_a_job(conn)
+    _, lines = run(conn, limited(None, None), paid(tmp_path), job_ids=[job])
+    assert "api.anthropic.com keeps refusing for now (too many requests); scoring continues tomorrow." in lines
+    assert one(conn, MONEY) == (2, 0, 0, 0, 0, 0, 0)  # two requests refused: $0, nothing still set aside
+
+
+def test_stop_works_while_waiting_and_what_is_done_stays_saved(conn, tmp_path, slept):
+    you_and_a_job(conn)
+    add_job(conn, "RL Robot Engineer", description="Robots.", date_posted=posted(1))  # scored before the wait
+
+    def stop():
+        if slept:  # pressed during the wait
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run(conn, limited(30), own_address(tmp_path), stop=stop)
+    assert conn.execute("SELECT count(*) FROM ai_scores").fetchone()[0] == 1 and slept == [10]
+
+
+def test_a_limit_ends_the_run_without_counting_as_a_failure_in_a_row(conn, tmp_path, slept):
+    questionnaire.save(conn, questionnaire.check({"contact": CONTACT}))
+    for number in range(3):
+        add_job(conn, f"RL Intern {number}", description="Taxes.", date_posted=posted(1))
+
+    def answer(role, system, user, shape, *, retry):
+        if "RL Intern 2" in user:
+            raise llm.Limited("the service says too many requests for now (status 429)", 180)
+        return "not JSON"
+
+    _, lines = run(conn, answer, own_address(tmp_path))  # two failures, then the day's limit: no "3 in a row" stop
+    assert conn.execute("SELECT count(*) FROM ai_scores WHERE failed IS NOT NULL").fetchone()[0] == 2  # saved
+    assert "scoring.example.net's limit is used up; scoring continues tomorrow." in lines
 
 
 def test_scoring_on_this_computer_counts_no_money(conn):
