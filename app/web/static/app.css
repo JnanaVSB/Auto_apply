@@ -41,6 +41,15 @@
   --bd-depth: light-dark(color-mix(in srgb, var(--accent) 18%, transparent), rgb(0 0 0 / 50%));
   --bd-mid: light-dark(color-mix(in srgb, var(--accent) 9%, transparent),
     color-mix(in srgb, var(--accent) 10%, transparent));
+  /* The sign-in page's own backdrop: the same family, richer (a deep pool of the accent at two corners, mid-tone
+     pools, light gathered behind the card) with faint pencil sketches of job applications over it. */
+  --ln-pearl: color-mix(in srgb, var(--accent) 6%, var(--bg));
+  --ln-warm: color-mix(in srgb, var(--warn) 10%, var(--bg));
+  --ln-deep: light-dark(color-mix(in srgb, var(--accent) 30%, transparent), rgb(0 0 0 / 55%));
+  --ln-mid: color-mix(in srgb, var(--accent) 14%, transparent);
+  --ln-glow: light-dark(rgb(255 255 255 / 85%), color-mix(in srgb, var(--accent) 22%, transparent));
+  --sketch-ink: color-mix(in srgb, var(--text) 14%, transparent);
+  --glass-hero: color-mix(in srgb, var(--surface) 40%, transparent);  /* the sign-in card */
   /* Ink: grey, warning and error text and links pulled halfway toward --text, as Apple's vibrant labels are, so they
      keep 4.5:1 on thin glass and on the backdrop's deepest part. Used for the whole page (set on body, below). */
   --ink-muted: color-mix(in srgb, var(--muted) 50%, var(--text));
@@ -87,7 +96,8 @@
     0 20px 44px -16px light-dark(color-mix(in srgb, var(--accent) 50%, transparent), rgb(0 0 0 / 70%));
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);  /* every movement: quick start, soft landing */
   /* One timing family for all motion: a press answers at once, hovers ease, things settle, surfaces arrive. */
-  --press: 120ms; --quick: 160ms; --settle: 200ms; --page: 220ms; --enter: 260ms;
+  --press: 120ms; --quick: 160ms; --settle: 240ms; --page: 300ms; --enter: 340ms;
+  --reveal: 900ms;  /* the sign-in page's background sketches only: slow, once, behind everything */
   --lit: inset 0 1px 0 rgb(255 255 255 / 45%), inset 0 -1px 0 rgb(0 0 0 / 18%);  /* a coloured fill's two edges */
   /* A polished pill's glossy cap: bright at the top, ending in a soft line above the middle. */
   --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 20%)),
@@ -123,6 +133,11 @@
     --bd-glow: light-dark(oklch(from var(--accent) 0.995 0.01 h / 0.8), oklch(from var(--accent) 0.44 0.09 h / 0.6));
     --bd-depth: light-dark(oklch(from var(--accent) 0.62 0.08 h / 0.5), oklch(from var(--accent) 0.11 0.02 h / 0.7));
     --bd-mid: light-dark(oklch(from var(--accent) 0.74 0.06 h / 0.5), oklch(from var(--accent) 0.32 0.07 h / 0.55));
+    --ln-pearl: light-dark(oklch(from var(--accent) 0.955 0.025 h), oklch(from var(--accent) 0.2 0.04 h));
+    --ln-warm: light-dark(oklch(from var(--warn) 0.93 0.035 h), oklch(from var(--warn) 0.16 0.03 h));
+    --ln-deep: light-dark(oklch(from var(--accent) 0.5 0.09 h / 0.7), oklch(from var(--accent) 0.1 0.02 h / 0.75));
+    --ln-mid: light-dark(oklch(from var(--accent) 0.72 0.07 h / 0.5), oklch(from var(--accent) 0.3 0.08 h / 0.6));
+    --ln-glow: light-dark(oklch(from var(--accent) 0.99 0.01 h / 0.85), oklch(from var(--accent) 0.42 0.1 h / 0.65));
   }
 }
 
@@ -136,6 +151,7 @@
   --warn: light-dark(#8a5200, #e3b46a); --warn-soft: light-dark(#f8ecd6, #2c2416);
   --danger: light-dark(#a83222, #f0958a); --danger-soft: light-dark(#f9e4e0, #311c1a);
   .brand-mark { background: var(--title); }
+  body > main::before { background: var(--gloss-tint), var(--title); }
 }
 /* As weak as h1, h2, so the lane titles keep theirs. */
 :where(:root[data-palette]) :is(h1, h2) { color: var(--ink-title); }
@@ -212,7 +228,7 @@
     box-shadow: inset 0 -3px 0 var(--chrome-mark); }
   .rail .nav-group a[aria-current="page"] .icon { color: var(--on-chrome-current); }
   :is(.rail, .topbar) :focus-visible { outline-color: var(--chrome-mark); }
-  .brand-mark { background: var(--chrome-mark); color: var(--chrome); }
+  .brand-mark, body > main::before { background: var(--chrome-mark); color: var(--chrome); }
   .topbar { color: var(--chrome-muted); }
   .topbar > summary:hover, .topbar > :is(table, p), .dock-where strong { color: var(--on-chrome); }
   .topbar > summary::after { border-color: var(--chrome-muted); }
@@ -233,6 +249,8 @@
     --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
     --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent; --bd-mid: transparent;
+    --ln-pearl: #f3f5f7; --ln-warm: #f3f5f7; --ln-deep: transparent; --ln-mid: transparent; --ln-glow: transparent;
+    --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff;
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
     --glass-blur-pane: none; --glass-blur-small: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff;
@@ -310,11 +328,31 @@ table { font-variant-numeric: tabular-nums; }
   min-height: calc(100dvh - env(safe-area-inset-top)); }
 .content { min-width: 0; padding-right: env(safe-area-inset-right); }
 main { max-width: 72rem; padding: var(--space-6) var(--space-5) 4rem; }
-/* Login and problem pages: no menu, one centred card. */
-body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) auto; padding: var(--space-6);
-  border: 1px solid var(--glass-line); border-radius: var(--radius-l);
-  background: var(--glass-sheen), var(--glass-pane); -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur); box-shadow: var(--shadow-raised); }
+/* Sign-in and problem pages: no menu; one glass card, centred, as the hero, over a backdrop of their own with faint
+   sketches of job applications (sketches.svg, drawn for this app, used as a mask so the lines take the ink colour;
+   decorative, nothing a screen reader reads). */
+body:has(> main) { display: grid; place-items: center; min-height: 100dvh;
+  padding: calc(env(safe-area-inset-top) + var(--space-5)) var(--space-4) var(--space-5); }
+body:has(> main)::before {
+  background: radial-gradient(42vmax 36vmax at 50% 48%, var(--ln-glow), transparent 70%),
+    radial-gradient(62vmax 52vmax at 94% 98%, var(--ln-deep), transparent 70%),
+    radial-gradient(44vmax 38vmax at 4% 96%, var(--ln-deep), transparent 70%),
+    radial-gradient(50vmax 40vmax at 6% 8%, var(--ln-mid), transparent 70%),
+    radial-gradient(38vmax 32vmax at 90% 10%, var(--ln-mid), transparent 70%),
+    linear-gradient(150deg, var(--ln-pearl), var(--ln-warm)); }
+body:has(> main)::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-color: var(--sketch-ink);
+  -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat;
+  mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat; }
+body > main { position: relative; width: min(27rem, 100%); margin: 0; padding: 2.25rem 2rem 2rem;
+  border: 1px solid var(--glass-line); border-radius: var(--radius-float);
+  background: var(--glass-sheen), var(--glass-hero); -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow); }
+/* The app's mark at the top of the card ("aa", hidden from screen readers like the rail's). */
+body > main::before { content: "aa" / ""; display: grid; place-items: center; width: 2.75rem; height: 2.75rem;
+  margin-bottom: var(--space-4); border-radius: 0.875rem; background: var(--gloss-tint), var(--text);
+  color: var(--surface); font-size: var(--text-ui); font-weight: 700;
+  box-shadow: var(--lit), 0 6px 16px -6px light-dark(rgb(0 0 0 / 35%), rgb(0 0 0 / 60%)); }
 
 /* The rail: icons with short words, one block per group (a block can later become a fold-out). The rail itself is a
    clear column; its glass is a separate slab (::before) floating --inset in from the window's edges, with a deep
@@ -377,6 +415,8 @@ body > main { width: min(26rem, 100% - 2rem); margin: max(var(--space-6), 10vh) 
 }
 /* The job list's header row stays in view just under the floating cost bar (one line from 64rem). */
 @media (width >= 64rem) { .content:has(> .topbar) table.jobs th { top: 3.75rem; } }
+/* With the longer "paused" notice the bar can take two lines below about 80rem: the header row sits under both. */
+@media (64rem <= width < 80rem) { .content:has(> .topbar .error) table.jobs th { top: 5.1rem; } }
 .topbar > summary { position: relative; padding: var(--space-2) 2.75rem var(--space-2) var(--space-4);
   border-radius: inherit; cursor: pointer; font-variant-numeric: tabular-nums;
   transition: color var(--quick) var(--ease-out), outline-offset var(--press) var(--ease-out); }
@@ -507,9 +547,23 @@ input[type="file"] { max-width: 100%; }
 .stacked > h2:first-of-type { margin-top: var(--space-2); }
 .login { display: grid; gap: var(--space-2); }
 /* A page's own form (Settings and its pages, Add, Questionnaire …) is a frosted pane. */
-main > form.stacked { max-width: 44rem; padding: var(--space-5); border: 1px solid var(--glass-line);
-  border-radius: var(--radius-l); background: var(--glass-sheen), var(--glass-pane);
-  -webkit-backdrop-filter: var(--glass-blur-pane); backdrop-filter: var(--glass-blur-pane); box-shadow: var(--shadow); }
+main > :is(form.stacked, section:has(> form.stacked)) { max-width: 44rem; padding: var(--space-5);
+  border: 1px solid var(--glass-line); border-radius: var(--radius-l);
+  background: var(--glass-sheen), var(--glass-pane); -webkit-backdrop-filter: var(--glass-blur-pane);
+  backdrop-filter: var(--glass-blur-pane); box-shadow: var(--shadow); }
+main > section:has(> form.stacked) { margin-bottom: var(--space-5); }  /* Add: each way to add is its own pane */
+main > section:has(> form.stacked) > h2:first-child { margin-top: 0; }
+main > section .found::before { -webkit-backdrop-filter: none; backdrop-filter: none;  /* no blur inside a pane */
+  background: color-mix(in srgb, var(--surface) 30%, transparent); }
+/* An action with its explanation (Collect now, Score now, Score these jobs): a glass row, the button first, the
+   words at a reading length beside or under it. */
+main > form:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { display: flex; flex-wrap: wrap;
+  align-items: center; gap: var(--space-2) var(--space-4); width: fit-content; max-width: 100%;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4); border: 1px solid var(--glass-line); border-radius: var(--radius-l);
+  background: var(--glass-band), var(--glass-pane); -webkit-backdrop-filter: var(--glass-blur-pane);
+  backdrop-filter: var(--glass-blur-pane); box-shadow: var(--shadow); }
+main > form:not(.stacked, .view-switch, .filters):has(> button) > .muted { flex: 1 1 20rem; max-width: 60ch; }
 .list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--space-2); }
 .list-row input { width: 100%; }
 form.inline { display: inline; }
@@ -780,7 +834,7 @@ main:has(.board) { max-width: none; }
 }
 
 /* ---------- Motion ---------- */
-/* Short (under 300 ms), ease-out, and only transform, opacity and blur. Glass materialises: the phone menu and the
+/* Short (350 ms at most), ease-out, and only transform, opacity and blur. Glass materialises: the phone menu and the
    Filters pane arrive with their blur, size and opacity together. Fold-outs open smoothly where the browser can
    animate a height (::details-content), and simply open where it can't. Nothing animates on the HTMX redraws (the
    Ready box every 3 s, collect and score progress), and nothing fades a parent of a glass pane: a fading parent
@@ -796,6 +850,24 @@ main:has(.board) { max-width: none; }
     animation-duration: var(--page); animation-timing-function: var(--ease-out); }
   .view-switch button[aria-pressed="true"] { view-transition-name: view-choice; }
   .button[aria-current] { view-transition-name: chosen-period; }
+}
+/* The sign-in card materialises once as the page opens (blur, size and opacity together); the sketches behind it
+   are revealed by a soft diagonal sweep. A card holding an error (a wrong password) appears at once instead. */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(0.5rem) scale(0.96);
+    -webkit-backdrop-filter: blur(0) saturate(100%) brightness(1);
+    backdrop-filter: blur(0) saturate(100%) brightness(1); }
+}
+@keyframes sketch-sweep { from { -webkit-mask-position: center, 100% 0; mask-position: center, 100% 0; } }
+@media (prefers-reduced-motion: no-preference) {
+  body > main:not(:has(.error)) { animation: card-in var(--enter) var(--ease-out) backwards; }
+  body:has(> main)::after {
+    -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat,
+      linear-gradient(115deg, #000 40%, transparent 60%) 0 0 / 300% 100% no-repeat;
+    -webkit-mask-composite: source-in;
+    mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat,
+      linear-gradient(115deg, #000 40%, transparent 60%) 0 0 / 300% 100% no-repeat;
+    mask-composite: intersect; animation: sketch-sweep var(--reveal) var(--ease-out) var(--press) backwards; }
 }
 @media (prefers-reduced-motion: no-preference) and (width >= 40rem) {
   .rail .nav-group a[aria-current="page"] { view-transition-name: current-page; }  /* the rail only: one per page */
@@ -828,7 +900,7 @@ main:has(.board) { max-width: none; }
 /* Browsers without backdrop blur: the glass becomes solid, so text never sits on an unblurred backdrop. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   :root, :root[data-palette] { --glass: var(--surface); --glass-pane: var(--surface); --glass-thick: var(--surface);
-    --chrome-glass: var(--chrome); }
+    --chrome-glass: var(--chrome); --glass-hero: var(--surface); }
 }
 /* More contrast: a plain background, near-solid glass and defined borders everywhere. */
 @media (prefers-contrast: more) {
@@ -836,7 +908,8 @@ main:has(.board) { max-width: none; }
     --hairline: var(--line-strong); --glass: color-mix(in srgb, var(--surface) 96%, transparent);
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; }
+    --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
+    --ln-mid: transparent; --ln-glow: transparent; --sketch-ink: transparent; --glass-hero: var(--glass); }
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -853,5 +926,6 @@ main:has(.board) { max-width: none; }
     --glass-blur: none; --glass-blur-pane: none; --glass-blur-small: none; --glass-sheen: none; --glass-band: none;
     --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; }
+    --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
+    --ln-mid: transparent; --ln-glow: transparent; --glass-hero: var(--surface); }
 }

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<!-- auto_apply's own line drawings for the sign-in page's background, drawn by hand for this app: a resume, a cover
+     letter in its envelope, a paper plane, a checklist, a briefcase, a calendar, a pen, a magnifier over a job ad,
+     and a few sparks. Used only as a CSS mask, so the lines take the page's ink colour. Decorative; no text. -->
+
+<!-- resume, top left -->
+<g transform="translate(86 74) rotate(-8)">
+  <path d="M2 4 Q1 2 4 1 L118 0 Q121 0 121 4 L122 156 Q122 160 118 160 L5 161 Q1 161 1 157 Z"/>
+  <circle cx="30" cy="34" r="14"/>
+  <path d="M18 54 Q30 44 42 54"/>
+  <path d="M56 26 L104 25 M56 38 L94 38"/>
+  <path d="M16 74 L106 73 M16 88 L100 88 M16 102 L106 101 M16 116 L84 116"/>
+  <path d="M16 134 L60 134 M70 134 L104 133"/>
+</g>
+
+<!-- envelope with a letter, top right -->
+<g transform="translate(930 92) rotate(7)">
+  <path d="M14 -26 L134 -28 L136 40 M14 -26 L14 30"/>
+  <path d="M34 -8 L114 -9 M34 6 L104 6"/>
+  <path d="M1 22 Q0 18 4 18 L146 17 Q150 17 150 21 L151 104 Q151 108 147 108 L5 109 Q1 109 1 105 Z"/>
+  <path d="M3 21 L76 70 L148 20"/>
+  <path d="M3 106 L58 60 M149 106 L95 60"/>
+</g>
+
+<!-- paper plane with its trail, upper middle -->
+<g transform="translate(520 40) rotate(-4)">
+  <path d="M0 40 L120 0 L84 86 L58 56 Z"/>
+  <path d="M120 0 L58 56 L54 82 L70 66"/>
+  <path d="M-14 52 Q-60 70 -96 58 Q-130 46 -160 64" stroke-dasharray="6 10"/>
+</g>
+
+<!-- checklist on a clipboard, left middle -->
+<g transform="translate(70 360) rotate(5)">
+  <path d="M4 10 Q3 6 8 6 L112 5 Q116 5 116 10 L117 176 Q117 180 113 180 L8 181 Q4 181 4 177 Z"/>
+  <path d="M38 6 L40 -6 L80 -7 L82 6"/>
+  <path d="M22 36 h18 v18 h-18 Z M24 44 L30 51 L44 32"/>
+  <path d="M54 46 L98 45"/>
+  <path d="M22 82 h18 v18 h-18 Z M24 90 L30 97 L44 78"/>
+  <path d="M54 92 L94 91"/>
+  <path d="M22 128 h18 v18 h-18 Z"/>
+  <path d="M54 138 L100 137"/>
+</g>
+
+<!-- briefcase, right middle -->
+<g transform="translate(1000 380) rotate(-6)">
+  <path d="M2 30 Q1 24 8 24 L142 23 Q148 23 148 30 L149 116 Q149 122 142 122 L8 123 Q2 123 2 116 Z"/>
+  <path d="M52 23 L53 8 Q53 3 58 3 L92 2 Q97 2 97 7 L98 23"/>
+  <path d="M3 62 Q75 80 147 61"/>
+  <path d="M66 66 h18 v14 h-18 Z"/>
+</g>
+
+<!-- calendar with a circled day, bottom left -->
+<g transform="translate(150 600) rotate(-5)">
+  <path d="M2 14 Q1 8 8 8 L142 7 Q148 7 148 14 L149 132 Q149 138 142 138 L8 139 Q2 139 2 132 Z"/>
+  <path d="M3 40 L148 39"/>
+  <path d="M36 -2 L36 20 M114 -3 L114 19"/>
+  <path d="M26 62 h4 M58 62 h4 M90 62 h4 M122 62 h4 M26 88 h4 M58 88 h4 M122 88 h4 M26 114 h4 M58 114 h4 M90 114 h4"/>
+  <path d="M80 88 Q80 74 93 75 Q106 77 104 90 Q102 102 90 101 Q78 99 80 86"/>
+</g>
+
+<!-- pen, lower middle -->
+<g transform="translate(470 690) rotate(-24)">
+  <path d="M0 14 L150 13 L176 22 L150 31 L0 32 Q-6 23 0 14 Z"/>
+  <path d="M150 13 L150 31 M126 13 L126 31"/>
+  <path d="M176 22 L190 22"/>
+  <path d="M-20 70 Q20 54 50 70 T120 66" stroke-dasharray="2 8"/>
+</g>
+
+<!-- magnifier over a job ad, bottom right -->
+<g transform="translate(900 610) rotate(8)">
+  <path d="M2 6 Q1 2 6 2 L132 1 Q136 1 136 6 L137 104 Q137 108 132 108 L6 109 Q2 109 2 104 Z"/>
+  <path d="M18 24 L92 23 M18 40 L110 39 M18 56 L80 56 M18 72 L100 71"/>
+  <circle cx="122" cy="96" r="30"/>
+  <path d="M144 118 L176 150"/>
+</g>
+
+<!-- sparks and dots -->
+<g stroke-width="1.6">
+  <path d="M400 210 v18 M391 219 h18"/>
+  <path d="M820 250 v14 M813 257 h14"/>
+  <path d="M760 560 v16 M752 568 h16"/>
+  <path d="M330 470 v12 M324 476 h12"/>
+  <circle cx="690" cy="180" r="3"/>
+  <circle cx="280" cy="300" r="2.5"/>
+  <circle cx="880" cy="520" r="2.5"/>
+  <circle cx="610" cy="600" r="3"/>
+</g>
+</svg>
