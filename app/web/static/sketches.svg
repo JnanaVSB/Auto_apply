@@ -22,8 +22,8 @@
   <path d="M3 106 L58 60 M149 106 L95 60"/>
 </g>
 
-<!-- paper plane with its trail, upper middle -->
-<g transform="translate(520 40) rotate(-4)">
+<!-- paper plane with its trail, upper middle (its trail passes under the card's top edge) -->
+<g transform="translate(520 170) rotate(-4)">
   <path d="M0 40 L120 0 L84 86 L58 56 Z"/>
   <path d="M120 0 L58 56 L54 82 L70 66"/>
   <path d="M-14 52 Q-60 70 -96 58 Q-130 46 -160 64" stroke-dasharray="6 10"/>
@@ -58,8 +58,8 @@
   <path d="M80 88 Q80 74 93 75 Q106 77 104 90 Q102 102 90 101 Q78 99 80 86"/>
 </g>
 
-<!-- pen, lower middle -->
-<g transform="translate(470 690) rotate(-24)">
+<!-- pen, lower middle (its tip passes under the card's bottom edge) -->
+<g transform="translate(470 600) rotate(-24)">
   <path d="M0 14 L150 13 L176 22 L150 31 L0 32 Q-6 23 0 14 Z"/>
   <path d="M150 13 L150 31 M126 13 L126 31"/>
   <path d="M176 22 L190 22"/>

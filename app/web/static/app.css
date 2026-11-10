@@ -41,34 +41,29 @@
   --bd-depth: light-dark(color-mix(in srgb, var(--accent) 18%, transparent), rgb(0 0 0 / 50%));
   --bd-mid: light-dark(color-mix(in srgb, var(--accent) 9%, transparent),
     color-mix(in srgb, var(--accent) 10%, transparent));
-  /* The sign-in page's own backdrop: the same family, richer (a deep pool of the accent at two corners, mid-tone
-     pools, light gathered behind the card) with faint pencil sketches of job applications over it. */
-  --ln-pearl: color-mix(in srgb, var(--accent) 6%, var(--bg));
-  --ln-warm: color-mix(in srgb, var(--warn) 10%, var(--bg));
-  --ln-deep: light-dark(color-mix(in srgb, var(--accent) 30%, transparent), rgb(0 0 0 / 55%));
-  --ln-mid: color-mix(in srgb, var(--accent) 14%, transparent);
-  --ln-glow: light-dark(rgb(255 255 255 / 60%), color-mix(in srgb, var(--accent) 22%, transparent));
+  /* The sign-in page's own backdrop: a deep field of the scheme's accent (lighter in light mode, deeper in dark;
+     --ln-mix and --ln-l are set on the page, below), with lighter pools at two corners, a warm glow, a deeper pool,
+     a quiet darkening behind the card, and pale pencil sketches of job applications over it. Clear glass only reads
+     as glass over rich, mid-tone content, so this page is the one place the backdrop is coloured rather than pearl. */
+  --ln-field: color-mix(in srgb, var(--accent) var(--ln-mix), var(--bg));
+  --ln-light: color-mix(in srgb, var(--accent) 42%, transparent);
+  --ln-warm: color-mix(in srgb, var(--warn) 28%, transparent);
+  --ln-deep: rgb(0 0 0 / 45%);
+  --ln-core: rgb(0 0 0 / 36%);
+  --ln-mix: 28%; --ln-l: 0.27;
   --sketch-ink: color-mix(in srgb, var(--text) 14%, transparent);
-  /* The sign-in card is clear glass: a trace of the surface, a light blur, saturation and brightness doing the work,
-     so the backdrop and the sketches show through it. What makes it glass and not a hole: a crisp lit rim and a
-     darker one opposite, an inner light line, a shade of thickness along the bottom, a diagonal sheen with a breath
-     of the scheme's colour, a deep soft shadow, and a bevelled edge (a ring just inside the rim) that bends and
-     brightens what passes under it. The middle is a touch denser, behind the words only. */
-  --glass-hero: color-mix(in srgb, var(--surface) 10%, transparent);
-  --glass-hero-blur: blur(2px) saturate(170%) brightness(1.04);
-  --glass-hero-rim: blur(8px) saturate(150%) brightness(1.08);
-  --glass-hero-sheen: radial-gradient(70% 62% at 50% 46%, light-dark(rgb(255 255 255 / 16%), rgb(0 0 0 / 22%)),
-      transparent),
-    linear-gradient(118deg, transparent 12%, light-dark(rgb(255 255 255 / 14%), rgb(255 255 255 / 7%)) 26%,
-      transparent 38%, transparent 62%, light-dark(rgb(255 255 255 / 6%), rgb(255 255 255 / 3%)) 72%, transparent 80%),
-    linear-gradient(160deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 55%);
-  --glass-hero-shadow: inset 1.5px 1.5px 0 light-dark(#ffffff, rgb(255 255 255 / 55%)),
-    inset -1.5px -1.5px 0 light-dark(rgb(0 0 0 / 16%), rgb(0 0 0 / 70%)),
-    inset 0 0 0 3px light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 8%)),
-    inset 0 -24px 36px -24px light-dark(rgb(0 0 0 / 16%), rgb(0 0 0 / 55%)),
-    inset 0 18px 28px -20px light-dark(rgb(255 255 255 / 38%), rgb(255 255 255 / 12%)),
-    0 2px 6px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 45%)),
-    0 36px 80px -20px light-dark(color-mix(in srgb, var(--accent) 60%, transparent), rgb(0 0 0 / 85%));
+  /* The sign-in card is clear glass, Apple's clear variant: no fill at all, neither white nor dark, only a slight
+     blur and a mild saturation lift, so the field and the sketches show through at the same tone as around it. What
+     makes it glass and not a hole: a hair-thin bright rim, a faint dark outer edge, a thin highlight line along the
+     top, a soft drop shadow, and a bevelled edge (a ring just inside the rim) that softens what passes under it.
+     The words stay readable because the page's own field is deeper behind the card (--ln-core, part of the backdrop,
+     far larger than the card, so no edge shows) and each letter carries a soft dark halo. */
+  --glass-hero: transparent;
+  --glass-hero-line: rgb(255 255 255 / 42%);
+  --glass-hero-blur: blur(2px) saturate(120%);
+  --glass-hero-rim: blur(8px) saturate(130%);
+  --glass-hero-shadow: inset 0 1px 0 rgb(255 255 255 / 34%), 0 0 0 1px rgb(0 0 0 / 22%),
+    0 2px 6px rgb(0 0 0 / 25%), 0 28px 64px -20px rgb(0 0 0 / 60%);
   /* Ink: grey, warning and error text and links pulled halfway toward --text, as Apple's vibrant labels are, so they
      keep 4.5:1 on thin glass and on the backdrop's deepest part. Used for the whole page (set on body, below). */
   --ink-muted: color-mix(in srgb, var(--muted) 50%, var(--text));
@@ -152,11 +147,10 @@
     --bd-glow: light-dark(oklch(from var(--accent) 0.995 0.01 h / 0.8), oklch(from var(--accent) 0.44 0.09 h / 0.6));
     --bd-depth: light-dark(oklch(from var(--accent) 0.62 0.08 h / 0.5), oklch(from var(--accent) 0.11 0.02 h / 0.7));
     --bd-mid: light-dark(oklch(from var(--accent) 0.74 0.06 h / 0.5), oklch(from var(--accent) 0.32 0.07 h / 0.55));
-    --ln-pearl: light-dark(oklch(from var(--accent) 0.955 0.025 h), oklch(from var(--accent) 0.2 0.04 h));
-    --ln-warm: light-dark(oklch(from var(--warn) 0.93 0.035 h), oklch(from var(--warn) 0.16 0.03 h));
-    --ln-deep: light-dark(oklch(from var(--accent) 0.5 0.09 h / 0.7), oklch(from var(--accent) 0.1 0.02 h / 0.75));
-    --ln-mid: light-dark(oklch(from var(--accent) 0.72 0.07 h / 0.5), oklch(from var(--accent) 0.3 0.08 h / 0.6));
-    --ln-glow: light-dark(oklch(from var(--accent) 0.99 0.01 h / 0.85), oklch(from var(--accent) 0.42 0.1 h / 0.65));
+    --ln-field: oklch(from var(--accent) var(--ln-l) 0.09 h);
+    --ln-light: oklch(from var(--accent) calc(var(--ln-l) + 0.14) 0.12 h / 0.8);
+    --ln-warm: oklch(from var(--warn) calc(var(--ln-l) + 0.08) 0.09 h / 0.55);
+    --ln-deep: oklch(from var(--accent) calc(var(--ln-l) - 0.13) 0.06 h / 0.8);
   }
 }
 
@@ -268,9 +262,10 @@
     --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
     --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent; --bd-mid: transparent;
-    --ln-pearl: #f3f5f7; --ln-warm: #f3f5f7; --ln-deep: transparent; --ln-mid: transparent; --ln-glow: transparent;
-    --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff; --glass-hero-blur: none; --glass-hero-rim: none;
-    --glass-hero-sheen: none; --glass-hero-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
+    --ln-field: #f3f5f7; --ln-light: transparent; --ln-warm: transparent; --ln-deep: transparent;
+    --ln-core: transparent; --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff; --glass-hero-line: #e1e5ea;
+    --glass-hero-blur: none; --glass-hero-rim: none;
+    --glass-hero-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
     --glass-blur-pane: none; --glass-blur-small: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff;
@@ -353,13 +348,26 @@ main { max-width: 72rem; padding: var(--space-6) var(--space-5) 4rem; }
    decorative, nothing a screen reader reads). */
 body:has(> main) { display: grid; place-items: center; min-height: 100dvh;
   padding: calc(env(safe-area-inset-top) + var(--space-5)) var(--space-4) var(--space-5); }
+/* The page always uses the dark set of tokens (white words, pale accent, dark field glass) because its backdrop is
+   deep in both modes; light mode only lifts the field. Older browsers without light-dark() keep the plain page. */
+@supports (color: light-dark(#000, #fff)) {
+  body:has(> main) { color-scheme: dark; --text: #ffffff; --ink-title: #ffffff; --ink-muted: #f1f4f6;
+    --ink-danger: #ffd9d3; --link: color-mix(in srgb, var(--accent) 40%, #ffffff);
+    --sketch-ink: rgb(255 255 255 / 15%); }
+  /* A soft dark halo on the letters only (not on the button, the field or the mark), as on a photo. */
+  body > main { text-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 0 12px rgb(0 0 0 / 30%); }
+  body > main :is(button, input), body > main::before { text-shadow: none; }
+  /* On the root, where the field tokens read them: a token reads its var()s where it is declared. */
+  :root[data-theme="light"] { --ln-mix: 58%; --ln-l: 0.48; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --ln-mix: 58%; --ln-l: 0.48; } }
+}
 body:has(> main)::before { z-index: -3;  /* the glass slab and its rim sit between the backdrop and the card */
-  background: radial-gradient(36vmax 30vmax at 50% 48%, var(--ln-glow), transparent 70%),
-    radial-gradient(62vmax 52vmax at 94% 98%, var(--ln-deep), transparent 70%),
-    radial-gradient(44vmax 38vmax at 4% 96%, var(--ln-deep), transparent 70%),
-    radial-gradient(50vmax 40vmax at 6% 8%, var(--ln-mid), transparent 70%),
-    radial-gradient(38vmax 32vmax at 90% 10%, var(--ln-mid), transparent 70%),
-    linear-gradient(150deg, var(--ln-pearl), var(--ln-warm)); }
+  background: radial-gradient(max(40vmax, 34rem) max(32vmax, 36rem) at 50% 50%, var(--ln-core), transparent 70%),
+    radial-gradient(48vmax 36vmax at 88% 6%, var(--ln-light), transparent 70%),
+    radial-gradient(44vmax 34vmax at 8% 94%, var(--ln-light), transparent 70%),
+    radial-gradient(40vmax 30vmax at 12% 10%, var(--ln-warm), transparent 70%),
+    radial-gradient(54vmax 42vmax at 92% 96%, var(--ln-deep), transparent 70%),
+    linear-gradient(150deg, var(--ln-field), color-mix(in srgb, var(--ln-field) 72%, var(--bg))); }
 body:has(> main)::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
   background-color: var(--sketch-ink);
   -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat;
@@ -372,7 +380,7 @@ body > main { position: relative; width: min(27rem, 100%); margin: 0; padding: 2
    and the sketches. */
 body > main::after, body > main > :last-child::after { content: ""; position: absolute; inset: 0; z-index: -1;
   border-radius: var(--radius-float); pointer-events: none; }
-body > main::after { border: 1px solid var(--glass-line); background: var(--glass-hero-sheen), var(--glass-hero);
+body > main::after { border: 1px solid var(--glass-hero-line); background: var(--glass-hero);
   -webkit-backdrop-filter: var(--glass-hero-blur); backdrop-filter: var(--glass-hero-blur);
   box-shadow: var(--glass-hero-shadow); }
 body > main > :last-child::after { padding: var(--space-3);
@@ -577,6 +585,10 @@ input[type="file"] { max-width: 100%; }
 .stacked > h2 { margin: var(--space-5) 0 0; }
 .stacked > h2:first-of-type { margin-top: var(--space-2); }
 .login { display: grid; gap: var(--space-2); }
+/* The sign-in field is a clear inset: a faint dark tint, just enough for the typed dots and the caret, its own slight
+   blur, a visible pale edge and an inner shade that sets it into the glass. */
+.login input { background: rgb(0 0 0 / 14%); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  border-color: rgb(255 255 255 / 48%); box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%); }
 /* A page's own form (Settings and its pages, Add, Questionnaire …) is a frosted pane. */
 main > :is(form.stacked, section:has(> form.stacked)) { max-width: 44rem; padding: var(--space-5);
   border: 1px solid var(--glass-line); border-radius: var(--radius-l);
@@ -944,9 +956,9 @@ main:has(.board) { max-width: none; }
     --hairline: var(--line-strong); --glass: color-mix(in srgb, var(--surface) 96%, transparent);
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
-    --ln-mid: transparent; --ln-glow: transparent; --sketch-ink: transparent; --glass-hero: var(--glass);
-    --glass-hero-rim: none; --glass-hero-sheen: none; }
+    --bd-mid: transparent; --ln-field: var(--bg); --ln-deep: transparent;
+    --ln-light: transparent; --ln-warm: transparent; --ln-core: transparent; --sketch-ink: transparent;
+    --glass-hero: var(--glass); --glass-hero-line: var(--line-strong); --glass-hero-rim: none; }
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -963,7 +975,7 @@ main:has(.board) { max-width: none; }
     --glass-blur: none; --glass-blur-pane: none; --glass-blur-small: none; --glass-sheen: none; --glass-band: none;
     --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
-    --ln-mid: transparent; --ln-glow: transparent; --glass-hero: var(--surface); --glass-hero-blur: none;
-    --glass-hero-rim: none; --glass-hero-sheen: none; }
+    --bd-mid: transparent; --ln-field: var(--bg); --ln-deep: transparent; --ln-light: transparent;
+    --ln-warm: transparent; --ln-core: transparent; --glass-hero: var(--surface); --glass-hero-blur: none;
+    --glass-hero-rim: none; }
 }
