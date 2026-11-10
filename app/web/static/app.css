@@ -41,23 +41,11 @@
   --bd-depth: light-dark(color-mix(in srgb, var(--accent) 18%, transparent), rgb(0 0 0 / 50%));
   --bd-mid: light-dark(color-mix(in srgb, var(--accent) 9%, transparent),
     color-mix(in srgb, var(--accent) 10%, transparent));
-  /* The sign-in page's own backdrop: a deep field of the scheme's accent (lighter in light mode, deeper in dark;
-     --ln-mix and --ln-l are set on the page, below), with lighter pools at two corners, a warm glow, a deeper pool,
-     a quiet darkening behind the card, and pale pencil sketches of job applications over it. Clear glass only reads
-     as glass over rich, mid-tone content, so this page is the one place the backdrop is coloured rather than pearl. */
-  --ln-field: color-mix(in srgb, var(--accent) var(--ln-mix), var(--bg));
-  --ln-light: color-mix(in srgb, var(--accent) 42%, transparent);
-  --ln-warm: color-mix(in srgb, var(--warn) 28%, transparent);
-  --ln-deep: rgb(0 0 0 / 45%);
-  --ln-core: rgb(0 0 0 / 36%);
-  --ln-mix: 28%; --ln-l: 0.27;
-  --sketch-ink: color-mix(in srgb, var(--text) 14%, transparent);
   /* The sign-in card is clear glass, Apple's clear variant: no fill at all, neither white nor dark, only a slight
-     blur and a mild saturation lift, so the field and the sketches show through at the same tone as around it. What
+     blur and a mild saturation lift, so the picture behind it shows through at the same tone as around it. What
      makes it glass and not a hole: a hair-thin bright rim, a faint dark outer edge, a thin highlight line along the
      top, a soft drop shadow, and a bevelled edge (a ring just inside the rim) that softens what passes under it.
-     The words stay readable because the page's own field is deeper behind the card (--ln-core, part of the backdrop,
-     far larger than the card, so no edge shows) and each letter carries a soft dark halo. */
+     The words stay readable by their own dark edge (the halo on the sign-in page, below). */
   --glass-hero: transparent;
   --glass-hero-line: rgb(255 255 255 / 42%);
   --glass-hero-blur: blur(2px) saturate(120%);
@@ -111,7 +99,6 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);  /* every movement: quick start, soft landing */
   /* One timing family for all motion: a press answers at once, hovers ease, things settle, surfaces arrive. */
   --press: 120ms; --quick: 160ms; --settle: 240ms; --page: 300ms; --enter: 340ms;
-  --reveal: 900ms;  /* the sign-in page's background sketches only: slow, once, behind everything */
   --lit: inset 0 1px 0 rgb(255 255 255 / 45%), inset 0 -1px 0 rgb(0 0 0 / 18%);  /* a coloured fill's two edges */
   /* A polished pill's glossy cap: bright at the top, ending in a soft line above the middle. */
   --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 75%), rgb(255 255 255 / 20%)),
@@ -147,10 +134,6 @@
     --bd-glow: light-dark(oklch(from var(--accent) 0.995 0.01 h / 0.8), oklch(from var(--accent) 0.44 0.09 h / 0.6));
     --bd-depth: light-dark(oklch(from var(--accent) 0.62 0.08 h / 0.5), oklch(from var(--accent) 0.11 0.02 h / 0.7));
     --bd-mid: light-dark(oklch(from var(--accent) 0.74 0.06 h / 0.5), oklch(from var(--accent) 0.32 0.07 h / 0.55));
-    --ln-field: oklch(from var(--accent) var(--ln-l) 0.09 h);
-    --ln-light: oklch(from var(--accent) calc(var(--ln-l) + 0.14) 0.12 h / 0.8);
-    --ln-warm: oklch(from var(--warn) calc(var(--ln-l) + 0.08) 0.09 h / 0.55);
-    --ln-deep: oklch(from var(--accent) calc(var(--ln-l) - 0.13) 0.06 h / 0.8);
   }
 }
 
@@ -262,9 +245,7 @@
     --danger-soft: #fce9e7; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
     --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent; --bd-mid: transparent;
-    --ln-field: #f3f5f7; --ln-light: transparent; --ln-warm: transparent; --ln-deep: transparent;
-    --ln-core: transparent; --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff; --glass-hero-line: #e1e5ea;
-    --glass-hero-blur: none; --glass-hero-rim: none;
+    --glass-hero: #ffffff; --glass-hero-line: #e1e5ea; --glass-hero-blur: none; --glass-hero-rim: none;
     --glass-hero-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
@@ -276,6 +257,7 @@
     --chrome: #ffffff; --on-chrome: #1b2128; --chrome-muted: #56606b; --chrome-line: #e1e5ea;
     --chrome-current: #e3f1f5; --on-chrome-current: #0f6a80; --chrome-mark: #0f6a80; --chrome-warn: #8a4f00;
   }
+  body:has(> main)::before { background: #f3f5f7; }  /* the sign-in page's plain look, no picture */
 }
 
 /* ---------- Base and type ---------- */
@@ -343,41 +325,29 @@ table { font-variant-numeric: tabular-nums; }
   min-height: calc(100dvh - env(safe-area-inset-top)); }
 .content { min-width: 0; padding-right: env(safe-area-inset-right); }
 main { max-width: 72rem; padding: var(--space-6) var(--space-5) 4rem; }
-/* Sign-in and problem pages: no menu; one glass card, centred, as the hero, over a backdrop of their own with faint
-   sketches of job applications (sketches.svg, drawn for this app, used as a mask so the lines take the ink colour;
-   decorative, nothing a screen reader reads). */
+/* Sign-in and problem pages: no menu; one clear glass card, centred, as the hero, over a picture: teal and magenta
+   ink ("Green and pink abstract art" by Pawel Czerwinski, https://unsplash.com/photos/z7prq6BtPE4, Unsplash
+   License), cropped so its swirl sits in the middle and shows through the card at every window size. The plain
+   colour beneath shows while it loads or if it fails; phones get a smaller copy. */
 body:has(> main) { display: grid; place-items: center; min-height: 100dvh;
   padding: calc(env(safe-area-inset-top) + var(--space-5)) var(--space-4) var(--space-5); }
-/* The page always uses the dark set of tokens (white words, pale accent, dark field glass) because its backdrop is
-   deep in both modes; light mode only lifts the field. Older browsers without light-dark() keep the plain page. */
+body:has(> main)::before { background: url("login-ink.webp") center / cover no-repeat #060a0c; }
+@media (width < 48rem) { body:has(> main)::before { background-image: url("login-ink-phone.webp"); } }
+/* The page always uses the dark set of tokens (white words, pale accent, dark field glass) because the picture is
+   dark in both modes. Older browsers without light-dark() keep the plain page. */
 @supports (color: light-dark(#000, #fff)) {
   body:has(> main) { color-scheme: dark; --text: #ffffff; --ink-title: #ffffff; --ink-muted: #f1f4f6;
-    --ink-danger: #ffd9d3; --link: color-mix(in srgb, var(--accent) 40%, #ffffff);
-    --sketch-ink: rgb(255 255 255 / 15%); }
-  /* A soft dark halo on the letters only (not on the button, the field or the mark), as on a photo. */
-  body > main { text-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 0 12px rgb(0 0 0 / 30%); }
+    --ink-danger: #ffd9d3; --link: color-mix(in srgb, var(--accent) 40%, #ffffff); }
+  /* Over a picture the letters carry their own edge: a tight dark halo right against each letter and a softer
+     spread beyond, on the words only (not the button, the field or the mark). */
+  body > main { text-shadow: 0 0 1px rgb(0 0 0 / 85%), 0 1px 2px rgb(0 0 0 / 80%), 0 0 10px rgb(0 0 0 / 55%); }
   body > main :is(button, input), body > main::before { text-shadow: none; }
-  /* On the root, where the field tokens read them: a token reads its var()s where it is declared. */
-  :root[data-theme="light"] { --ln-mix: 58%; --ln-l: 0.48; }
-  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --ln-mix: 58%; --ln-l: 0.48; } }
 }
-body:has(> main)::before { z-index: -3;  /* the glass slab and its rim sit between the backdrop and the card */
-  background: radial-gradient(max(40vmax, 34rem) max(32vmax, 36rem) at 50% 50%, var(--ln-core), transparent 70%),
-    radial-gradient(48vmax 36vmax at 88% 6%, var(--ln-light), transparent 70%),
-    radial-gradient(44vmax 34vmax at 8% 94%, var(--ln-light), transparent 70%),
-    radial-gradient(40vmax 30vmax at 12% 10%, var(--ln-warm), transparent 70%),
-    radial-gradient(54vmax 42vmax at 92% 96%, var(--ln-deep), transparent 70%),
-    linear-gradient(150deg, var(--ln-field), color-mix(in srgb, var(--ln-field) 72%, var(--bg))); }
-body:has(> main)::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-color: var(--sketch-ink);
-  -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat;
-  mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat; }
 body > main { position: relative; width: min(27rem, 100%); margin: 0; padding: 2.25rem 2rem 2rem;
   border-radius: var(--radius-float); }
 /* The glass is a slab behind the content (::after) and its bevelled rim a ring behind that (the last paragraph's
    ::after, so the problem page has it too): the words keep their full ink, and the rim can bend what the slab has
-   already softened (a blur inside a blurred box sees nothing behind it). Both sit under the card, above the backdrop
-   and the sketches. */
+   already softened (a blur inside a blurred box sees nothing behind it). Both sit under the card, above the picture. */
 body > main::after, body > main > :last-child::after { content: ""; position: absolute; inset: 0; z-index: -1;
   border-radius: var(--radius-float); pointer-events: none; }
 body > main::after { border: 1px solid var(--glass-hero-line); background: var(--glass-hero);
@@ -895,27 +865,18 @@ main:has(.board) { max-width: none; }
   .button[aria-current] { view-transition-name: chosen-period; }
 }
 /* The sign-in card materialises once as the page opens: the slab's blur and the words arrive together as the card
-   settles into place; the sketches behind it are revealed by a soft diagonal sweep. A card holding an error (a wrong
-   password) appears at once instead. The fade is on the slab, its rim and the words, never on the card itself: a
-   fading parent would switch the slab's blur off until it ends. */
+   settles into place. A card holding an error (a wrong password) appears at once instead. The fade is on the slab,
+   its rim and the words, never on the card itself: a fading parent would switch the slab's blur off until it ends. */
 @keyframes card-in { from { transform: translateY(0.5rem) scale(0.96); } }
 @keyframes slab-in {
   from { opacity: 0; -webkit-backdrop-filter: blur(0) saturate(100%) brightness(1);
     backdrop-filter: blur(0) saturate(100%) brightness(1); }
 }
-@keyframes sketch-sweep { from { -webkit-mask-position: center, 100% 0; mask-position: center, 100% 0; } }
 @media (prefers-reduced-motion: no-preference) {
   body > main:not(:has(.error)) { animation: card-in var(--enter) var(--ease-out) backwards; }
   body > main:not(:has(.error))::after { animation: slab-in var(--enter) var(--ease-out) backwards; }
   body > main:not(:has(.error)) > *, body > main:not(:has(.error))::before,
   body > main:not(:has(.error)) > :last-child::after { animation: fade-in var(--enter) var(--ease-out) backwards; }
-  body:has(> main)::after {
-    -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat,
-      linear-gradient(115deg, #000 40%, transparent 60%) 0 0 / 300% 100% no-repeat;
-    -webkit-mask-composite: source-in;
-    mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat,
-      linear-gradient(115deg, #000 40%, transparent 60%) 0 0 / 300% 100% no-repeat;
-    mask-composite: intersect; animation: sketch-sweep var(--reveal) var(--ease-out) var(--press) backwards; }
 }
 @media (prefers-reduced-motion: no-preference) and (width >= 40rem) {
   .rail .nav-group a[aria-current="page"] { view-transition-name: current-page; }  /* the rail only: one per page */
@@ -956,9 +917,9 @@ main:has(.board) { max-width: none; }
     --hairline: var(--line-strong); --glass: color-mix(in srgb, var(--surface) 96%, transparent);
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; --ln-field: var(--bg); --ln-deep: transparent;
-    --ln-light: transparent; --ln-warm: transparent; --ln-core: transparent; --sketch-ink: transparent;
-    --glass-hero: var(--glass); --glass-hero-line: var(--line-strong); --glass-hero-rim: none; }
+    --bd-mid: transparent; --glass-hero: var(--glass); --glass-hero-line: var(--line-strong);
+    --glass-hero-rim: none; }
+  body:has(> main)::before { background: var(--bg); }  /* the sign-in page: a plain colour, no picture */
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -975,7 +936,6 @@ main:has(.board) { max-width: none; }
     --glass-blur: none; --glass-blur-pane: none; --glass-blur-small: none; --glass-sheen: none; --glass-band: none;
     --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
-    --bd-mid: transparent; --ln-field: var(--bg); --ln-deep: transparent; --ln-light: transparent;
-    --ln-warm: transparent; --ln-core: transparent; --glass-hero: var(--surface); --glass-hero-blur: none;
-    --glass-hero-rim: none; }
+    --bd-mid: transparent; --glass-hero: var(--surface); --glass-hero-blur: none; --glass-hero-rim: none; }
+  body:has(> main)::before { background: var(--bg); }  /* the sign-in page: a plain colour, no picture */
 }
