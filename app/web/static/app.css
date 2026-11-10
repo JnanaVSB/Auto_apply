@@ -47,9 +47,28 @@
   --ln-warm: color-mix(in srgb, var(--warn) 10%, var(--bg));
   --ln-deep: light-dark(color-mix(in srgb, var(--accent) 30%, transparent), rgb(0 0 0 / 55%));
   --ln-mid: color-mix(in srgb, var(--accent) 14%, transparent);
-  --ln-glow: light-dark(rgb(255 255 255 / 85%), color-mix(in srgb, var(--accent) 22%, transparent));
+  --ln-glow: light-dark(rgb(255 255 255 / 60%), color-mix(in srgb, var(--accent) 22%, transparent));
   --sketch-ink: color-mix(in srgb, var(--text) 14%, transparent);
-  --glass-hero: color-mix(in srgb, var(--surface) 40%, transparent);  /* the sign-in card */
+  /* The sign-in card is clear glass: a trace of the surface, a light blur, saturation and brightness doing the work,
+     so the backdrop and the sketches show through it. What makes it glass and not a hole: a crisp lit rim and a
+     darker one opposite, an inner light line, a shade of thickness along the bottom, a diagonal sheen with a breath
+     of the scheme's colour, a deep soft shadow, and a bevelled edge (a ring just inside the rim) that bends and
+     brightens what passes under it. The middle is a touch denser, behind the words only. */
+  --glass-hero: color-mix(in srgb, var(--surface) 10%, transparent);
+  --glass-hero-blur: blur(2px) saturate(170%) brightness(1.04);
+  --glass-hero-rim: blur(8px) saturate(150%) brightness(1.08);
+  --glass-hero-sheen: radial-gradient(70% 62% at 50% 46%, light-dark(rgb(255 255 255 / 16%), rgb(0 0 0 / 22%)),
+      transparent),
+    linear-gradient(118deg, transparent 12%, light-dark(rgb(255 255 255 / 14%), rgb(255 255 255 / 7%)) 26%,
+      transparent 38%, transparent 62%, light-dark(rgb(255 255 255 / 6%), rgb(255 255 255 / 3%)) 72%, transparent 80%),
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 55%);
+  --glass-hero-shadow: inset 1.5px 1.5px 0 light-dark(#ffffff, rgb(255 255 255 / 55%)),
+    inset -1.5px -1.5px 0 light-dark(rgb(0 0 0 / 16%), rgb(0 0 0 / 70%)),
+    inset 0 0 0 3px light-dark(rgb(255 255 255 / 24%), rgb(255 255 255 / 8%)),
+    inset 0 -24px 36px -24px light-dark(rgb(0 0 0 / 16%), rgb(0 0 0 / 55%)),
+    inset 0 18px 28px -20px light-dark(rgb(255 255 255 / 38%), rgb(255 255 255 / 12%)),
+    0 2px 6px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 45%)),
+    0 36px 80px -20px light-dark(color-mix(in srgb, var(--accent) 60%, transparent), rgb(0 0 0 / 85%));
   /* Ink: grey, warning and error text and links pulled halfway toward --text, as Apple's vibrant labels are, so they
      keep 4.5:1 on thin glass and on the backdrop's deepest part. Used for the whole page (set on body, below). */
   --ink-muted: color-mix(in srgb, var(--muted) 50%, var(--text));
@@ -250,7 +269,8 @@
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea;
     --bd-pearl: #f3f5f7; --bd-warm: #f3f5f7; --bd-glow: transparent; --bd-depth: transparent; --bd-mid: transparent;
     --ln-pearl: #f3f5f7; --ln-warm: #f3f5f7; --ln-deep: transparent; --ln-mid: transparent; --ln-glow: transparent;
-    --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff;
+    --sketch-ink: rgb(27 33 40 / 14%); --glass-hero: #ffffff; --glass-hero-blur: none; --glass-hero-rim: none;
+    --glass-hero-sheen: none; --glass-hero-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
     --glass: #ffffff; --glass-pane: #ffffff; --glass-thick: #ffffff; --chrome-glass: #ffffff; --glass-blur: none;
     --glass-blur-pane: none; --glass-blur-small: none; --glass-line: #e1e5ea; --glass-edge: inset 0 1px 0 #ffffff;
@@ -333,21 +353,32 @@ main { max-width: 72rem; padding: var(--space-6) var(--space-5) 4rem; }
    decorative, nothing a screen reader reads). */
 body:has(> main) { display: grid; place-items: center; min-height: 100dvh;
   padding: calc(env(safe-area-inset-top) + var(--space-5)) var(--space-4) var(--space-5); }
-body:has(> main)::before {
-  background: radial-gradient(42vmax 36vmax at 50% 48%, var(--ln-glow), transparent 70%),
+body:has(> main)::before { z-index: -3;  /* the glass slab and its rim sit between the backdrop and the card */
+  background: radial-gradient(36vmax 30vmax at 50% 48%, var(--ln-glow), transparent 70%),
     radial-gradient(62vmax 52vmax at 94% 98%, var(--ln-deep), transparent 70%),
     radial-gradient(44vmax 38vmax at 4% 96%, var(--ln-deep), transparent 70%),
     radial-gradient(50vmax 40vmax at 6% 8%, var(--ln-mid), transparent 70%),
     radial-gradient(38vmax 32vmax at 90% 10%, var(--ln-mid), transparent 70%),
     linear-gradient(150deg, var(--ln-pearl), var(--ln-warm)); }
-body:has(> main)::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+body:has(> main)::after { content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
   background-color: var(--sketch-ink);
   -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat;
   mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat; }
 body > main { position: relative; width: min(27rem, 100%); margin: 0; padding: 2.25rem 2rem 2rem;
-  border: 1px solid var(--glass-line); border-radius: var(--radius-float);
-  background: var(--glass-sheen), var(--glass-hero); -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow); }
+  border-radius: var(--radius-float); }
+/* The glass is a slab behind the content (::after) and its bevelled rim a ring behind that (the last paragraph's
+   ::after, so the problem page has it too): the words keep their full ink, and the rim can bend what the slab has
+   already softened (a blur inside a blurred box sees nothing behind it). Both sit under the card, above the backdrop
+   and the sketches. */
+body > main::after, body > main > :last-child::after { content: ""; position: absolute; inset: 0; z-index: -1;
+  border-radius: var(--radius-float); pointer-events: none; }
+body > main::after { border: 1px solid var(--glass-line); background: var(--glass-hero-sheen), var(--glass-hero);
+  -webkit-backdrop-filter: var(--glass-hero-blur); backdrop-filter: var(--glass-hero-blur);
+  box-shadow: var(--glass-hero-shadow); }
+body > main > :last-child::after { padding: var(--space-3);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
+  -webkit-backdrop-filter: var(--glass-hero-rim); backdrop-filter: var(--glass-hero-rim); }
 /* The app's mark at the top of the card ("aa", hidden from screen readers like the rail's). */
 body > main::before { content: "aa" / ""; display: grid; place-items: center; width: 2.75rem; height: 2.75rem;
   margin-bottom: var(--space-4); border-radius: 0.875rem; background: var(--gloss-tint), var(--text);
@@ -851,16 +882,21 @@ main:has(.board) { max-width: none; }
   .view-switch button[aria-pressed="true"] { view-transition-name: view-choice; }
   .button[aria-current] { view-transition-name: chosen-period; }
 }
-/* The sign-in card materialises once as the page opens (blur, size and opacity together); the sketches behind it
-   are revealed by a soft diagonal sweep. A card holding an error (a wrong password) appears at once instead. */
-@keyframes card-in {
-  from { opacity: 0; transform: translateY(0.5rem) scale(0.96);
-    -webkit-backdrop-filter: blur(0) saturate(100%) brightness(1);
+/* The sign-in card materialises once as the page opens: the slab's blur and the words arrive together as the card
+   settles into place; the sketches behind it are revealed by a soft diagonal sweep. A card holding an error (a wrong
+   password) appears at once instead. The fade is on the slab, its rim and the words, never on the card itself: a
+   fading parent would switch the slab's blur off until it ends. */
+@keyframes card-in { from { transform: translateY(0.5rem) scale(0.96); } }
+@keyframes slab-in {
+  from { opacity: 0; -webkit-backdrop-filter: blur(0) saturate(100%) brightness(1);
     backdrop-filter: blur(0) saturate(100%) brightness(1); }
 }
 @keyframes sketch-sweep { from { -webkit-mask-position: center, 100% 0; mask-position: center, 100% 0; } }
 @media (prefers-reduced-motion: no-preference) {
   body > main:not(:has(.error)) { animation: card-in var(--enter) var(--ease-out) backwards; }
+  body > main:not(:has(.error))::after { animation: slab-in var(--enter) var(--ease-out) backwards; }
+  body > main:not(:has(.error)) > *, body > main:not(:has(.error))::before,
+  body > main:not(:has(.error)) > :last-child::after { animation: fade-in var(--enter) var(--ease-out) backwards; }
   body:has(> main)::after {
     -webkit-mask: url("sketches.svg") center / max(100%, 75rem) auto no-repeat,
       linear-gradient(115deg, #000 40%, transparent 60%) 0 0 / 300% 100% no-repeat;
@@ -909,7 +945,8 @@ main:has(.board) { max-width: none; }
     --glass-pane: var(--glass); --glass-thick: var(--glass); --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
     --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
-    --ln-mid: transparent; --ln-glow: transparent; --sketch-ink: transparent; --glass-hero: var(--glass); }
+    --ln-mid: transparent; --ln-glow: transparent; --sketch-ink: transparent; --glass-hero: var(--glass);
+    --glass-hero-rim: none; --glass-hero-sheen: none; }
   .list-cards .jobs tr:hover, .tcard:not(.stale):hover { border-color: var(--text); }
 }
 /* Reduce motion: nothing moves; short fades and colour changes remain. */
@@ -927,5 +964,6 @@ main:has(.board) { max-width: none; }
     --chrome-glass: var(--chrome);
     --bd-pearl: var(--bg); --bd-warm: var(--bg); --bd-glow: transparent; --bd-depth: transparent;
     --bd-mid: transparent; --ln-pearl: var(--bg); --ln-warm: var(--bg); --ln-deep: transparent;
-    --ln-mid: transparent; --ln-glow: transparent; --glass-hero: var(--surface); }
+    --ln-mid: transparent; --ln-glow: transparent; --glass-hero: var(--surface); --glass-hero-blur: none;
+    --glass-hero-rim: none; --glass-hero-sheen: none; }
 }
