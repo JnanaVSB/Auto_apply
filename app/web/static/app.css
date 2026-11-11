@@ -125,6 +125,18 @@
 @media (width < 48rem) and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --field: url("mountains-dusk-phone.webp"); }
 }
+/* The person's own background picture, kept in the private data folder and served to the signed-in person only.
+   The template writes data-own-field on <html> when such a picture is set, and data-ink says which words it
+   needs: "light" for a light picture (dark words), "dark" for a dark one (white words). Both modes then use that
+   ink set; the Auto / Light / Dark choice still rules the pages that have no picture and the plain fallbacks. When
+   the file is missing the route answers 404, the browser paints the floor, and the words keep the chosen ink. */
+:root[data-own-field] { --field: url("/background/own"); }  /* the route, not a file: the stylesheet test skips routes */
+:root[data-own-field][data-ink="dark"] { color-scheme: dark; --field-floor: #0e171c; }
+:root[data-own-field][data-ink="light"] { color-scheme: light; --field-floor: #e9e5dc; }
+/* The credit: a quiet line, never over content, never a control. On Settings → Look it is the full sentence; at
+   the end of every page a shorter caption in the content's bottom corner. */
+.credit { max-width: 60ch; color: var(--ink-muted); font-size: var(--text-small); line-height: var(--leading-small); }
+main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-width: none; }
 
 /* ---------- Colour schemes ---------- */
 /* Chosen per browser on Settings (Look): data-theme forces a mode, data-palette swaps the colours. Teal above is the
@@ -226,7 +238,7 @@
 /* Browsers without light-dark() (before Chrome 123, Firefox 120, Safari 17.5) would drop every colour: they get
    Teal light as plain colours, whatever is chosen; the frame tokens take Teal's frame. */
 @supports not (color: light-dark(#000, #fff)) {
-  :root, :root[data-palette], :root[data-theme] {
+  :root, :root[data-palette], :root[data-theme], :root[data-own-field][data-ink] {  /* the own picture's floor too */
     color-scheme: light;
     --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2; --text: #1b2128; --muted: #56606b;
     --line: #e1e5ea; --line-strong: #7e8894; --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
@@ -927,7 +939,9 @@ main:has(.board) { max-width: none; }
 /* More contrast and reduce transparency: a plain page in the field's floor tone, solid panes, no blur, no picture,
    no letter edge; more contrast adds defined borders. */
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
-  :root, :root[data-palette] { --glass: var(--slab); --glass-blur: none; --glass-blur-deep: none; --halo: none;
+  /* every picture rule above, the dusk and own ones included, is outranked here: same specificity, later */
+  :root:not([data-theme]), :root[data-theme], :root[data-palette], :root[data-own-field][data-ink] {
+    --glass: var(--slab); --glass-blur: none; --glass-blur-deep: none; --halo: none;
     --field: none; --field-floor: var(--bg); --control-fill: var(--slab); --glass-hero: var(--surface);
     --glass-hero-blur: none; --glass-hero-rim: none; }
   body:has(> main)::before { background: var(--bg); }  /* the sign-in page: a plain colour, no picture */

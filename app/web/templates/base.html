@@ -1,6 +1,7 @@
 <!doctype html>
 {% set scheme, mode = look %}{# chosen on Settings; the defaults need no attribute #}
-<html lang="en"{% if scheme != "today" %} data-palette="{{ scheme }}"{% endif %}{% if mode != "auto" %} data-theme="{{ mode }}"{% endif %}>
+{% set own_field = background() %}{# the person's own picture, looked up only by a whole page, never by the boxes it redraws #}
+<html lang="en"{% if scheme != "today" %} data-palette="{{ scheme }}"{% endif %}{% if mode != "auto" %} data-theme="{{ mode }}"{% endif %}{% if own_field.in_use %} data-own-field data-ink="{{ own_field.ink }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -96,6 +97,7 @@
   {% endif %}
   <main id="main">
     {% block content %}{% endblock %}
+    {% if framed and own_field.in_use %}<p class="credit credit-corner">{{ own_field.credit }}</p>{% endif %}
   </main>
   {% if framed %}
     </div>

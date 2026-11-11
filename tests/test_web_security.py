@@ -12,7 +12,7 @@ from helpers import PASSWORD, add_job, csrf, log_in
 from app import collect, db
 from app.config import Config
 from app.web import __main__ as web_command
-from app.web import main, security
+from app.web import background, main, security
 
 
 def test_password_hash_is_salted_and_never_holds_the_password():
@@ -321,7 +321,9 @@ def test_the_local_htmx_file_is_the_recorded_release():
 def test_fonts_and_icons_are_served_with_their_licences(client):
     static = main.HERE / "static"
     found = re.findall(r'url\("([^"]+)"\)', (static / "app.css").read_text())
-    assert found and all((static / path).is_file() for path in found)  # every file the stylesheet asks for exists
+    routes = {path for path in found if path.startswith("/")}  # the dashboard's own addresses, not files
+    assert routes <= {background.ROUTE}  # written out: a new address in the stylesheet is a decision
+    assert found and all((static / path).is_file() for path in found if path not in routes)  # every file exists
     for path, kind in (
         ("fonts/SourceSans3VF-Upright.ttf.woff2", "font/woff2"),
         ("fonts/SourceSerif4-Regular.ttf.woff2", "font/woff2"),

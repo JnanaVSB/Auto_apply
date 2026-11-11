@@ -29,6 +29,7 @@ from app.submit import fill_words, fills
 from app.web import (
     actions,
     answer_key,
+    background,
     council_settings,
     council_view,
     drafts,
@@ -164,6 +165,8 @@ def create_app(
                     "Try again; if it keeps happening, restart the dashboard.",
                 )
         response.headers.update(security.SAFETY_HEADERS)
+        if request.scope["path"] == background.ROUTE and response.status_code in (200, 304):
+            response.headers["Cache-Control"] = "private, no-cache"  # the person's own file: kept, checked each time
         # public program files: kept, but checked with the dashboard each time; fonts: kept a day, not re-sent per page
         if request.scope["path"].startswith("/static/") and response.status_code in (200, 304):
             font = request.scope["path"].endswith(".woff2")
@@ -412,6 +415,7 @@ def create_app(
     drafts.add_routes(app, _page, data_dir)
     submit.add_routes(app, _page, data_dir)
     look.add_routes(app)
+    background.add_routes(app, data_dir)
     tracker.add_routes(app, _page, data_dir)
     return app
 
@@ -604,6 +608,7 @@ def _page(request: Request, name: str, status: int = 200, **values) -> HTMLRespo
     # worked out only by a page that shows it (base.html), never by the boxes it redraws
     values["topbar"] = partial(council_view.topbar, request.app.state.conn) if session else None
     values["list_view"], values["look"] = look.of(request)
+    values["background"] = partial(background.of, request.app.state.background) if session else background.Own
     return templates.TemplateResponse(request, name, values, status_code=status)
 
 

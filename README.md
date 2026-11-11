@@ -321,6 +321,9 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 
 ## Privacy and security
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.
+- Your own background picture, if you set one (Settings → Look says how), lives in `data/background/` with its
+  credit line and is shown only to you; it is never part of the project. Pictures built into the app are
+  Unsplash-licensed and credited in the stylesheet.
 - Gmail is optional and read-only: it never sends or changes mail, and an e-mail's text stays on this computer.
   To connect your own, see [docs/gmail-setup.md](docs/gmail-setup.md).
 - Secrets live only in your OS keychain; the database is encrypted with SQLCipher.
