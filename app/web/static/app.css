@@ -60,26 +60,37 @@
   --halo: 0 0 1px light-dark(rgb(255 255 255 / 90%), rgb(0 0 0 / 70%)), 0 1px 2px light-dark(rgb(255 255 255 / 80%), rgb(0 0 0 / 55%)),
     0 0 10px light-dark(rgb(255 255 255 / 60%), rgb(0 0 0 / 35%));
 
-  /* Clear glass: no fill and no blur, so the picture's detail passes through every pane as sharp as it is; what
-     makes a pane glass is its rim, its top highlight and its shadow. A blur stays only on the three layers that
-     open over other words (the phone's menu panel, the dialog, the job table's floating header row). Frame pieces
-     carry a brighter rim than content panes, so the two layers read apart without a fill. */
+  /* Clear glass: no fill, no tint and no blur anywhere in a pane's body, so the picture inside it is the picture
+     beside it. The glass lives at the edge: a hair-thin ring lit from the top left (--rim, drawn once per pane in
+     "Edge light" below), a soft glow a few pixels wide just inside it (--rim-glow), a faint dark line along the
+     bottom and right so the slab has thickness, and a soft shadow outside so it floats. A blur stays only on the
+     three layers that open over other words (the phone's menu panel, the dialog, the job table's floating header
+     row). Frame pieces carry a brighter rim than content panes, so the two layers read apart without a fill. */
   --glass: transparent;
   --glass-blur: none;
   --glass-blur-deep: blur(16px) saturate(130%);
   --glass-line: light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 34%));  /* the frame's rim */
   --pane-line: light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 16%));   /* a content pane's rim */
   --hairline: light-dark(rgb(0 0 0 / 10%), rgb(255 255 255 / 10%));          /* a divider drawn on glass */
-  --control-line: light-dark(rgb(0 0 0 / 35%), rgb(255 255 255 / 40%));      /* a clear capsule's rim */
-  --control-fill: light-dark(rgb(255 255 255 / 28%), rgb(0 0 0 / 14%));      /* the faintest tint that finds a field */
-  --lift: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 8%));                /* a faint fill: chips, capsules */
-  /* Shadows: a thin top highlight, a faint dark edge, a soft depth; deeper under the floating frame. */
-  --glass-shadow: inset 0 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 26%)),
+  --control-line: light-dark(rgb(0 0 0 / 42%), rgb(255 255 255 / 50%));      /* a clear capsule's or field's rim */
+  --control-fill: transparent;                                                /* a field has no tint; its edge finds it */
+  --lift: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 8%));                /* a faint fill: hover, the chosen view, loading bars */
+  /* The lit ring: brightest at the top left where a pane would catch the light, fading along the sides, a faint
+     dark line along the bottom and right (angles run clockwise from the top). Clipped to the rim; never a body. */
+  --rim: conic-gradient(from 0deg, light-dark(rgb(255 255 255 / 95%), rgb(255 255 255 / 75%)),
+    light-dark(rgb(255 255 255 / 40%), rgb(255 255 255 / 24%)) 75deg,
+    light-dark(rgb(0 0 0 / 18%), rgb(0 0 0 / 50%)) 130deg 210deg,
+    light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 30%)) 265deg, #ffffff 318deg,
+    light-dark(rgb(255 255 255 / 95%), rgb(255 255 255 / 75%)));
+  --rim-glow: inset 0 0 5px light-dark(rgb(255 255 255 / 45%), rgb(255 255 255 / 14%));  /* light bending at the edge */
+  /* Shadows: a thin top highlight, the inner glow, a faint dark edge, a soft depth; deeper under the floating frame. */
+  --glass-shadow: inset 0 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 26%)), var(--rim-glow),
     0 0 0 1px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 16%)), 0 1px 4px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 18%)),
     0 24px 56px -24px light-dark(rgb(0 0 0 / 30%), rgb(0 0 0 / 50%));
-  --shadow: inset 0 1px 0 light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 14%)),
+  --shadow: inset 0 1px 0 light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 14%)), var(--rim-glow),
     0 0 0 1px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 12%)), 0 12px 32px -20px light-dark(rgb(0 0 0 / 25%), rgb(0 0 0 / 45%));
   --shadow-raised: inset 0 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 30%)),
+    inset 0 0 6px light-dark(rgb(255 255 255 / 60%), rgb(255 255 255 / 20%)),
     0 0 0 1px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 22%)), 0 2px 6px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 28%)),
     0 24px 56px -20px light-dark(rgb(0 0 0 / 30%), rgb(0 0 0 / 65%));
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);  /* every movement: quick start, soft landing */
@@ -87,8 +98,9 @@
      panels arrive one after another. */
   --press: 120ms; --quick: 160ms; --settle: 240ms; --page: 300ms; --enter: 340ms; --stagger: 50ms;
   --lit: inset 0 1px 0 rgb(255 255 255 / 45%), inset 0 -1px 0 rgb(0 0 0 / 25%);  /* a coloured fill's two edges */
-  /* A capsule's quiet cap, and a coloured fill's. */
-  --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 45%), rgb(255 255 255 / 16%)), transparent 45%);
+  /* A capsule's light along its top edge (a few pixels, not a cap over its body), and a coloured fill's cap. */
+  --gloss: linear-gradient(180deg, light-dark(rgb(255 255 255 / 85%), rgb(255 255 255 / 40%)),
+    light-dark(rgb(255 255 255 / 20%), rgb(255 255 255 / 8%)) 2px, transparent 6px);
   --gloss-tint: linear-gradient(180deg, rgb(255 255 255 / 26%), rgb(255 255 255 / 4%) 40%, transparent 44%);
   --pill-edge: inset 0 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 40%)),
     inset 0 -1px 0 light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 30%));  /* a small glass piece's rims */
@@ -207,13 +219,12 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
   /* The palette brought forward: links in the forest green itself (darkened a step for the morning picture's
      ridges, lifted for dusk), titles in the ochre unmixed, and the warm half as tints for capsules and badges. */
   --link: light-dark(#1f3321, #b9d7c2); --ink-title: var(--title);
-  --tan-tint: light-dark(rgb(163 135 106 / 32%), rgb(163 135 106 / 30%));   /* a capsule or badge */
-  --ochre-tint: light-dark(rgb(147 106 43 / 26%), rgb(147 106 43 / 34%));   /* the lane count badge */
+  --tan: light-dark(#a3876a, #c9b096);  /* the outline of a capsule or badge (no fill) */
 }
 /* Scheme G alone wears its palette on the controls: the lit rail item, the chosen item of a set and the primary
-   button are solid forest green with the off-white label (sage with the near-black label at dusk); capsules,
-   badges and status words are tan or ochre tints; the Tracker's lanes take the five hues and their steps. Content
-   panes stay clear. */
+   button are solid forest green with the off-white label (sage with the near-black label at dusk); capsules and
+   badges are outlined in tan; the Tracker's lanes take the five hues and their steps, carried by the lane dot and
+   the count's ring as in every scheme. Content panes and cards stay clear, with no tint of their own. */
 :root[data-palette="G"] {
   .nav-group a[aria-current="page"], button[aria-pressed="true"], .button[aria-current] {
     background: var(--gloss-tint), var(--accent); color: var(--on-accent); border-color: transparent;
@@ -221,15 +232,13 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
   .nav-group a[aria-current="page"] .icon { color: var(--on-accent); }
   .rail .nav-group a[aria-current="page"] { box-shadow: var(--lit), 0 4px 12px -6px rgb(0 0 0 / 40%); }
   .view-switch button[aria-pressed="true"] { background-color: var(--accent); }
-  .mark, .counts a, .tcard .days { background: var(--tan-tint); color: var(--text); }
-  .lane .count { background: var(--ochre-tint); }
+  .mark:not(.ok, .warn, .danger), .counts a, .tcard .days { color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--tan), var(--pill-edge); }
   .brand-mark, body > main::before { background: var(--gloss-tint), var(--accent); color: var(--on-accent); }
   /* The warning chip keeps its own shape and sign ("!" and the triangle), so ochre is never mistaken for a warning. */
   #lane-ready { --lane-ink: var(--accent); } #lane-applied { --lane-ink: light-dark(#936a2b, #d2ad6e); }
   #lane-assessment { --lane-ink: light-dark(#a3876a, #c9b096); } #lane-interview { --lane-ink: light-dark(#5f8a66, #a9cbb3); }
   #lane-offer { --lane-ink: light-dark(#1f3321, #8fb79a); } #lane-rejected { --lane-ink: light-dark(#4a5a50, #8a968d); }
-  .tcard { background: linear-gradient(180deg, color-mix(in srgb, var(--lane-ink) 34%, transparent),
-    color-mix(in srgb, var(--lane-ink) 8%, transparent) 2.5rem, transparent 4rem); }
   :is(input, select, textarea):focus-visible { border-color: var(--accent); }
   /* The rail and the phone bar are solid near-black green, as the sample's rail is: the one place the scheme's
      deepest colour stands as a block. Frame, not content; the content panes stay clear. Off-white words, the
@@ -255,6 +264,7 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
     --ok: #2e6b34; --warn: #8a4f00; --danger: #b3261e; --highlight: #ffe58f; --on-highlight: #1b2128; --title: #1b2128;
     --hover: rgb(27 33 40 / 7%); --hairline: #e1e5ea; --pane-line: #e1e5ea; --control-line: #7e8894;
     --control-fill: #ffffff; --lift: #ebeef2; --field: none; --field-floor: #f3f5f7; --slab: #ffffff; --halo: none;
+    --rim: none;
     --glass-hero: #ffffff; --glass-hero-line: #e1e5ea; --glass-hero-blur: none; --glass-hero-rim: none;
     --glass-hero-shadow: 0 1px 2px rgb(0 0 0 / 5%), 0 10px 30px -6px rgb(0 0 0 / 12%);
     --ink-muted: #56606b; --ink-danger: #b3261e; --ink-warn: #8a4f00; --link: #0f6a80; --ink-title: #1b2128;
@@ -279,10 +289,10 @@ body { --muted: var(--ink-muted); --warn: var(--ink-warn); --danger: var(--ink-d
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background: var(--field) center / cover no-repeat var(--field-floor); }
 /* Over a picture the letters carry their own edge: a tight halo right against each letter and a softer spread
-   beyond, on the words only, never on fields, filled controls, status labels or the mark. */
+   beyond. Everything that sits on clear glass has it, fields, capsules and labels included (nothing gives them a
+   ground any more); only words on a solid colour go without. */
 .app :is(main, .rail, .topbar, .dock) { text-shadow: var(--halo); }
-.app :is(input, select, textarea, .mark, .brand-mark, .dock-button, .primary, mark, .lane .count, .tcard .days, code,
-  .lines, .note) { text-shadow: none; }
+.app :is(.brand-mark, .dock-button, .primary, mark) { text-shadow: none; }
 h1, h2 { font-family: var(--serif); font-weight: 600; }
 h1 { margin: 0 0 var(--space-4); font-size: var(--text-display); line-height: var(--leading-display);
   letter-spacing: -0.02em; }
@@ -317,6 +327,22 @@ table { font-variant-numeric: tabular-nums; }
    over the page's words, so they alone keep a blur. Each piece below adds its own shape. */
 .skip, .rail::before, .topbar, .dock > summary, .sheet, dialog.ask { background: var(--glass); box-shadow: var(--glass-shadow); }
 .sheet, dialog.ask { -webkit-backdrop-filter: var(--glass-blur-deep); backdrop-filter: var(--glass-blur-deep); }
+/* Edge light: the lit ring (--rim) on every pane and frame piece that has a plain rim, drawn by a layer over the
+   border and clipped to a 1 px ring (two masks, the inner one excluded), so the body stays empty. Under the pointer
+   the ring brightens; nothing moves or loops. Left out: the cost bar and the menu panel, which scroll inside
+   themselves (a layer past their edge would scroll with them), tables (their rows are the detail), the dashed cards,
+   and the job page's loading placeholders, which already use both layers. Without mask support the plain rim stays. */
+@supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
+  :is(.tcard:not(.stale, .sortable-ghost), .list-cards .jobs tr, main > :is(form.stacked, section:has(> form.stacked)),
+    main > form:not(.stacked, .view-switch, .filters, .score-these):has(> button):has(> .muted), .filters,
+    .filters-fold > summary, .dock > summary, dialog.ask)::before, .found::after, .rail::after {
+    content: ""; position: absolute; inset: -1px; padding: 1px; border-radius: inherit; pointer-events: none;
+    background: var(--rim); opacity: 0.8;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
+    transition: opacity var(--quick) var(--ease-out); }
+  :is(.tcard:not(.stale), .list-cards .jobs tr, .filters-fold > summary, .dock > summary):hover::before { opacity: 1; }
+}
 .skip { position: absolute; left: var(--space-4); top: -5rem; z-index: 40; display: inline-flex; align-items: center;
   min-height: var(--tap); padding: 0 var(--space-5); border: 1px solid var(--glass-line);
   border-radius: var(--radius-pill); background-color: var(--slab); font-weight: 600; }
@@ -371,10 +397,11 @@ body > main::before { content: "aa" / ""; display: grid; place-items: center; wi
   height: calc(100dvh - env(safe-area-inset-top)); overflow-y: auto; display: flex;
   flex-direction: column; gap: 2px; padding: calc(var(--inset) + var(--space-1)) calc(var(--inset) + 0.25rem);
   margin-left: env(safe-area-inset-left); scrollbar-width: none; }
-.rail::before { content: ""; position: fixed; z-index: -1; pointer-events: none;
+.rail::before, .rail::after { content: ""; position: fixed; z-index: -1; pointer-events: none;
   top: calc(env(safe-area-inset-top) + var(--inset)); bottom: var(--inset);
   left: calc(env(safe-area-inset-left) + var(--inset)); width: calc(var(--rail) - 2 * var(--inset));
-  border: 1px solid var(--glass-line); border-radius: var(--radius-float); }
+  border-radius: var(--radius-float); }
+.rail::before { border: 1px solid var(--glass-line); }  /* ::after is its lit ring (Edge light, above) */
 .brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; margin: var(--space-1) auto var(--space-2);
   border-radius: var(--radius-s); background: var(--gloss-tint), var(--text); color: var(--field-floor);
   font-size: var(--text-ui); font-weight: 700; }
@@ -447,7 +474,7 @@ body > main::before { content: "aa" / ""; display: grid; place-items: center; wi
 :is(.dock, .topbar, .filters-fold, .lane) > summary::-webkit-details-marker { display: none; }
 /* With large text the page name wraps between its words first; Menu moves to a second line only when the name's
    longest word can't sit beside it. On one line the bar is still a pill (radius = half of 3.5rem). */
-.dock > summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+.dock > summary { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
   min-height: 3.5rem; padding: var(--space-1) var(--space-2) var(--space-1) 1.25rem;
   border: 1px solid var(--glass-line); border-radius: var(--radius-float); cursor: pointer;
   box-shadow: var(--glass-shadow); }
@@ -508,7 +535,7 @@ button, .button { display: inline-flex; align-items: center; justify-content: ce
     border-color var(--quick) var(--ease-out), color var(--quick) var(--ease-out),
     box-shadow var(--quick) var(--ease-out), filter var(--quick) var(--ease-out),
     outline-offset var(--press) var(--ease-out), transform var(--press) var(--ease-out); }
-button:hover, .button:hover { background-color: var(--lift); background-position: 0 -0.375rem;
+button:hover, .button:hover { background-color: var(--lift); background-position: 0 0.125rem;  /* the light slides a touch */
   border-color: var(--text); }
 button:active, .button:active { transform: scale(0.97, 0.94);  /* feedback the moment it is pressed */
   box-shadow: var(--pill-edge), inset 0 0 0 1px light-dark(#ffffff, rgb(255 255 255 / 45%)); }
@@ -528,12 +555,15 @@ button[aria-pressed="true"], .button[aria-current] { border-color: var(--accent)
   background-color: var(--accent-soft); color: var(--text); font-weight: 700; box-shadow: var(--pill-edge); }
 button:disabled { border-color: var(--line); background: var(--sunken); box-shadow: none; color: var(--muted);
   cursor: not-allowed; transform: none; filter: none; }
-/* A field is set into the glass: the faintest tint, a visible edge and an inner shade; no blur, the picture
-   stays sharp through it. */
+/* A field is a clear recess in the glass, the edge in miniature: a visible rim, a thin shade under its top edge, a
+   light along its bottom edge inside and a lip outside; no tint, no blur, the picture stays as it is through it.
+   The typed words carry the letter edge like the rest of the page. */
 input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea { max-width: 100%;
   min-height: var(--control); padding: 0 var(--space-3); border: 1px solid var(--control-line);
   border-radius: var(--radius-s); background: var(--control-fill);
-  box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 35%));
+  box-shadow: inset 0 1px 2px light-dark(rgb(0 0 0 / 22%), rgb(0 0 0 / 50%)),
+    inset 0 -1px 0 light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 18%)),
+    0 1px 0 light-dark(rgb(255 255 255 / 60%), rgb(255 255 255 / 10%));
   transition: border-color var(--quick) var(--ease-out), box-shadow var(--quick) var(--ease-out),
     outline-offset var(--press) var(--ease-out); }
 :is(input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea):hover { border-color: var(--text); }
@@ -563,15 +593,15 @@ select option { background: var(--slab); color: var(--text); }  /* the list itse
 .login input { background: rgb(0 0 0 / 14%); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   border-color: rgb(255 255 255 / 48%); box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%); }
 /* A page's own form (Settings and its pages, Add, Questionnaire …) is a clear pane. */
-main > :is(form.stacked, section:has(> form.stacked)) { max-width: 44rem; padding: var(--space-5);
+main > :is(form.stacked, section:has(> form.stacked)) { position: relative; max-width: 44rem; padding: var(--space-5);
   border: 1px solid var(--pane-line); border-radius: var(--radius-l); background: var(--glass);
   box-shadow: var(--shadow); }
 main > section:has(> form.stacked) { margin-bottom: var(--space-5); }  /* Add: each way to add is its own pane */
 main > section:has(> form.stacked) > h2:first-child { margin-top: 0; }
 /* An action with its explanation (Collect now, Score now): a clear row, the button first, the words at a reading
    length beside or under it, in the secondary size. "Score these N jobs" on the list pages is a plain row. */
-main > form:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { display: flex; flex-wrap: wrap;
-  align-items: center; gap: var(--space-2) var(--space-4); width: fit-content; max-width: 100%;
+main > form:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { position: relative; display: flex;
+  flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); width: fit-content; max-width: 100%;
   margin: 0 0 var(--space-3);
   padding: var(--space-3) var(--space-4); border: 1px solid var(--pane-line); border-radius: var(--radius-l);
   background: var(--glass); box-shadow: var(--shadow); }
@@ -616,28 +646,29 @@ table.jobs .reasons { font-size: var(--text-ui); color: var(--muted); }
 dialog.ask { position: fixed; inset-block-start: 30%; z-index: 35; max-inline-size: min(28rem, calc(100vw - 2rem));
   padding: var(--space-5); border: 1px solid var(--glass-line); border-radius: var(--radius-l); color: var(--text);
   box-shadow: var(--shadow-raised); }
-/* Status labels: a word in a small clear capsule tinted with its meaning; a problem also gets an "!" mark, so
-   colour is never the only sign. */
+/* Status labels: a word in a small clear capsule outlined in its meaning's colour (no tint); a problem also gets
+   a solid "!" mark, so colour is never the only sign. */
 .mark { display: inline-block; padding: 0.0625rem var(--space-2); border-radius: var(--radius-pill);
-  background: var(--lift); color: var(--text); font-size: var(--text-small); line-height: 1.5; letter-spacing: 0.01em;
-  font-weight: 600; white-space: nowrap; box-shadow: var(--pill-edge);
-  transition: background-color var(--quick) var(--ease-out), color var(--quick) var(--ease-out); }
-.mark.ok { background-color: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
-.mark.warn { background-color: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
-.mark.danger { background-color: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+  background: none; color: var(--text); font-size: var(--text-small); line-height: 1.5; letter-spacing: 0.01em;
+  font-weight: 600; white-space: nowrap;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 70%, transparent), var(--pill-edge);
+  transition: color var(--quick) var(--ease-out); }
+.mark.ok { color: var(--ok); }
+.mark.warn { color: var(--warn); }
+.mark.danger { color: var(--danger); }
 .mark:is(.warn, .danger)::before { content: "!" / ""; display: inline-grid; place-items: center; width: 1.1em;
   height: 1.1em; margin-right: 0.3em; border-radius: 50%; color: var(--field-floor);
   font-size: 0.85em; font-weight: 800; vertical-align: 0.05em; }
 .mark.warn::before { background: var(--warn); }
 .mark.danger::before { background: var(--danger); }
-/* The Truth checker's notes in the council notes: a tinted box, not a label. */
-.truth { padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); background: var(--sunken); }
+/* The Truth checker's notes in the council notes: a clear box with a hairline, not a label. */
+.truth { padding: var(--space-2) var(--space-3); border-radius: var(--radius-s); box-shadow: inset 0 0 0 1px var(--hairline); }
 mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a second sign besides the colour */
 /* Notices */
 .error { color: var(--ink-danger); }
 .hint, .summary, .muted { color: var(--ink-muted); }
 .result { padding: var(--space-2) var(--space-3); border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius-s) var(--radius-s) 0; background: var(--accent-soft); }
+  border-radius: 0 var(--radius-s) var(--radius-s) 0; box-shadow: inset 0 0 0 1px var(--pane-line); }
 /* The job page's boxes are clear panes. Their glass is drawn by a layer behind the content, not the box itself:
    a blurred box would trap the fixed "Scoring is running" dialog that the Ready box can hold. */
 .found { position: relative; isolation: isolate; margin: var(--space-4) 0; padding: var(--space-4) var(--space-5);
@@ -656,12 +687,12 @@ main > [hx-get][hx-trigger="load"]:empty::after { top: 3.5rem; right: var(--spac
   background: linear-gradient(var(--lift) 0 0.75rem, transparent 0.75rem 1.5rem, var(--lift) 1.5rem 2.25rem,
     transparent 2.25rem) left / 70% 100% no-repeat; }
 .lines { max-height: 30rem; overflow-y: auto; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
-  background: var(--sunken); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-ui);
+  box-shadow: inset 0 0 0 1px var(--hairline); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-ui);
   line-height: var(--leading-ui); }
 .pager { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); justify-content: center;
   align-items: center; margin: var(--space-4) 0; }
 .pager a { display: inline-flex; align-items: center; min-height: var(--control); font-variant-numeric: tabular-nums; }
-.filters { margin-bottom: var(--space-5); padding: var(--space-4); background: var(--glass);
+.filters { position: relative; margin-bottom: var(--space-5); padding: var(--space-4); background: var(--glass);
   border: 1px solid var(--pane-line); border-radius: var(--radius-l); box-shadow: var(--shadow); }
 .filters p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
   margin: 0 0 var(--space-3); }
@@ -703,11 +734,12 @@ p.company { font-size: var(--text-heading); margin-top: -0.5rem; text-wrap: bala
 td.actions { display: table-cell; margin: 0; }
 td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 var(--space-2) var(--space-2) 0;
   vertical-align: top; }
-/* The counts line: running text whose links are quiet capsules (a faint fill, no rim, the control height). */
+/* The counts line: running text whose links are clear capsules (a thin rim, no fill, the control height). */
 .counts { margin: 0 0 var(--space-4); color: var(--ink-muted); font-size: var(--text-ui); line-height: 1.6;
   font-variant-numeric: tabular-nums; }
 .counts a { display: inline-flex; align-items: center; min-height: var(--control); margin: 0.125rem 0;
-  padding: 0 var(--space-3); border-radius: var(--radius-pill); background: var(--lift); color: var(--text);
+  padding: 0 var(--space-3); border-radius: var(--radius-pill); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--control-line), var(--pill-edge);
   text-decoration: none; font-weight: 600; vertical-align: middle;
   transition: background-color var(--quick) var(--ease-out), transform var(--press) var(--ease-out),
     outline-offset var(--press) var(--ease-out); }
@@ -751,7 +783,7 @@ main:has(.view-switch) > :is(.counts, .score-these) { margin-top: var(--space-2)
   /* Each card a clear pane; under the pointer its rim and shadow brighten (no movement: a blurred pane that
      moves would redraw its blur every frame). */
   .jobs tbody { gap: 1.25rem; }
-  .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; align-content: start;
+  .jobs tr { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; align-content: start;
     gap: var(--space-1) var(--space-3); padding: var(--space-4); border: 1px solid var(--pane-line);
     border-radius: var(--radius-l); background: var(--glass); box-shadow: var(--shadow);
     transition: box-shadow var(--settle) var(--ease-out), border-color var(--settle) var(--ease-out); }
@@ -782,8 +814,9 @@ main:has(.board) { max-width: none; }
 .board { display: grid; gap: var(--space-3); align-items: start; overflow-x: auto; padding-bottom: var(--space-2);
   grid-template-columns: repeat(4, minmax(var(--lane-min), 1fr)) 0.25rem repeat(2, minmax(var(--lane-min), 1fr)); }
 .outcome-gap { align-self: stretch; border-radius: var(--radius-pill); background: var(--hairline); }
-/* A lane is a column of air: a name, a count in the lane's ink, and its cards; no box of its own. Relative: its
-   hidden screen-reader words stay inside the scrolling board. Each lane has an ink that tints its cards' tops. */
+/* A lane is a column of air: a name, a count outlined in the lane's ink, and its cards; no box of its own. Relative:
+   its hidden screen-reader words stay inside the scrolling board. Each lane has an ink: a dot before each card's
+   title and the count's ring carry it; the cards themselves stay clear. */
 .lane { position: relative; min-width: 0; border-radius: var(--radius); }
 #lane-ready { --lane-ink: var(--accent); } #lane-applied { --lane-ink: light-dark(#5b7fd6, #9fb8ff); }
 #lane-assessment { --lane-ink: light-dark(#a86b12, #e7b565); } #lane-interview { --lane-ink: light-dark(#7a5bc9, #cdaaff); }
@@ -794,21 +827,22 @@ main:has(.board) { max-width: none; }
 .lane h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--sans); font-size: var(--text-compact);
   line-height: var(--leading-compact); letter-spacing: 0; font-weight: 700; color: var(--text); }
 .lane .count { display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 0.375rem;
-  border-radius: var(--radius-pill); background: color-mix(in srgb, var(--lane-ink) 24%, transparent);
+  border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1.5px var(--lane-ink);
   color: var(--text); font-size: var(--text-small); font-weight: 700; font-variant-numeric: tabular-nums; }
 .lane .kind { grid-column: 1 / -1; grid-row: 2; color: var(--ink-muted); font-size: var(--text-small); }
 .cards { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
-/* A clear pane with a tinted top in the lane's ink (the status, not decoration); under the pointer its rim and
-   shadow brighten (shadow only: SortableJS moves the card itself while dragging, and a blurred pane that moves
-   would redraw its blur every frame). */
+/* A clear pane; the lane's ink is a small solid dot before the title (the status, not decoration). Under the
+   pointer its rim and shadow brighten (shadow only: SortableJS moves the card itself while dragging). */
 .tcard { position: relative; display: grid; gap: 0.125rem; padding: var(--space-3); border: 1px solid var(--pane-line);
-  border-radius: var(--radius); background: linear-gradient(180deg, color-mix(in srgb, var(--lane-ink) 24%, transparent),
-    color-mix(in srgb, var(--lane-ink) 5%, transparent) 2.5rem, transparent 4rem); box-shadow: var(--shadow);
+  border-radius: var(--radius); background: var(--glass); box-shadow: var(--shadow);
   transition: box-shadow var(--settle) var(--ease-out), border-color var(--settle) var(--ease-out),
     outline-offset var(--press) var(--ease-out); }
 .tcard:not(.stale):hover { box-shadow: var(--shadow-raised); border-color: var(--glass-line); }
 .tcard p { margin: 0; }
 .tcard h3 { margin: 0; font-size: var(--text-compact); line-height: 1.35; overflow-wrap: anywhere; hyphens: auto; }
+.tcard h3::before { content: ""; display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.375rem;
+  border-radius: 50%; background: var(--lane-ink); vertical-align: 0.05em;
+  box-shadow: 0 0 0 1px light-dark(rgb(255 255 255 / 70%), rgb(0 0 0 / 40%)); }
 .tcard:has(.days) h3 { padding-right: 2.75rem; }
 .tcard h3 a { color: var(--text); text-decoration: none; }
 .tcard h3 a::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }  /* the whole card */
@@ -821,8 +855,8 @@ main:has(.board) { max-width: none; }
   line-height: var(--leading-small); }
 /* Days since you applied, top right (none on Ready). */
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
-  border-radius: var(--radius-pill); background: var(--sunken); color: var(--muted); font-size: var(--text-caption);
-  line-height: 1.6; font-weight: 700; font-variant-numeric: tabular-nums; }
+  border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1px var(--control-line); color: var(--muted);
+  font-size: var(--text-caption); line-height: 1.6; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* The card's forms (I applied, the round, Move to) sit above its link, so they can be used. */
 .tcard form { position: relative; z-index: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
   gap: var(--space-1) var(--space-2); margin-top: var(--space-2); color: var(--muted); font-size: var(--text-small);
@@ -830,14 +864,13 @@ main:has(.board) { max-width: none; }
 .tcard select { min-width: 0; max-width: 100%; padding: 0 var(--space-3); border-radius: var(--radius-pill);
   font-size: var(--text-body); }  /* 16 px: a phone zooms the page for a smaller field */
 .tcard label { min-width: 0; }  /* with the form's: a list with a long stage name shrinks to fit the card */
-/* No change for the set number of days: a dashed warm rim, no tint, with a word and an icon in a small warning
-   chip, not colour alone. */
+/* No change for the set number of days: a dashed warm rim, no tint, with a word and an icon in a small outlined
+   warning label, not colour alone. */
 .tcard.stale { border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent); background: none; box-shadow: none; }
 .tcard.stale :is(h3 a, .company, .meta, form) { color: var(--ink-muted); }
 .tcard .note { display: inline-flex; align-items: center; gap: 0.375rem; justify-self: start; margin-top: 0.375rem;
   padding: 0.125rem var(--space-2); border-radius: var(--radius-s);  /* it can wrap in a narrow lane */
-  background: color-mix(in srgb, var(--warn) 22%, transparent); box-shadow: var(--pill-edge); color: var(--warn);
-  font-size: var(--text-small); font-weight: 600; }
+  box-shadow: inset 0 0 0 1px var(--warn); color: var(--warn); font-size: var(--text-small); font-weight: 600; }
 .tcard .note .icon { width: 1rem; height: 1rem; }
 .lane .empty { margin: 0; padding: 1.25rem var(--space-3); border: 1px dashed var(--hairline);
   border-radius: var(--radius); color: var(--ink-muted); font-size: var(--text-ui); line-height: 1.5;
@@ -951,7 +984,7 @@ main:has(.board) { max-width: none; }
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   /* every picture rule above, the dusk and own ones included, is outranked here: same specificity, later */
   :root:not([data-theme]), :root[data-theme], :root[data-palette], :root[data-own-field][data-ink] {
-    --glass: var(--slab); --glass-blur: none; --glass-blur-deep: none; --halo: none;
+    --glass: var(--slab); --glass-blur: none; --glass-blur-deep: none; --halo: none; --rim: none; --rim-glow: none;
     --field: none; --field-floor: var(--bg); --control-fill: var(--slab); --glass-hero: var(--surface);
     --glass-hero-blur: none; --glass-hero-rim: none; }
   body:has(> main)::before { background: var(--bg); }  /* the sign-in page: a plain colour, no picture */
