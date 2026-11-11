@@ -60,17 +60,18 @@
   --halo: 0 0 1px light-dark(rgb(255 255 255 / 90%), rgb(0 0 0 / 70%)), 0 1px 2px light-dark(rgb(255 255 255 / 80%), rgb(0 0 0 / 55%)),
     0 0 10px light-dark(rgb(255 255 255 / 60%), rgb(0 0 0 / 35%));
 
-  /* Clear glass: no fill, a slight blur with a mild saturation lift; a deeper blur only where other words scroll
-     beneath (the cost bar, the menu panel, the dialog, the job table's floating header). Frame pieces carry a
-     brighter rim than content panes, so the two layers read apart without a fill. */
+  /* Clear glass: no fill and no blur, so the picture's detail passes through every pane as sharp as it is; what
+     makes a pane glass is its rim, its top highlight and its shadow. A blur stays only on the three layers that
+     open over other words (the phone's menu panel, the dialog, the job table's floating header row). Frame pieces
+     carry a brighter rim than content panes, so the two layers read apart without a fill. */
   --glass: transparent;
-  --glass-blur: blur(2px) saturate(115%);
+  --glass-blur: none;
   --glass-blur-deep: blur(16px) saturate(130%);
   --glass-line: light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 34%));  /* the frame's rim */
   --pane-line: light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 16%));   /* a content pane's rim */
   --hairline: light-dark(rgb(0 0 0 / 10%), rgb(255 255 255 / 10%));          /* a divider drawn on glass */
   --control-line: light-dark(rgb(0 0 0 / 35%), rgb(255 255 255 / 40%));      /* a clear capsule's rim */
-  --control-fill: light-dark(rgb(255 255 255 / 45%), rgb(0 0 0 / 16%));      /* a field set into the glass */
+  --control-fill: light-dark(rgb(255 255 255 / 28%), rgb(0 0 0 / 14%));      /* the faintest tint that finds a field */
   --lift: light-dark(rgb(0 0 0 / 7%), rgb(255 255 255 / 8%));                /* a faint fill: chips, capsules */
   /* Shadows: a thin top highlight, a faint dark edge, a soft depth; deeper under the floating frame. */
   --glass-shadow: inset 0 1px 0 light-dark(rgb(255 255 255 / 90%), rgb(255 255 255 / 26%)),
@@ -107,7 +108,7 @@
   --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.5rem; --space-6: 2rem;
   --tap: 3rem;           /* 48 px touch targets below 64rem */
   --control: 2.5rem;     /* 40 px controls with a mouse */
-  --rail: 6.5rem;        /* the icon rail, with the clear margin that lets it float */
+  --rail: 5.75rem;       /* the icon rail, with the clear margin that lets it float */
   --lane-min: 11rem;     /* Tracker: lanes share the width down to this, then the board scrolls inside its box */
   color-scheme: light dark;
 }
@@ -169,11 +170,58 @@
   --line: light-dark(#e2dccd, #312c24); --line-strong: light-dark(#887f6e, #7d7564);
   --accent: light-dark(#4a5a24, #b9c77c); --on-accent: light-dark(#ffffff, #1b200b);
 }
-:root[data-palette="G"] {  /* olive-black and brass */
-  --bg: light-dark(#eef0e6, #10120c); --surface: light-dark(#fbfcf7, #191c13); --sunken: light-dark(#e0e4d2, #22261a);
-  --text: light-dark(#191b14, #e8eadc); --muted: light-dark(#53584a, #aab098); --title: light-dark(#4a2e18, #d9b27a);
-  --line: light-dark(#d4d8c3, #2c3122); --line-strong: light-dark(#787e66, #737a5f);
-  --accent: light-dark(#3a4718, #c2cf8a); --on-accent: light-dark(#ffffff, #1a200b);
+:root[data-palette="G"] {  /* forest and ochre: the owner's five-colour palette, every value from it or a lightness step of it */
+  /* The owner's swatches were near-black green #1a251f, forest green #283e29, off-white #edebe6, ochre #826531
+     and tan #9b846c; tuned a little toward the Three Sisters picture they like (pine near-black #1b130c, amber
+     light #fccd7c and #9d5d18, warm rock #875e36): the near-black warmer (#1b2219), the off-white creamier
+     (#efe9dd), the ochre more amber (#936a2b), the tan warmer (#a3876a); the forest green as it was. */
+  --bg: light-dark(#efe9dd, #121914); --surface: light-dark(#f6f2ea, #1b2219); --sunken: light-dark(#e4ded2, #212a23);
+  --text: light-dark(#1b2219, #efe9dd); --muted: light-dark(#3b4d41, #bbb09c); --title: light-dark(#6e4f1e, #e6cfa9);  /* the amber ochre a step darker for a light picture, the warm tan lifted for a dark one */
+  --ink-muted: light-dark(#263228, #d9d2c2);  /* the near-black lifted a little; the cream dimmed a little */
+  --line: light-dark(#d0cdc3, #2b342d); --line-strong: light-dark(#73796e, #80887c);
+  /* The forest green as it is for the morning picture; lifted in lightness (same hue) for the dusk picture, where
+     the dark green would sink into the ridges. The tan serves the dark title the same way. */
+  --accent: light-dark(#283e29, #8fb79a); --on-accent: light-dark(#efe9dd, #1b2219);
+  /* The palette brought forward: links in the forest green itself (darkened a step for the morning picture's
+     ridges, lifted for dusk), titles in the ochre unmixed, and the warm half as tints for capsules and badges. */
+  --link: light-dark(#1f3321, #b9d7c2); --ink-title: var(--title);
+  --tan-tint: light-dark(rgb(163 135 106 / 32%), rgb(163 135 106 / 30%));   /* a capsule or badge */
+  --ochre-tint: light-dark(rgb(147 106 43 / 26%), rgb(147 106 43 / 34%));   /* the lane count badge */
+}
+/* Scheme G alone wears its palette on the controls: the lit rail item, the chosen item of a set and the primary
+   button are solid forest green with the off-white label (sage with the near-black label at dusk); capsules,
+   badges and status words are tan or ochre tints; the Tracker's lanes take the five hues and their steps. Content
+   panes stay clear. */
+:root[data-palette="G"] {
+  .nav-group a[aria-current="page"], button[aria-pressed="true"], .button[aria-current] {
+    background: var(--gloss-tint), var(--accent); color: var(--on-accent); border-color: transparent;
+    box-shadow: var(--lit); text-shadow: none; }
+  .nav-group a[aria-current="page"] .icon { color: var(--on-accent); }
+  .rail .nav-group a[aria-current="page"] { box-shadow: var(--lit), 0 4px 12px -6px rgb(0 0 0 / 40%); }
+  .view-switch button[aria-pressed="true"] { background-color: var(--accent); }
+  .mark, .counts a, .tcard .days { background: var(--tan-tint); color: var(--text); }
+  .lane .count { background: var(--ochre-tint); }
+  .brand-mark, body > main::before { background: var(--gloss-tint), var(--accent); color: var(--on-accent); }
+  /* The warning chip keeps its own shape and sign ("!" and the triangle), so ochre is never mistaken for a warning. */
+  #lane-ready { --lane-ink: var(--accent); } #lane-applied { --lane-ink: light-dark(#936a2b, #d2ad6e); }
+  #lane-assessment { --lane-ink: light-dark(#a3876a, #c9b096); } #lane-interview { --lane-ink: light-dark(#5f8a66, #a9cbb3); }
+  #lane-offer { --lane-ink: light-dark(#1f3321, #8fb79a); } #lane-rejected { --lane-ink: light-dark(#4a5a50, #8a968d); }
+  .tcard { background: linear-gradient(180deg, color-mix(in srgb, var(--lane-ink) 34%, transparent),
+    color-mix(in srgb, var(--lane-ink) 8%, transparent) 2.5rem, transparent 4rem); }
+  :is(input, select, textarea):focus-visible { border-color: var(--accent); }
+  /* The rail and the phone bar are solid near-black green, as the sample's rail is: the one place the scheme's
+     deepest colour stands as a block. Frame, not content; the content panes stay clear. Off-white words, the
+     lit item a sage block with near-black words, the Menu button the same. Both modes. */
+  .rail::before, .dock > summary { background: #1b2219; border-color: #2b342d;
+    box-shadow: 0 24px 56px -24px rgb(0 0 0 / 60%); }
+  .rail :is(.nav-group a, .logout button), .dock-where { color: #efe9dd; text-shadow: none; }
+  .rail .nav-group a:not([aria-current="page"]) .icon, .dock-where .caption { color: #bbb09c; }
+  .rail :is(.nav-group li:first-child, .logout) { border-top-color: rgb(239 233 221 / 14%); }
+  .rail :is(.nav-group a, .logout button):hover { background: rgb(239 233 221 / 10%); }
+  .rail .nav-group a[aria-current="page"], .dock-button { background: var(--gloss-tint), #8fb79a; color: #1b2219; }
+  .rail .nav-group a[aria-current="page"] .icon { color: #1b2219; }
+  :is(.rail, .dock > summary) :focus-visible { outline-color: #8fb79a; }
+  .brand-mark { background: var(--gloss-tint), #936a2b; color: #efe9dd; }
 }
 /* Browsers without light-dark() (before Chrome 123, Firefox 120, Safari 17.5) would drop every colour: they get
    Teal light as plain colours, whatever is chosen; the frame tokens take Teal's frame. */
@@ -243,11 +291,10 @@ table { font-variant-numeric: tabular-nums; }
 
 /* ---------- Frame: icon rail (40rem and wider), bottom bar and menu panel (phones) ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* Clear glass for the frame: no fill, a slight blur, a bright rim and a soft shadow; the pieces that other words
-   scroll beneath get the deeper blur. Each piece below adds its own shape. */
-.skip, .rail::before, .topbar, .dock > summary, .sheet, dialog.ask { background: var(--glass);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow); }
-.topbar, .sheet, dialog.ask { -webkit-backdrop-filter: var(--glass-blur-deep); backdrop-filter: var(--glass-blur-deep); }
+/* Clear glass for the frame: no fill, no blur, a bright rim and a soft shadow. The menu panel and the dialog open
+   over the page's words, so they alone keep a blur. Each piece below adds its own shape. */
+.skip, .rail::before, .topbar, .dock > summary, .sheet, dialog.ask { background: var(--glass); box-shadow: var(--glass-shadow); }
+.sheet, dialog.ask { -webkit-backdrop-filter: var(--glass-blur-deep); backdrop-filter: var(--glass-blur-deep); }
 .skip { position: absolute; left: var(--space-4); top: -5rem; z-index: 40; display: inline-flex; align-items: center;
   min-height: var(--tap); padding: 0 var(--space-5); border: 1px solid var(--glass-line);
   border-radius: var(--radius-pill); background-color: var(--slab); font-weight: 600; }
@@ -298,9 +345,9 @@ body > main::before { content: "aa" / ""; display: grid; place-items: center; wi
 /* The rail: icons with short words, one block per group (a block can later become a fold-out). The rail itself is a
    clear column; its glass is a separate slab (::before) floating --inset in from the window's edges, with a deep
    soft shadow, so the backdrop shows all round it. */
-.rail { --floor: 2.25rem; --inset: var(--space-3); position: sticky; top: env(safe-area-inset-top);
+.rail { --floor: 2.5rem; --inset: var(--space-3); position: sticky; top: env(safe-area-inset-top);
   height: calc(100dvh - env(safe-area-inset-top)); overflow-y: auto; display: flex;
-  flex-direction: column; gap: 2px; padding: calc(var(--inset) + var(--space-2)) calc(var(--inset) + 0.375rem);
+  flex-direction: column; gap: 2px; padding: calc(var(--inset) + var(--space-1)) calc(var(--inset) + 0.25rem);
   margin-left: env(safe-area-inset-left); scrollbar-width: none; }
 .rail::before { content: ""; position: fixed; z-index: -1; pointer-events: none;
   top: calc(env(safe-area-inset-top) + var(--inset)); bottom: var(--inset);
@@ -327,17 +374,18 @@ body > main::before { content: "aa" / ""; display: grid; place-items: center; wi
   font-weight: 700; box-shadow: inset 0 0 0 1px var(--glass-line); }
 .nav-group a[aria-current="page"] .icon { color: var(--text); }
 /* The rail's items share the window's height: full size when there is room, shorter as the window gets lower, but
-   never below a floor (higher on touch screens); only a window too low even for that scrolls the rail. The group
-   boxes step aside, so every item is one row of the rail's column; a line starts each group and Log out. */
+   never below a floor of 40 px (44 on touch screens); only a window too low even for that scrolls the rail. The
+   group boxes step aside, so every item is one row of the rail's column; a line starts each group and Log out. */
 .rail .nav-group, .rail .nav-group ul { display: contents; }
-.rail .nav-group li, .rail .logout { --edge: 0px; display: flex; flex: 0 1 calc(3.25rem + var(--edge));
+.rail .nav-group li, .rail .logout { --edge: 0px; display: flex; flex: 0 1 calc(3rem + var(--edge));
   min-height: calc(var(--floor) + var(--edge)); }
 .rail .nav-group li:first-child, .rail .logout { --edge: calc(var(--space-1) + 1px); padding-top: var(--space-1);
   border-top: 1px solid var(--hairline); }
 .rail .nav-group li:first-child { margin-top: var(--space-1); }
+/* Each item is a slim pill: a little in from the rail's edges, the words at 12 px under the icon. */
 .rail .nav-group a, .rail .logout button { flex: 1; flex-direction: column; justify-content: center; gap: 0.125rem;
-  min-height: 0; padding: 0 var(--space-1); text-align: center; font-size: var(--text-caption); line-height: 1.15;
-  font-weight: 600; white-space: nowrap; }
+  min-height: 0; margin: 0 0.25rem; padding: 0 var(--space-1); text-align: center; font-size: var(--text-caption);
+  line-height: 1.15; font-weight: 600; white-space: nowrap; }
 .rail .nav-group a[aria-current="page"] { box-shadow: inset 0 0 0 1px var(--glass-line), inset 0 -3px 0 var(--accent),
   0 4px 12px -6px color-mix(in srgb, var(--accent) 60%, transparent); }
 @media (pointer: coarse) {
@@ -458,12 +506,11 @@ button[aria-pressed="true"], .button[aria-current] { border-color: var(--accent)
   background-color: var(--accent-soft); color: var(--text); font-weight: 700; box-shadow: var(--pill-edge); }
 button:disabled { border-color: var(--line); background: var(--sunken); box-shadow: none; color: var(--muted);
   cursor: not-allowed; transform: none; filter: none; }
-/* A field is set into the glass: a faint tint, its own slight blur, a visible edge and an inner shade (the sign-in
-   field's construction). */
+/* A field is set into the glass: the faintest tint, a visible edge and an inner shade; no blur, the picture
+   stays sharp through it. */
 input:not([type="checkbox"], [type="radio"], [type="file"]), select, textarea { max-width: 100%;
   min-height: var(--control); padding: 0 var(--space-3); border: 1px solid var(--control-line);
   border-radius: var(--radius-s); background: var(--control-fill);
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   box-shadow: inset 0 1px 3px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 35%));
   transition: border-color var(--quick) var(--ease-out), box-shadow var(--quick) var(--ease-out),
     outline-offset var(--press) var(--ease-out); }
@@ -495,24 +542,21 @@ select option { background: var(--slab); color: var(--text); }  /* the list itse
   border-color: rgb(255 255 255 / 48%); box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%); }
 /* A page's own form (Settings and its pages, Add, Questionnaire …) is a clear pane. */
 main > :is(form.stacked, section:has(> form.stacked)) { max-width: 44rem; padding: var(--space-5);
-  border: 1px solid var(--pane-line); border-radius: var(--radius-l);
-  background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--pane-line); border-radius: var(--radius-l); background: var(--glass);
   box-shadow: var(--shadow); }
 main > section:has(> form.stacked) { margin-bottom: var(--space-5); }  /* Add: each way to add is its own pane */
 main > section:has(> form.stacked) > h2:first-child { margin-top: 0; }
-main > section .found::before { -webkit-backdrop-filter: none; backdrop-filter: none; }  /* no blur inside a pane */
 /* An action with its explanation (Collect now, Score now): a clear row, the button first, the words at a reading
    length beside or under it, in the secondary size. "Score these N jobs" on the list pages is a plain row. */
 main > form:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { display: flex; flex-wrap: wrap;
   align-items: center; gap: var(--space-2) var(--space-4); width: fit-content; max-width: 100%;
   margin: 0 0 var(--space-3);
   padding: var(--space-3) var(--space-4); border: 1px solid var(--pane-line); border-radius: var(--radius-l);
-  background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow); }
+  background: var(--glass); box-shadow: var(--shadow); }
 main > form:not(.stacked, .view-switch, .filters):has(> button) > .muted { flex: 1 1 20rem; max-width: 60ch;
   font-size: var(--text-ui); line-height: var(--leading-ui); }
 main > form.score-these:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { padding: 0; border: 0;
-  background: none; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+  background: none; box-shadow: none; }
 .list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--space-2); }
 .list-row input { width: 100%; }
 form.inline { display: inline; }
@@ -522,12 +566,10 @@ form.inline { display: inline; }
    sideways inside its own box (the page never does); there the header row stays at the top of the table. */
 /* A table is a clear pane, its header row's corners rounded with it. */
 main table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--glass);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   border: 1px solid var(--pane-line); border-radius: var(--radius); box-shadow: var(--shadow); }
 main th:first-child { border-top-left-radius: calc(var(--radius) - 1px); }
 main th:last-child { border-top-right-radius: calc(var(--radius) - 1px); }
-:is(.found, .filters, .truth) table { background: none; -webkit-backdrop-filter: none; backdrop-filter: none; border: 0;
-  border-radius: 0; box-shadow: none; }
+:is(.found, .filters, .truth) table { background: none; border: 0; border-radius: 0; box-shadow: none; }
 main th, main td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--hairline); text-align: left;
   vertical-align: top; }
 main th { font-size: var(--text-small); line-height: var(--leading-small); letter-spacing: 0.01em; font-weight: 650;
@@ -537,7 +579,8 @@ main tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius
 main tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
 main tbody tr { transition: background-color var(--quick) var(--ease-out); }
 main tbody tr:hover { background: var(--hover); }
-/* The job list's header row floats over the rows scrolling beneath it: the deeper blur, still no fill. */
+/* The job list's header row floats over the rows scrolling beneath it: the one content piece with a blur (words
+   would otherwise collide), still no fill. */
 table.jobs th { position: sticky; top: 0; z-index: 1; background: var(--glass);
   -webkit-backdrop-filter: var(--glass-blur-deep); backdrop-filter: var(--glass-blur-deep); }
 .num .muted { font-size: var(--text-small); font-weight: 400; }
@@ -578,8 +621,7 @@ mark { text-decoration: underline dotted; text-underline-offset: 0.2em; }  /* a 
 .found { position: relative; isolation: isolate; margin: var(--space-4) 0; padding: var(--space-4) var(--space-5);
   border: 1px solid var(--pane-line); border-radius: var(--radius-l); }
 .found::before { content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit;
-  background: var(--glass); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  box-shadow: var(--shadow); pointer-events: none; }
+  background: var(--glass); box-shadow: var(--shadow); pointer-events: none; }
 /* While the job page's two boxes load (an empty hx-trigger="load" box), each is a quiet pane with a heading bar
    and two text lines; nothing shimmers. The real section replaces it and arrives once (Motion, below). */
 main > [hx-get][hx-trigger="load"]:empty { position: relative; min-height: 8.5rem; margin: var(--space-4) 0;
@@ -598,7 +640,6 @@ main > [hx-get][hx-trigger="load"]:empty::after { top: 3.5rem; right: var(--spac
   align-items: center; margin: var(--space-4) 0; }
 .pager a { display: inline-flex; align-items: center; min-height: var(--control); font-variant-numeric: tabular-nums; }
 .filters { margin-bottom: var(--space-5); padding: var(--space-4); background: var(--glass);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   border: 1px solid var(--pane-line); border-radius: var(--radius-l); box-shadow: var(--shadow); }
 .filters p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
   margin: 0 0 var(--space-3); }
@@ -613,8 +654,7 @@ main > [hx-get][hx-trigger="load"]:empty::after { top: 3.5rem; right: var(--spac
 .filters-fold { margin-bottom: var(--space-4); }
 .filters-fold > summary { position: relative; min-height: var(--control);
   padding: var(--space-2) 2.75rem var(--space-2) var(--space-4); border: 1px solid var(--glass-line);
-  border-radius: var(--radius-l); background: var(--glass);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shadow);
+  border-radius: var(--radius-l); background: var(--glass); box-shadow: var(--glass-shadow);
   cursor: pointer; font-weight: 600;
   transition: box-shadow var(--settle) var(--ease-out), outline-offset var(--press) var(--ease-out); }
 .filters-fold > summary:hover { box-shadow: var(--shadow-raised); }
@@ -691,8 +731,7 @@ main:has(.view-switch) > :is(.counts, .score-these) { margin-top: var(--space-2)
   .jobs tbody { gap: 1.25rem; }
   .jobs tr { display: flex; flex-wrap: wrap; align-items: baseline; align-content: start;
     gap: var(--space-1) var(--space-3); padding: var(--space-4); border: 1px solid var(--pane-line);
-    border-radius: var(--radius-l); background: var(--glass);
-    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--shadow);
+    border-radius: var(--radius-l); background: var(--glass); box-shadow: var(--shadow);
     transition: box-shadow var(--settle) var(--ease-out), border-color var(--settle) var(--ease-out); }
   .jobs tr:hover { box-shadow: var(--shadow-raised); border-color: var(--glass-line); }
   .jobs .hidden-job { box-shadow: none; }
@@ -742,8 +781,7 @@ main:has(.board) { max-width: none; }
    would redraw its blur every frame). */
 .tcard { position: relative; display: grid; gap: 0.125rem; padding: var(--space-3); border: 1px solid var(--pane-line);
   border-radius: var(--radius); background: linear-gradient(180deg, color-mix(in srgb, var(--lane-ink) 24%, transparent),
-    color-mix(in srgb, var(--lane-ink) 5%, transparent) 2.5rem, transparent 4rem);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--shadow);
+    color-mix(in srgb, var(--lane-ink) 5%, transparent) 2.5rem, transparent 4rem); box-shadow: var(--shadow);
   transition: box-shadow var(--settle) var(--ease-out), border-color var(--settle) var(--ease-out),
     outline-offset var(--press) var(--ease-out); }
 .tcard:not(.stale):hover { box-shadow: var(--shadow-raised); border-color: var(--glass-line); }
@@ -772,8 +810,7 @@ main:has(.board) { max-width: none; }
 .tcard label { min-width: 0; }  /* with the form's: a list with a long stage name shrinks to fit the card */
 /* No change for the set number of days: a dashed warm rim, no tint, with a word and an icon in a small warning
    chip, not colour alone. */
-.tcard.stale { border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent); background: none;
-  -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+.tcard.stale { border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent); background: none; box-shadow: none; }
 .tcard.stale :is(h3 a, .company, .meta, form) { color: var(--ink-muted); }
 .tcard .note { display: inline-flex; align-items: center; gap: 0.375rem; justify-self: start; margin-top: 0.375rem;
   padding: 0.125rem var(--space-2); border-radius: var(--radius-s);  /* it can wrap in a narrow lane */
@@ -881,10 +918,10 @@ main:has(.board) { max-width: none; }
 }
 
 /* ---------- Preferences and fallbacks ---------- */
-/* Browsers without backdrop blur: the pieces that other words scroll beneath get the solid slab; the rest is clear
-   anyway, and the field is still. */
+/* Browsers without backdrop blur: the three layers that open over words get the solid slab; the rest is clear
+   anyway. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .topbar, .sheet, dialog.ask, table.jobs th { background-color: var(--slab); }
+  .sheet, dialog.ask, table.jobs th { background-color: var(--slab); }
   :root, :root[data-palette] { --glass-hero: var(--surface); }
 }
 /* More contrast and reduce transparency: a plain page in the field's floor tone, solid panes, no blur, no picture,
