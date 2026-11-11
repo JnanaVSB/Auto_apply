@@ -853,9 +853,10 @@ main:has(.board) { max-width: none; }
   color: var(--muted); overflow-wrap: anywhere; }
 .tcard .meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-3); color: var(--muted); font-size: var(--text-small);
   line-height: var(--leading-small); }
-/* Days since you applied, top right (none on Ready). */
+/* Days since you applied, top right (none on Ready): a clear outlined badge in the full text ink (small bold
+   words on the picture need the strongest ink; the owner chose brighter text over a fill). */
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
-  border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1px var(--control-line); color: var(--muted);
+  border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1px var(--control-line); color: var(--text);
   font-size: var(--text-caption); line-height: 1.6; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* The card's forms (I applied, the round, Move to) sit above its link, so they can be used. */
 .tcard form { position: relative; z-index: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center;
