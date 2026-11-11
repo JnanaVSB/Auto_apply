@@ -125,6 +125,13 @@
 @media (width < 48rem) and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --field: url("mountains-dusk-phone.webp"); }
 }
+/* Scheme G has its own picture in both modes: "Green leafed pine trees" by Kyle Glenn,
+   https://unsplash.com/photos/green-leafed-pine-trees-SrASYZZpyjw, Unsplash License (deepened to 60 % inside the
+   file, sharp, never enlarged beyond its pixels; the phone file is its centre strip). It is dark whatever the mode,
+   so G's block below keeps the white ink set. Written after the mode rules, so it outranks them, and before the
+   person's own picture, which outranks it. */
+:root[data-palette="G"] { --field: url("pines-fog.webp"); --field-floor: #0b0f0c; }
+@media (width < 48rem) { :root[data-palette="G"] { --field: url("pines-fog-phone.webp"); } }
 /* The person's own background picture, kept in the private data folder and served to the signed-in person only.
    The template writes data-own-field on <html> when such a picture is set, and data-ink says which words it
    needs: "light" for a light picture (dark words), "dark" for a dark one (white words). Both modes then use that
@@ -140,8 +147,8 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
 
 /* ---------- Colour schemes ---------- */
 /* Chosen per browser on Settings (Look): data-theme forces a mode, data-palette swaps the colours. Teal above is the
-   default. A-G give titles their own colour. The photographs are the same for every scheme; a scheme changes the
-   accent, the titles and the controls, never the picture. */
+   default. A-G give titles their own colour. Teal and A-F share the mountain photographs; G has the pines (above).
+   A scheme never recolours a picture. */
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-palette] {
@@ -183,6 +190,9 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
   --accent: light-dark(#4a5a24, #b9c77c); --on-accent: light-dark(#ffffff, #1b200b);
 }
 :root[data-palette="G"] {  /* forest and ochre: the owner's five-colour palette, every value from it or a lightness step of it */
+  color-scheme: dark;  /* the pines are dark in both modes, so the dark (white-word) side of every pair below is the one used;
+                          written after the mode rules above so Light on Settings cannot turn the words dark on a dark picture;
+                          the person's own picture flagged light still wins (its rule is more specific) */
   /* The owner's swatches were near-black green #1a251f, forest green #283e29, off-white #edebe6, ochre #826531
      and tan #9b846c; tuned a little toward the Three Sisters picture they like (pine near-black #1b130c, amber
      light #fccd7c and #9d5d18, warm rock #875e36): the near-black warmer (#1b2219), the off-white creamier
