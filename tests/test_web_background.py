@@ -16,8 +16,8 @@ from app.web import background
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
 WEBP = b"RIFF\x00\x01\x00\x00WEBP" + b"\x00" * 200
-PLAIN = '<html lang="en">'
-SWITCH = '<html lang="en" data-own-field data-ink="dark">'
+PLAIN = '<html lang="en" data-palette="G">'  # nothing chosen on Settings
+SWITCH = '<html lang="en" data-palette="G" data-own-field data-ink="dark">'
 CREDIT = "Background: a made-up picture · copyright its author · private copy."
 PROBLEM = "own.jpg in your data folder"  # the start of the problem sentence (its apostrophe is escaped on the page)
 

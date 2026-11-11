@@ -11,8 +11,9 @@
   <link rel="stylesheet" href="/static/app.css">
   <link rel="manifest" href="/static/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1a1e23">
+  {# the browser's own bar: scheme G's solid rail and phone bar, dark in both modes, as a fresh visitor sees them #}
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#1b2219">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b2219">
   <script src="/static/htmx.min.js" defer></script>
 </head>
 <body{% if csrf %} hx-headers='{"X-CSRF-Token": "{{ csrf }}"}'{% endif %}>

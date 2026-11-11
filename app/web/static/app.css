@@ -159,8 +159,8 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
 
 /* ---------- Colour schemes ---------- */
 /* Chosen per browser on Settings (Look): data-theme forces a mode, data-palette swaps the colours. Teal above is the
-   default. A-G give titles their own colour. Teal and A-F share the mountain photographs; G has the pines (above).
-   A scheme never recolours a picture. */
+   stylesheet's own (no attribute); a browser that has not chosen gets G (app/web/look.py). A-G give titles their own
+   colour. Teal and A-F share the mountain photographs; G has the pines (above). A scheme never recolours a picture. */
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-palette] {

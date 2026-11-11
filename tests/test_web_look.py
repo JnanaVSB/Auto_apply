@@ -7,7 +7,8 @@ from helpers import add_job, csrf, log_in
 from app import config
 from app.web import look
 
-PLAIN = '<html lang="en">'
+PLAIN = '<html lang="en">'  # Teal, chosen on purpose: the stylesheet's own colours
+FRESH = '<html lang="en" data-palette="G">'  # nothing chosen yet
 
 
 @pytest.fixture
@@ -39,8 +40,8 @@ def test_the_look_is_kept_and_every_page_carries_it(client):
     [("today", "auto", PLAIN), ("A", "auto", '<html lang="en" data-palette="A">'),
      ("today", "light", '<html lang="en" data-theme="light">')],
 )  # fmt: skip
-def test_the_defaults_add_nothing(client, scheme, mode, html):
-    assert PLAIN in client.get("/").text  # nothing chosen yet
+def test_a_fresh_browser_gets_g_and_the_stylesheets_own_look_adds_nothing(client, scheme, mode, html):
+    assert FRESH in client.get("/").text  # nothing chosen yet
     choose(client, scheme, mode)
     assert html in client.get("/").text
 
@@ -62,12 +63,13 @@ def test_the_look_needs_the_safety_token(client):
 @pytest.mark.parametrize("value", ["", "E", "E.", ".dark", "e.dark", "E.Dark", "E dark", "E.dark.x", '"><b>.dark'])
 def test_a_damaged_cookie_gives_the_defaults(client, value):
     client.cookies.set(look.LOOK_COOKIE, value)
-    assert PLAIN in client.get("/").text
+    assert FRESH in client.get("/").text
 
 
 def test_settings_shows_the_look_in_use_and_confirms_only_a_change(client):
     text = client.get("/settings").text
-    assert '<option value="today" selected>' in text and '<option value="auto" selected>' in text
+    assert '<option value="G" selected>' in text and '<option value="auto" selected>' in text
+    assert 'value="G" selected>G · Forest and ochre (default)<' in text and ">Teal<" in text
     assert "Look saved for this browser." not in text
     text = client.get(choose(client, "C", "light").headers["location"]).text
     assert '<option value="C" selected>' in text and '<option value="light" selected>' in text

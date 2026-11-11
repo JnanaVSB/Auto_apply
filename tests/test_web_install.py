@@ -46,8 +46,8 @@ def test_the_manifest_says_exactly_what_was_decided(client):
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
-        "background_color": "#f3f5f7",
-        "theme_color": "#ffffff",
+        "background_color": "#0b0f0c",
+        "theme_color": "#1b2219",
         "share_target": {
             "action": "/add",
             "method": "GET",
@@ -92,8 +92,8 @@ def test_every_kind_of_page_has_the_install_tags_and_they_work(client):
         text = response.text
         assert text.count('rel="manifest"') == 1 and text.count('rel="apple-touch-icon"') == 1
         assert text.count('name="theme-color"') == 2
-        assert '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">' in text
-        assert '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1a1e23">' in text
+        assert '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#1b2219">' in text
+        assert '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b2219">' in text
         links = dict(re.findall(r'<link rel="(manifest|apple-touch-icon)" href="([^"]+)">', text))
         assert {client.get(link).status_code for link in links.values()} == {200}
         assert _size(client.get(links["apple-touch-icon"]).content) == (180, 180)

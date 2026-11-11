@@ -10,15 +10,16 @@ VIEWS = ("table", "cards")  # the job lists' two views; Cards until one is chose
 VIEW_COOKIE = "auto_apply_view"  # named for this app, like the session cookie: cookies on 127.0.0.1 are shared
 LISTS = ("/", "/ready")  # the pages with the Table | Cards switch
 LOOK_COOKIE = "auto_apply_look"  # this browser's colours and mode, "<colours>.<mode>", e.g. "E.dark"
-SCHEMES = {  # the stylesheet's colour schemes (data-palette); the first is the default and needs no attribute
-    "today": "Teal (default)",
+SCHEMES = {  # the stylesheet's colour schemes (data-palette); "today" is the stylesheet's own and needs no
+    # attribute; G is what a browser gets until it chooses (see `of`)
+    "today": "Teal",
     "A": "A · Olive and walnut",
     "B": "B · Sage and espresso",
     "C": "C · Moss and cream",
     "D": "D · Mix (A, warmer brown titles)",
     "E": "E · Forest rail and cognac",
     "F": "F · Espresso rail and olive",
-    "G": "G · Olive-black and brass",
+    "G": "G · Forest and ochre (default)",
 }
 MODES = {"auto": "Auto (as this device)", "light": "Light", "dark": "Dark"}  # data-theme; the first is the default
 
@@ -53,10 +54,10 @@ def add_routes(app: FastAPI) -> None:
 
 def of(request: Request) -> tuple[str, tuple[str, str]]:
     """This browser's list view and look, as (view, (colours, mode)); an unknown or damaged cookie gives the
-    defaults: Cards, and teal as the device."""
+    defaults: Cards, and forest and ochre (G) as the device."""
     view = request.cookies.get(VIEW_COOKIE)
     scheme, _, mode = request.cookies.get(LOOK_COOKIE, "").partition(".")
-    look = (scheme, mode) if scheme in SCHEMES and mode in MODES else ("today", "auto")
+    look = (scheme, mode) if scheme in SCHEMES and mode in MODES else ("G", "auto")
     return view if view in VIEWS else "cards", look
 
 
