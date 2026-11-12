@@ -65,6 +65,10 @@ TO_REVIEW = (
     + f""" {WRITTEN}
     WHERE {REVIEW} ORDER BY r.done_on DESC, jobs.id DESC LIMIT 5"""
 )
+TICKS, BLOCKS = 50, 12  # the gauge's ticks along its half circle; the blocks in each pipeline stage's stack
+SERIES = ("collected", "sent")  # the chart's two lines
+PIPELINE = (("Collected", "collected"), ("Scored", "p_scored"), ("Written", "p_written"), ("Ready", "p_ready"),
+            ("Applied", "p_applied"), ("Replied", "p_replied"), ("Rejected", "p_rejected"))  # fmt: skip
 MOVED = f"""SELECT j.id, j.title, j.company, t.stage FROM tracker t JOIN jobs j ON j.id = t.job_id
     WHERE t.stage IN ({REPLIES}, 'rejected') AND t.changed_on >= ?
     ORDER BY t.changed_on DESC, t.job_id DESC LIMIT 5"""  # noqa: S608 (fixed text)
@@ -83,6 +87,10 @@ def gather(conn: sqlcipher3.Connection, scoring: queries.Scoring, today: date) -
     values = [*scoring.values(), _midnight(today), week_at, _midnight(month), str(week)]
     found = dict(zip(NAMES, conn.execute(COUNTS, values).fetchone(), strict=True))
     found["median"] = _median(conn, scoring, found["scored"])
+    found["gauges"] = {"bar": _gauge(found["passed"], found["scored"]),
+                       "scored": _gauge(found["scored"], found["open"])}  # fmt: skip
+    counts = [found[key] for _, key in PIPELINE]
+    found["pipeline"] = list(zip((name for name, _ in PIPELINE), counts, _blocks(counts), strict=True))
     collected = dict(conn.execute(FOUND, (_midnight(first),)).fetchall())
     sent = dict(conn.execute(SENT, (str(first),)).fetchall())
     days = [today - timedelta(back) for back in range(DAYS - 1, -1, -1)]
@@ -117,7 +125,37 @@ def _chart(days: list[date], step: int, collected: dict, sent: dict) -> dict:
                         "sent": sum(sent.get(str(day), 0) for day in span)})  # fmt: skip
     total, applied = sum(column["collected"] for column in columns), sum(column["sent"] for column in columns)
     per_100 = round(applied * 100 / total) if total else None  # none when nothing was found
-    return {"columns": columns, "collected": total, "sent": applied, "per_100": per_100}
+    return {"columns": columns, "collected": total, "sent": applied, "per_100": per_100, **_lines(columns)}
+
+
+def _lines(columns: list[dict]) -> dict:
+    """The chart drawn on a box one unit wide per column and 100 high, 0 at the top: each column's two heights, scaled
+    to the higher series (at least 1, so an empty period lies flat on the floor), and the points of the two lines and
+    of the band between them, at each column's middle."""
+    top = max(1, *(column[key] for column in columns for key in SERIES))
+    for column in columns:
+        column.update({f"y_{key}": round(100 - column[key] * 92 / top, 2) for key in SERIES})
+    points = {key: [f"{x + 0.5},{column[f'y_{key}']}" for x, column in enumerate(columns)] for key in SERIES}
+    return {f"line_{key}": " ".join(points[key]) for key in SERIES} | {
+        "band": " ".join(points["collected"] + points["sent"][::-1])
+    }
+
+
+def _gauge(part: int, whole: int) -> dict:
+    """A gauge's whole percent and how far its lit ticks reach along the half circle (100 long), both rounded half up;
+    the percent never overstates (100 only when all, 0 only when none), and there is no percent and nothing lit when
+    the whole is 0."""
+    if not whole:
+        return {"percent": None, "reach": 0}
+    percent = min(max((200 * part + whole) // (2 * whole), 1 if part else 0), 99 if part < whole else 100)
+    return {"percent": percent, "reach": (2 * TICKS * part + whole) // (2 * whole) * (100 // TICKS)}
+
+
+def _blocks(counts: list[int]) -> list[int]:
+    """How many of each stage's blocks are lit: in proportion to the largest stage, rounded up so a stage with any job
+    shows at least one; none for an empty stage, and none at all when every stage is empty."""
+    largest = max(counts)
+    return [-(-BLOCKS * n // largest) if n else 0 for n in counts]
 
 
 def _next_step(found: dict) -> tuple[str, str]:

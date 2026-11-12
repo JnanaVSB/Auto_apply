@@ -228,3 +228,40 @@ def test_aa_opens_summary_and_the_phone_menu_starts_with_it(client):
     assert re.findall(r'<a href="([^"]+)"', sheet)[0] == "/summary"
     assert re.search(r'<span class="caption">Overview</span><strong>Summary</strong>', text)
     assert 'class="brand-mark" href="/summary">' in client.get("/").text  # not current elsewhere
+
+
+def test_chart_lines_scale_to_the_higher_series_at_each_column_middle():
+    chart = summary._chart([TODAY - timedelta(1), TODAY], 1, {str(TODAY): 10}, {str(TODAY): 5})
+    assert [(column["y_collected"], column["y_sent"]) for column in chart["columns"]] == [(100, 100), (8, 54)]
+    assert chart["line_collected"] == "0.5,100.0 1.5,8.0"
+    assert chart["line_sent"] == "0.5,100.0 1.5,54.0"
+    assert chart["band"] == "0.5,100.0 1.5,8.0 1.5,54.0 0.5,100.0"
+
+
+def test_an_empty_chart_lies_flat_on_the_floor():
+    chart = summary._chart([TODAY], 1, {}, {})
+    assert chart["line_collected"] == chart["line_sent"] == "0.5,100.0"
+
+
+@pytest.mark.parametrize(
+    ("part", "whole", "percent", "reach"),
+    [(0, 0, None, 0), (0, 5, 0, 0), (1, 3, 33, 34), (1, 200, 1, 0), (3, 3, 100, 100), (199, 200, 99, 100),
+     (1, 1000, 1, 0)],
+)  # fmt: skip
+def test_a_gauge_rounds_half_up_never_overstates_and_never_divides_by_zero(part, whole, percent, reach):
+    assert summary._gauge(part, whole) == {"percent": percent, "reach": reach}
+
+
+@pytest.mark.parametrize(
+    ("counts", "lit"), [([412, 297, 41, 3, 28, 6, 0], [12, 9, 2, 1, 1, 1, 0]), ([0, 0, 0], [0, 0, 0]), ([7], [12])]
+)
+def test_pipeline_blocks_are_in_proportion_rounded_up(counts, lit):
+    assert summary._blocks(counts) == lit
+
+
+def test_an_empty_database_shows_deliberate_empty_parts(client, monkeypatch):
+    monkeypatch.setattr(main, "_scoring", lambda: CHOSEN)
+    log_in(client)
+    text = client.get("/summary").text
+    for words in ("Nothing scored yet", "No open jobs", "Nothing to review yet", "No replies this week"):
+        assert words in text

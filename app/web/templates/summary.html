@@ -1,80 +1,140 @@
 {% extends "base.html" %}
 {% block title %}Summary{% endblock %}
 {% block content %}
-{% macro plural(count, one, many) %}{{ count }} {{ one if count == 1 else many }}{% endmacro %}
-<h1>Summary</h1>
-<p>{% if ready %}{{ plural(ready, "application is", "applications are") }} ready for your review{% if replies_week %}, and {{ plural(replies_week, "reply", "replies") }} came in this week{% endif %}.
-  {%- elif replies_week %}{{ plural(replies_week, "reply", "replies") }} came in this week.
-  {%- else %}Nothing needs your attention right now.{% endif %}</p>
-<p><a class="button primary" href="{{ next[1] }}">{{ next[0] }}</a></p>
+{% macro num(count) %}{{ "{:,}".format(count) }}{% endmacro %}
+{% macro plural(count, one, many) %}{{ num(count) }} {{ one if count == 1 else many }}{% endmacro %}
+{% macro icon(name) %}<svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ name }}"/></svg>{% endmacro %}
+{# A switch between a pane's views: radio buttons, so the page needs no script; the stylesheet shows the checked view #}
+{% macro switch(name, legend, options, chosen, extra="") %}
+<fieldset class="seg{{ extra }}"><legend class="sr-only">{{ legend }}</legend>
+  {%- for value, words, count in options %}<label><input class="sr-only" type="radio" name="{{ name }}" id="{{ name }}-{{ value }}" value="{{ value }}"{% if value == chosen %} checked{% endif %}>{{ words }}{% if count is not none %} <span class="count">{{ num(count) }}</span>{% endif %}</label>{% endfor -%}
+</fieldset>
+{% endmacro %}
+{% macro day(column, period) %}{% if period == 90 %}Week of {{ column.start.strftime("%b") }} {{ column.start.day }}{% else %}{{ column.start.strftime("%a, %b") }} {{ column.start.day }}{% endif %}{% endmacro %}
+<div class="summary">
+<div class="greeting">
+  <h1>Summary</h1>
+  <p>{% if ready %}{{ plural(ready, "application is", "applications are") }} ready for your review{% if replies_week %}, and {{ plural(replies_week, "reply", "replies") }} came in this week{% endif %}.
+    {%- elif replies_week %}{{ plural(replies_week, "reply", "replies") }} came in this week.
+    {%- else %}Nothing needs your attention right now.{% endif %}</p>
+</div>
 
-<h2>At a glance</h2>
-<dl>
-  <dt>Open jobs</dt><dd>{{ open }} <span class="muted">(+{{ open_week }} found this week)</span></dd>
-  <dt>Ready to review</dt><dd>{{ ready }} <span class="muted">(+{{ ready_week }} written this week)</span></dd>
-  <dt>Applied</dt><dd>{{ applied }} <span class="muted">(+{{ applied_week }} this week)</span></dd>
-  <dt>Replies</dt><dd>{{ replies }} <span class="muted">(+{{ replies_week }} moved this week)</span></dd>
-</dl>
-{% if not gmail %}<p class="hint">Gmail isn't connected, so replies are only the cards you moved on the Tracker.</p>{% endif %}
+<ul class="stats" aria-label="At a glance">
+  {% for name, words, count, week, badge in [
+    ("briefcase", "Open jobs", open, open_week, "found this week"),
+    ("send", "Ready to review", ready, ready_week, "written this week"),
+    ("check", "Applied", applied, applied_week, "this week"),
+    ("mail", "Replies", replies, replies_week, "this week")] %}
+  <li class="panel stat"><p class="stat-label">{{ icon(name) }}{{ words }}</p>
+    <p class="stat-figure"><span class="stat-value">{{ num(count) }}</span>{% if week %}<span class="mark ok">+{{ num(week) }} {{ badge }}</span>{% endif %}</p></li>
+  {% endfor %}
+</ul>
 
-<h2>Jobs collected and applications sent</h2>
-{% for period, chart in charts.items() %}
-<table>
-  <caption>Last {{ period }} days</caption>
-  <thead><tr><th>{{ "Week of" if period == 90 else "Day" }}</th><th>Jobs collected</th><th>Applications sent</th></tr></thead>
-  <tbody>
-    {% for column in chart.columns %}
-    <tr><td>{{ column.start }}{% if column.end != column.start %} to {{ column.end }}{% endif %}</td><td>{{ column.collected }}</td><td>{{ column.sent }}</td></tr>
+<section class="panel trend" aria-labelledby="trend-title">
+  <div class="panel-head">
+    <h2 id="trend-title">{{ icon("chart-column") }}Jobs collected and applications sent</h2>
+    {{ switch("period", "Period", [(7, "7 days", none), (30, "30 days", none), (90, "90 days", none)], 30) }}
+  </div>
+  {% for period, chart in charts.items() %}
+  {% set columns = chart.columns %}
+  <div class="view view-{{ period }}">
+    <dl class="totals"><div class="collected"><dt>Jobs collected</dt><dd>{{ num(chart.collected) }}</dd></div>
+      <div class="sent"><dt>Applications sent</dt><dd>{{ num(chart.sent) }}</dd></div>
+      <div><dt>Sent per 100 collected</dt><dd>{{ chart.per_100 if chart.per_100 is not none else "–" }}</dd></div></dl>
+    <div class="chart">
+      <ol class="days" aria-label="{{ 'Each week, the last 13 weeks' if period == 90 else 'Each day, the last %d days' % period }}">
+        {% for column in columns %}
+        <li tabindex="0"><svg class="dots" viewBox="0 0 1 100" preserveAspectRatio="none" aria-hidden="true">
+          <path class="collected" d="M0.5 {{ column.y_collected }}v0.01" vector-effect="non-scaling-stroke"/>
+          <path class="sent" d="M0.5 {{ column.y_sent }}v0.01" vector-effect="non-scaling-stroke"/></svg>
+          <span class="tip"><b>{{ day(column, period) }}:</b> <span class="collected">{{ num(column.collected) }} collected</span> <span class="sent">{{ num(column.sent) }} sent</span></span></li>
+        {% endfor %}
+      </ol>
+      <svg class="lines" viewBox="0 0 {{ columns | length }} 100" preserveAspectRatio="none" aria-hidden="true">
+        <polygon class="band" points="{{ chart.band }}"/>
+        {% if columns | length > 1 %}
+        <polyline class="line collected" points="{{ chart.line_collected }}" vector-effect="non-scaling-stroke"/>
+        <polyline class="line sent" points="{{ chart.line_sent }}" vector-effect="non-scaling-stroke"/>
+        {% endif %}
+      </svg>
+    </div>
+    <p class="axis" aria-hidden="true">{% for column in columns[::7 if period == 30 else (3 if period == 90 else 1)] %}<span>{{ column.start.strftime("%a") if period == 7 else column.start.strftime("%b ") ~ column.start.day }}</span>{% endfor %}</p>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel gauge" aria-labelledby="gauge-title">
+  <div class="panel-head">
+    <h2 id="gauge-title">{{ icon("check") }}Scoring</h2>
+    {{ switch("gauge", "Show", [("bar", "Passed your bar", none), ("scored", "Scored", none)], "bar") }}
+  </div>
+  {% for key, caption, side in [
+    ("bar", "%s of %s scored open jobs passed your bar" % (num(passed), num(scored)) if scored else "Nothing scored yet",
+     [("Your bar", threshold), ("Middle score", median), ("Passed today", passed_today)]),
+    ("scored", "%s of %s open jobs are scored" % (num(scored), num(open)) if open else "No open jobs",
+     [("Waiting", waiting), ("Scored today", scored_today), ("Failed", failed)])] %}
+  {% set gauge = gauges[key] %}
+  <div class="view view-{{ key }}">
+    <div class="dial">
+      <svg viewBox="0 0 200 108" aria-hidden="true">
+        <mask id="dial-{{ key }}" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="108">
+          <path d="M20 100 A80 80 0 0 1 180 100" pathLength="100" fill="none" stroke="#fff" stroke-width="30" stroke-dasharray="{{ gauge.reach }} 100"/></mask>
+        <path class="track" d="M20 100 A80 80 0 0 1 180 100" pathLength="100"/>
+        <path class="fill" d="M20 100 A80 80 0 0 1 180 100" pathLength="100" mask="url(#dial-{{ key }})"/></svg>
+      <p class="dial-value">{% if gauge.percent is none %}–{% else %}{{ gauge.percent }}<span class="unit">%</span>{% endif %}</p>
+      <p class="dial-caption">{{ caption }}</p>
+    </div>
+    <dl class="side">{% for words, value in side %}<div><dt>{{ words }}</dt><dd>{{ num(value) if value is not none else "–" }}</dd></div>{% endfor %}</dl>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel pipeline" aria-labelledby="pipe-title">
+  <div class="panel-head"><h2 id="pipe-title">{{ icon("kanban") }}Pipeline</h2></div>
+  <p class="caption">Jobs found in the last 30 days, by the stage they reached</p>
+  <ol class="stages">
+    {% for name, count, lit in pipeline %}
+    <li class="stage{% if loop.last %} rejected{% endif %}"><span class="blocks" aria-hidden="true">{% for block in range(12) %}<span{% if block < lit %} class="on"{% endif %}></span>{% endfor %}</span>
+      <span class="stage-count">{{ num(count) }}</span><span class="stage-name">{{ name }}</span></li>
     {% endfor %}
-  </tbody>
-  <tfoot><tr><th>Total</th><td>{{ chart.collected }}</td><td>{{ chart.sent }}
-    ({{ chart.per_100 if chart.per_100 is not none else "none" }} sent per 100 collected)</td></tr></tfoot>
-</table>
-{% endfor %}
+  </ol>
+</section>
 
-<h2>Passed your bar</h2>
-<p>{{ passed }} of {{ scored }} scored open jobs passed.</p>
-<dl>
-  <dt>Your bar</dt><dd>{{ threshold }}</dd>
-  <dt>Middle score</dt><dd>{{ median if median is not none else "none yet" }}</dd>
-  <dt>Passed today</dt><dd>{{ passed_today }}</dd>
-</dl>
-<h2>Scored</h2>
-<p>{{ scored }} of {{ open }} open jobs scored.</p>
-<dl>
-  <dt>Waiting</dt><dd>{{ waiting }}</dd>
-  <dt>Scored today</dt><dd>{{ scored_today }}</dd>
-  <dt>AI score failed</dt><dd>{{ failed }}</dd>
-</dl>
+<section class="panel attention" aria-labelledby="attn-title">
+  <div class="panel-head">
+    <h2 id="attn-title">{{ icon("triangle-alert") }}Needs attention</h2>
+    {{ switch("attn", "List", [("ready", "Ready to review", ready), ("replies", "Replies", none)], "ready", " tabs") }}
+  </div>
+  <div class="view view-ready">
+    {% if to_review %}
+    <ul class="rows">
+      {% for id, title, company, score in to_review %}
+      <li><a href="/jobs/{{ id }}">{{ title }}</a><span class="row-co">{{ company }}</span><span class="mark">Score {{ score }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="caption">Nothing to review yet.</p>{% endif %}
+  </div>
+  <div class="view view-replies">
+    {% if moved %}
+    <ul class="rows">
+      {% for id, title, company, stage in moved %}
+      <li><a href="/jobs/{{ id }}">{{ title }}</a><span class="row-co">{{ company }}</span><span class="mark{% if stage == 'Not moving on' %} danger{% endif %}">{{ stage }}</span></li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="caption">No replies this week.</p>{% endif %}
+    {% if not gmail %}<p class="caption">Gmail isn't connected, so replies are only the cards you moved on the Tracker.</p>{% endif %}
+  </div>
+</section>
 
-<h2>Jobs found in the last 30 days</h2>
-<table>
-  <thead><tr><th>Stage</th><th>Jobs</th></tr></thead>
-  <tbody>
-    <tr><td>Collected</td><td>{{ collected }}</td></tr>
-    <tr><td>Scored</td><td>{{ p_scored }}</td></tr>
-    <tr><td>Written</td><td>{{ p_written }}</td></tr>
-    <tr><td>Ready to review</td><td>{{ p_ready }}</td></tr>
-    <tr><td>Applied</td><td>{{ p_applied }}</td></tr>
-    <tr><td>Replied</td><td>{{ p_replied }}</td></tr>
-    <tr class="muted"><td>Rejected</td><td>{{ p_rejected }}</td></tr>
-  </tbody>
-</table>
-
-<h2>Ready to review ({{ ready }})</h2>
-{% if to_review %}
-<ul>
-  {% for id, title, company, score in to_review %}
-  <li><a href="/jobs/{{ id }}">{{ title }}</a> <span class="muted">{{ company }} · score {{ score }}</span></li>
-  {% endfor %}
-</ul>
-{% else %}<p class="muted">No written applications are waiting.</p>{% endif %}
-<h2>Replies this week</h2>
-{% if moved %}
-<ul>
-  {% for id, title, company, stage in moved %}
-  <li><a href="/jobs/{{ id }}">{{ title }}</a> <span class="muted">{{ company }} · {{ stage }}</span></li>
-  {% endfor %}
-</ul>
-{% else %}<p class="muted">No replies this week.</p>{% endif %}
+<section class="panel next" aria-labelledby="next-title">
+  <span class="ring" aria-hidden="true"><svg viewBox="0 0 64 64"><circle class="ring-track" cx="32" cy="32" r="28"/>
+    <circle class="ring-arc" cx="32" cy="32" r="28" pathLength="100"/></svg>{{ icon("send" if ready or unwritten else "download") }}</span>
+  <h2 id="next-title">Next step</h2>
+  <p>{% if ready %}Look each written application over; nothing is sent until you apply yourself.
+    {%- elif unwritten %}These jobs passed your bar; their resumes are next to be written.
+    {%- elif waiting %}These jobs are waiting for a score.
+    {%- else %}Nothing is waiting. Collect new jobs to fill your list.{% endif %}</p>
+  <a class="button primary" href="{{ next[1] }}">{{ next[0] }}</a>
+</section>
+</div>
 {% endblock %}
