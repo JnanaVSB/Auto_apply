@@ -328,7 +328,8 @@ The app never opens these sites: you browse them yourself, as usual, and their l
 - `data/` (settings, database, recovery file) and `exports/` are git-ignored.
 - Your own background picture, if you set one (Settings → Look says how), lives in `data/background/` with its
   credit line and is shown only to you; it is never part of the project. Pictures built into the app are
-  Unsplash-licensed and credited in the stylesheet.
+  Unsplash-licensed and credited in the stylesheet and under Credits below. Which picture a browser shows is kept
+  in that browser only (a cookie), never in your settings file.
 - Gmail is optional and read-only: it never sends or changes mail, and an e-mail's text stays on this computer.
   To connect your own, see [docs/gmail-setup.md](docs/gmail-setup.md).
 - Secrets live only in your OS keychain; the database is encrypted with SQLCipher.
@@ -352,6 +353,19 @@ listing there, as the feed's terms ask.
 US and foreign place names (used to decide whether a job is in the US) come from
 [GeoNames](https://www.geonames.org), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.
+
+The background pictures built into the dashboard (chosen on Settings → Look) are photographs under the
+[Unsplash License](https://unsplash.com/license), each shrunk, stripped of its metadata and, where its words needed
+it, darkened inside the file: "Mountains covered with fogs" by Alessio Soggetti and "Mountain ridges under pale sky"
+by Yegor Makarenko (the blue mountains, morning and dusk); "Green leafed pine trees" by Kyle Glenn (pines in fog);
+"Green and pink abstract art" by Pawel Czerwinski (still ink: the sign-in page's picture); "Aerial view of pine trees
+in mist" by Dan Otis (the hillside); "Green trees covered by fog" by Julian Steenbergen (grey mist); "Snow covered
+mountain during daytime" by Andrew Ly (the lake); "Snow-capped mountains rise above a tranquil river" and "Snowy
+mountains and pine trees border a partially frozen river" by Vincent Y @USA (the river and the ice); "Snow covered
+mountain under cloudy sky during daytime" by Igor Kyryliuk & Tetiana Kravchenko (the storm) and another of the same
+title by Jonathan Larson (the clouds); "Three Sisters mountains above evergreen forest" by Timo Spunkmeyer (the
+haze); "Three jagged mountain peaks" by Dylan Klingler (the forest). Each photograph's page is linked from the
+comment beside its rule in `app/web/static/app.css`.
 
 A background picture you upload is resized and stripped of its hidden information by
 [Pillow](https://python-pillow.github.io) 13.0.0 (MIT-CMU licence), installed from PyPI by its exact fingerprints

@@ -108,6 +108,7 @@ templates.env.globals |= {
     "HIDDEN_LABELS": queries.HIDDEN_LABELS,
     "SCHEMES": look.SCHEMES,  # the Look form on Settings
     "MODES": look.MODES,
+    "PICTURES": look.PICTURES,  # the Look form, and base.html for the chosen picture's words colour
 }
 # Python has no type of its own for .woff2 and takes it from the computer, where it can be missing (sent as text);
 # the computer's list could also change the manifest's type, which Python does know

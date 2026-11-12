@@ -342,7 +342,7 @@ def test_the_phone_is_logged_out_after_being_idle_like_the_laptop(phone, clock):
 
 
 def test_view_and_look_cookies_are_secure_on_the_phone_and_as_today_on_the_laptop(laptop, phone):
-    view, look = {"view": "table", "back": "/"}, {"scheme": "E", "mode": "dark"}
+    view, look = {"view": "table", "back": "/"}, {"scheme": "E", "mode": "dark", "picture": "pines"}
     year = "HttpOnly; Max-Age=31536000; Path=/; SameSite=lax"
     cookie, session = phone_login(phone)
     token = {"csrf_token": session.csrf}
@@ -350,13 +350,13 @@ def test_view_and_look_cookies_are_secure_on_the_phone_and_as_today_on_the_lapto
     reply = phone.post("/view", data=view | token, headers=sent, follow_redirects=False)
     assert reply.headers["Set-Cookie"] == f"auto_apply_view=table; {year}; Secure"
     reply = phone.post("/look", data=look | token, headers=sent, follow_redirects=False)
-    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark; {year}; Secure"
+    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark.pines; {year}; Secure"
     log_in(laptop)
     token = {"csrf_token": csrf(laptop)}
     reply = laptop.post("/view", data=view | token, follow_redirects=False)
     assert reply.headers["Set-Cookie"] == f"auto_apply_view=table; {year}"
     reply = laptop.post("/look", data=look | token, follow_redirects=False)
-    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark; {year}"
+    assert reply.headers["Set-Cookie"] == f"auto_apply_look=E.dark.pines; {year}"
 
 
 def test_the_laptops_logout_cookie_is_as_today(either):

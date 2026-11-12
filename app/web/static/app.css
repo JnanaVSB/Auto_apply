@@ -36,7 +36,8 @@
      ridges under pale sky" by Yegor Makarenko, https://unsplash.com/photos/mountain-ridges-under-pale-sky-nLxtZ36Gfeg,
      Unsplash License (deepened to dusk inside the file). Phones get portrait crops. The floor colour shows while a
      picture loads or if it fails, and carries the same inks. A picture cannot be chosen with light-dark(), so the
-     mode rules below pick it the way the tokens pick their colours. */
+     mode rules below pick it the way the tokens pick their colours. These are the blue mountains, one of the
+     pictures a browser can choose on Settings (data-field, below); the pines are what it gets until it chooses. */
   --field: url("mountains-morning.webp"); --field-floor: #c9d6df;
   --slab: light-dark(#ffffff, #0e171c);  /* the solid pane for reduce transparency, more contrast and no blur */
   /* The sign-in card is clear glass, Apple's clear variant: no fill at all, neither white nor dark, only a slight
@@ -125,7 +126,8 @@
   color-scheme: light dark;
 }
 @media (width < 64rem) { :root { --control: var(--tap); } }
-/* The dusk picture for dark mode, chosen as the colours are: by the device unless a mode is set on Settings. */
+/* The mountains' dusk picture for dark mode, chosen as the colours are: by the device unless a mode is set on
+   Settings. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --field: url("mountains-dusk.webp"); --field-floor: #0b1017; }
 }
@@ -137,13 +139,62 @@
 @media (width < 48rem) and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --field: url("mountains-dusk-phone.webp"); }
 }
-/* Scheme G has its own picture in both modes: "Green leafed pine trees" by Kyle Glenn,
-   https://unsplash.com/photos/green-leafed-pine-trees-SrASYZZpyjw, Unsplash License (deepened to 60 % inside the
-   file, sharp, never enlarged beyond its pixels; the phone file is its centre strip). It is dark whatever the mode,
-   so G's block below keeps the white ink set. Written after the mode rules, so it outranks them, and before the
-   person's own picture, which outranks it. */
-:root[data-palette="G"] { --field: url("pines-fog.webp"); --field-floor: #0b0f0c; }
-@media (width < 48rem) { :root[data-palette="G"] { --field: url("pines-fog-phone.webp"); } }
+/* The picture chosen on Settings, for this browser: every signed-in page carries its key as data-field on <html>
+   (the list is PICTURES in app/web/look.py, and a test checks every key has its two rules here) unless the person's
+   own picture is in use (data-own-field, below). The mountains need no rule of their own: the mode rules above hold
+   while no rule here matches. Every other picture is dark in both modes and takes the white ink set (data-ink, the
+   rule after the files). One file and its phone copy each, sharp, at most 2560 px wide, never enlarged beyond its
+   pixels, no metadata; the phone file is the centre strip. All are photographs under the Unsplash License:
+   pines: "Green leafed pine trees" by Kyle Glenn, https://unsplash.com/photos/green-leafed-pine-trees-SrASYZZpyjw
+   (deepened to 60 % inside the file). ink: the sign-in page's own file (below), as it is. hillside: "Aerial view of
+   pine trees in mist" by Dan Otis, https://unsplash.com/photos/aerial-view-of-pine-trees-in-mist-OYFHT4X5isg, at
+   70 %. mist: "Green trees covered by fog" by Julian Steenbergen,
+   https://unsplash.com/photos/green-trees-covered-by-fog-yIWXizbj7dM, at 40 %. lake: "Snow covered mountain during
+   daytime" by Andrew Ly, https://unsplash.com/photos/snow-covered-mountain-during-daytime-TcC0OajPZSk, at 43 % from
+   the top down to its last bright rows, then as shot. river: "Snow-capped mountains rise above a tranquil river" by
+   Vincent Y @USA, https://unsplash.com/photos/snow-capped-mountains-rise-above-a-tranquil-river-Cj1QOZbanoc, at
+   37 %. ice: "Snowy mountains and pine trees border a partially frozen river" by Vincent Y @USA,
+   https://unsplash.com/photos/snowy-mountains-and-pine-trees-border-a-partially-frozen-river-6bwUASZOpXc, at 39 %.
+   storm: "Snow covered mountain under cloudy sky during daytime" by Igor Kyryliuk & Tetiana Kravchenko,
+   https://unsplash.com/photos/snow-covered-mountain-under-cloudy-sky-during-daytime-HvX-qGICNMM, at 39 %.
+   clouds: "Snow covered mountain under cloudy sky during daytime" by Jonathan Larson,
+   https://unsplash.com/photos/snow-covered-mountain-under-cloudy-sky-during-daytime-lEYx3nKBZ7w, at 55 %.
+   haze: "Three Sisters mountains above evergreen forest" by Timo Spunkmeyer,
+   https://unsplash.com/photos/three-sisters-mountains-above-evergreen-forest-Hqi_G7DWTSQ, at 40 %.
+   forest: "Three jagged mountain peaks" by Dylan Klingler,
+   https://unsplash.com/photos/three-jagged-mountain-peaks-TYpyuBvGhsE, at 44 %.
+   The dimming is baked into each file (as shot, white words sat on these at 1.0 to 1.6:1; dimmed, at 3 to 7:1 bare,
+   as on the pines). The still ink is sharp and bright in places: words over it fall to about 1.4:1 under the cards,
+   a choice made knowing that. Written after the mode rules, so these outrank them; the own picture's rules and the
+   plain-page fallbacks at the end outrank these. */
+:root[data-field="pines"] { --field: url("pines-fog.webp"); --field-floor: #0b0f0c; }
+:root[data-field="ink"] { --field: url("login-ink.webp"); --field-floor: #060a0c; }
+:root[data-field="hillside"] { --field: url("pines-hillside.webp"); --field-floor: #202620; }
+:root[data-field="mist"] { --field: url("pines-mist.webp"); --field-floor: #212624; }
+:root[data-field="lake"] { --field: url("peaks-lake.webp"); --field-floor: #2a383b; }
+:root[data-field="river"] { --field: url("peaks-river.webp"); --field-floor: #2b2e2d; }
+:root[data-field="ice"] { --field: url("peaks-ice.webp"); --field-floor: #2c3335; }
+:root[data-field="storm"] { --field: url("peaks-storm.webp"); --field-floor: #323535; }
+:root[data-field="clouds"] { --field: url("peaks-clouds.webp"); --field-floor: #33373f; }
+:root[data-field="haze"] { --field: url("peaks-haze.webp"); --field-floor: #2e322b; }
+:root[data-field="forest"] { --field: url("peaks-forest.webp"); --field-floor: #222c32; }
+@media (width < 48rem) {
+  :root[data-field="pines"] { --field: url("pines-fog-phone.webp"); }
+  :root[data-field="ink"] { --field: url("login-ink-phone.webp"); }
+  :root[data-field="hillside"] { --field: url("pines-hillside-phone.webp"); }
+  :root[data-field="mist"] { --field: url("pines-mist-phone.webp"); }
+  :root[data-field="lake"] { --field: url("peaks-lake-phone.webp"); }
+  :root[data-field="river"] { --field: url("peaks-river-phone.webp"); }
+  :root[data-field="ice"] { --field: url("peaks-ice-phone.webp"); }
+  :root[data-field="storm"] { --field: url("peaks-storm-phone.webp"); }
+  :root[data-field="clouds"] { --field: url("peaks-clouds-phone.webp"); }
+  :root[data-field="haze"] { --field: url("peaks-haze-phone.webp"); }
+  :root[data-field="forest"] { --field: url("peaks-forest-phone.webp"); }
+}
+/* A dark picture's words are white in both modes (data-ink="dark"); the mountains carry data-ink="mode", which
+   matches no rule, so the Auto / Light / Dark choice rules them as it always did. Written after the mode rules
+   above, so Light on Settings cannot turn the words dark on a dark picture. */
+:root[data-field][data-ink="dark"] { color-scheme: dark; }
 /* The person's own background picture, kept in the private data folder and served to the signed-in person only.
    The template writes data-own-field on <html> when such a picture is set, and data-ink says which words it
    needs: "light" for a light picture (dark words), "dark" for a dark one (white words). Both modes then use that
@@ -161,7 +212,7 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
 /* ---------- Colour schemes ---------- */
 /* Chosen per browser on Settings (Look): data-theme forces a mode, data-palette swaps the colours. Teal above is the
    stylesheet's own (no attribute); a browser that has not chosen gets G (app/web/look.py). A-G give titles their own
-   colour. Teal and A-F share the mountain photographs; G has the pines (above). A scheme never recolours a picture. */
+   colour. The picture is chosen apart from the colours (data-field, above). A scheme never recolours a picture. */
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-palette] {
@@ -202,10 +253,9 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
   --line: light-dark(#e2dccd, #312c24); --line-strong: light-dark(#887f6e, #7d7564);
   --accent: light-dark(#4a5a24, #b9c77c); --on-accent: light-dark(#ffffff, #1b200b);
 }
-:root[data-palette="G"] {  /* forest and ochre: five colours, every value one of them or a lightness step of one */
-  color-scheme: dark;  /* the pines are dark in both modes, so the dark (white-word) side of every pair below is the one used;
-                          written after the mode rules above so Light on Settings cannot turn the words dark on a dark picture;
-                          the person's own picture flagged light still wins (its rule is more specific) */
+:root[data-palette="G"] {  /* forest and ochre: five colours, every value one of them or a lightness step of one.
+                              On a dark picture (the pines, its default) the words are white in both modes, so the
+                              dark side of every pair below is the one used; on the mountains both sides are. */
   /* The five, as given: near-black green #1a251f, forest green #283e29, off-white #edebe6, ochre #826531 and tan
      #9b846c; each but the forest green then tuned a little warmer: the near-black #1b2219, the off-white creamier
      #efe9dd, the ochre more amber #936a2b, the tan #a3876a. */
@@ -257,7 +307,8 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
 /* Browsers without light-dark() (before Chrome 123, Firefox 120, Safari 17.5) would drop every colour: they get
    Teal light as plain colours, whatever is chosen; the frame tokens take Teal's frame. */
 @supports not (color: light-dark(#000, #fff)) {
-  :root, :root[data-palette], :root[data-theme], :root[data-own-field][data-ink] {  /* the own picture's floor too */
+  :root, :root[data-palette], :root[data-theme],
+  :root:is([data-field], [data-own-field])[data-ink] {  /* the pictures' floors and inks too */
     color-scheme: light;
     --bg: #f3f5f7; --surface: #ffffff; --sunken: #ebeef2; --text: #1b2128; --muted: #56606b;
     --line: #e1e5ea; --line-strong: #7e8894; --accent: #0f6a80; --on-accent: #ffffff; --accent-soft: #e3f1f5;
@@ -1052,8 +1103,9 @@ main:has(.board) { max-width: none; }
 /* More contrast and reduce transparency: a plain page in the field's floor tone, solid panes, no blur, no picture,
    no letter edge; more contrast adds defined borders. */
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
-  /* every picture rule above, the dusk and own ones included, is outranked here: same specificity, later */
-  :root:not([data-theme]), :root[data-theme], :root[data-palette], :root[data-own-field][data-ink] {
+  /* every picture rule above, the chosen and own ones included, is outranked here: same specificity, later */
+  :root:not([data-theme]), :root[data-theme], :root[data-palette],
+  :root:is([data-field], [data-own-field])[data-ink] {
     --glass: var(--slab); --glass-blur: none; --glass-blur-deep: none; --halo: none; --rim: none; --rim-glow: none;
     --field: none; --field-floor: var(--bg); --control-fill: var(--slab); --glass-hero: var(--surface);
     --glass-hero-blur: none; --glass-hero-rim: none; }
