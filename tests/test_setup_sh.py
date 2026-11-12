@@ -58,7 +58,7 @@ create) [ ! -e "$STATE/ctrl-c" ] || { kill -INT "$PPID"; exit 1; }  # stopped by
     [ ! -e "$STATE/build-fails" ] || exit 1; touch "$STATE/listed" "$STATE/works" ;;
 run) case "$*" in
     *"print(sys.executable)"*) if [ -e "$STATE/no-python" ]; then echo "$STATE/gone"; else echo "$STATE/python"; fi ;;
-    *"pip install"*) [ ! -e "$STATE/pip-repairs" ] || touch "$STATE/works" ;;
+    *"pip install"*) [ ! -e "$STATE/pip-fails" ] || exit 1; [ ! -e "$STATE/pip-repairs" ] || touch "$STATE/works" ;;
     *) [ -e "$STATE/works" ] ;;
     esac ;;
 esac""",
@@ -438,10 +438,21 @@ def test_an_environment_that_lacks_only_a_pip_package_is_completed_not_rebuilt(s
     result = sandbox.run()
     assert result.returncode == 0, result.stderr
     assert "can't load the app: adding the pinned pip packages first." in result.stdout
-    assert "Rebuild it?" not in result.stdout and "Environment auto_apply: ready" in result.stdout
+    assert "Rebuild it?" not in result.stdout and "ready (left as it is)" not in result.stdout
+    assert "Environment auto_apply: ready (the pinned pip packages were added)." in result.stdout
     assert sandbox.log("conda")[:4] == [IMPORT, "env list", PIP, IMPORT]
     assert not any(line.startswith(("env remove", "create")) for line in sandbox.log("conda"))
     assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
+
+
+def test_a_pip_line_that_fails_leads_to_the_rebuild_question(sandbox):
+    (sandbox.state / "works").unlink()
+    (sandbox.state / "pip-fails").touch()
+    result = sandbox.run(answers="n\n")
+    assert result.returncode == 1
+    assert "adding the pinned pip packages first." in result.stdout and "Rebuild it?" in result.stdout
+    assert sandbox.log("conda")[:4] == [IMPORT, "env list", PIP, "env list"]  # no second check after a failed pip
+    assert sandbox.log("python") == []
 
 
 def test_a_missing_environment_on_linux_comes_from_the_lock_file_and_hashed_pip(sandbox):

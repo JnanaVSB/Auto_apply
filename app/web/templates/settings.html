@@ -211,7 +211,7 @@
 {% if own_field.can_upload %}
 <form method="post" action="/background/upload" enctype="multipart/form-data" class="stacked">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <label>Picture (JPEG, PNG or WebP, up to 15 MB and 40 million pixels) <input type="file" name="picture" accept="image/jpeg,image/png,image/webp" required></label>
+  <label>Picture (JPEG, PNG or WebP, up to 15 MB and 40 million pixels, 10 million for WebP) <input type="file" name="picture" accept="image/jpeg,image/png,image/webp" required></label>
   <label>Credit line, shown at the end of every page <input name="credit" maxlength="300" value="{{ own_field.credit }}"></label>
   <button type="submit">Use this picture</button>
 </form>

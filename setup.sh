@@ -158,9 +158,11 @@ elif [ -n "$conda" ] && [ -z "$(conda_problem "$conda")" ] && listed; then
     # completes it. One that is really broken is offered a rebuild below.
     echo "Environment $ENV_NAME is there but can't load the app: adding the pinned pip packages first."
     "$conda" run --no-capture-output -n "$ENV_NAME" pip install --require-hashes --no-deps -r requirements-pip.txt &&
-        works && ready=yes
+        works && ready=completed
 fi
-if [ "$ready" = yes ]; then
+if [ "$ready" = completed ]; then
+    echo "Environment $ENV_NAME: ready (the pinned pip packages were added)."
+elif [ "$ready" = yes ]; then
     echo "Environment $ENV_NAME: ready (left as it is)." # whatever the conda's version: it built this already
 else
     # Building needs conda 26.1 or newer. Another conda that is older or broken is left as it is, and setup offers its

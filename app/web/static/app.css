@@ -202,14 +202,13 @@ main > p.credit-corner { margin: var(--space-6) 0 0; text-align: right; max-widt
   --line: light-dark(#e2dccd, #312c24); --line-strong: light-dark(#887f6e, #7d7564);
   --accent: light-dark(#4a5a24, #b9c77c); --on-accent: light-dark(#ffffff, #1b200b);
 }
-:root[data-palette="G"] {  /* forest and ochre: the owner's five-colour palette, every value from it or a lightness step of it */
+:root[data-palette="G"] {  /* forest and ochre: five colours, every value one of them or a lightness step of one */
   color-scheme: dark;  /* the pines are dark in both modes, so the dark (white-word) side of every pair below is the one used;
                           written after the mode rules above so Light on Settings cannot turn the words dark on a dark picture;
                           the person's own picture flagged light still wins (its rule is more specific) */
-  /* The owner's swatches were near-black green #1a251f, forest green #283e29, off-white #edebe6, ochre #826531
-     and tan #9b846c; tuned a little toward the Three Sisters picture they like (pine near-black #1b130c, amber
-     light #fccd7c and #9d5d18, warm rock #875e36): the near-black warmer (#1b2219), the off-white creamier
-     (#efe9dd), the ochre more amber (#936a2b), the tan warmer (#a3876a); the forest green as it was. */
+  /* The five, as given: near-black green #1a251f, forest green #283e29, off-white #edebe6, ochre #826531 and tan
+     #9b846c; each but the forest green then tuned a little warmer: the near-black #1b2219, the off-white creamier
+     #efe9dd, the ochre more amber #936a2b, the tan #a3876a. */
   --bg: light-dark(#efe9dd, #121914); --surface: light-dark(#f6f2ea, #1b2219); --sunken: light-dark(#e4ded2, #212a23);
   --text: light-dark(#1b2219, #efe9dd); --muted: light-dark(#3b4d41, #bbb09c); --title: light-dark(#6e4f1e, #e6cfa9);  /* the amber ochre a step darker for a light picture, the warm tan lifted for a dark one */
   --ink-muted: light-dark(#263228, #d9d2c2);  /* the near-black lifted a little; the cream dimmed a little */
@@ -855,7 +854,7 @@ main:has(.board) { max-width: none; }
 .tcard .meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-3); color: var(--muted); font-size: var(--text-small);
   line-height: var(--leading-small); }
 /* Days since you applied, top right (none on Ready): a clear outlined badge in the full text ink (small bold
-   words on the picture need the strongest ink; the owner chose brighter text over a fill). */
+   words on the picture need the strongest ink: brighter text rather than a fill). */
 .tcard .days { position: absolute; top: var(--space-3); right: var(--space-3); padding: 0 var(--space-2);
   border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1px var(--control-line); color: var(--text);
   font-size: var(--text-caption); line-height: 1.6; font-weight: 700; font-variant-numeric: tabular-nums; }

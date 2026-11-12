@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 import time
+import warnings
 
 import pytest
 from helpers import csrf, log_in
@@ -394,6 +395,16 @@ def test_see_through_parts_land_on_the_dark_floor_and_a_big_picture_keeps_its_co
     assert main.getpixel((1281, 150)) != main.getpixel((1270, 150))  # the edge is where it was, not shifted by a strip
 
 
+def test_a_16_bit_grey_picture_keeps_its_greys(client, folder):
+    source = Image.new("I;16", (5200, 300))  # a gradient from black to white, wide enough for the strip path
+    source.putdata([round(x / 5199 * 65535) for y in range(300) for x in range(5200)])
+    assert upload(client, encoded(source, "PNG")).headers["location"].endswith("uploaded#look")
+    main = stored(folder)[0]
+    assert main.size == (2560, 148) and main.mode == "RGB"
+    for x, grey in ((4, 0), (1280, 128), (2555, 255)):  # not clipped to white
+        assert max(abs(value - grey) for value in main.getpixel((x, 74))) <= 6, x
+
+
 def test_a_camera_picture_is_turned_the_way_it_was_meant(client, folder):
     exif = Image.Exif()
     exif[0x0112] = 6  # stored lying on its side: turn 90 degrees to show
@@ -439,10 +450,14 @@ def test_too_many_pixels_or_too_long_a_side_is_refused_before_decoding(client, f
     for owner in (ImageFile.ImageFile, WebPImagePlugin.WebPImageFile):
         original = owner.load
         monkeypatch.setattr(owner, "load", lambda self, original=original: loads.append(self.size) or original(self))
-    for data in (wide, many):
-        assert upload(client, data, "big.png", kind="image/png").headers["location"].endswith("refused#look")
-    assert loads == [] and list(folder.iterdir()) == []
+    webp = encoded(Image.new("RGB", (4000, 2501)), "WEBP")  # just over 10 million pixels: WebP's lower ceiling
+    with warnings.catch_warnings(record=True) as warned:  # Pillow's bomb warning, raised at open, never gets out
+        warnings.simplefilter("always")
+        for data in (wide, many, webp):
+            assert upload(client, data, "big.png", kind="image/png").headers["location"].endswith("refused#look")
+    assert loads == [] and warned == [] and list(folder.iterdir()) == []
     assert upload(client, encoded(picture(200, 100), "WEBP")).headers["location"].endswith("uploaded#look")
+    assert "10 million for WebP" in client.get("/settings").text
     assert loads[0] == (200, 100)  # a sound picture is decoded, so the hook does see the app's decodes
 
 
@@ -585,6 +600,19 @@ def test_a_token_sent_as_a_file_does_not_count(client, folder):
     assert list(folder.iterdir()) == []
 
 
+def test_the_lock_is_held_until_the_worker_is_done_and_released_there(client, folder, monkeypatch):
+    busy, seen = client.app.state.background_busy, []
+
+    async def in_this_thread(work, *args):  # stands in for the thread pool: the lock state right after the work
+        result = work(*args)
+        seen.append(busy.locked())
+        return result
+
+    monkeypatch.setattr(background, "run_in_threadpool", in_this_thread)
+    assert upload(client, encoded(picture(200, 100))).headers["location"].endswith("uploaded#look")
+    assert seen == [False] and not busy.locked()  # released by the worker itself, not by the request afterwards
+
+
 def test_the_lock_is_free_again_after_a_fault_while_preparing(client, folder, monkeypatch):
     faults = [RuntimeError("made-up fault")]
     prepare = background._prepare
@@ -610,7 +638,7 @@ def test_the_phone_route_needs_a_login_too(client, folder):
 def test_a_write_that_fails_part_way_leaves_a_set_the_phone_route_can_use(client, folder, monkeypatch):
     upload(client, encoded(picture(400, 300), "PNG"), credit="first")
     old_phone = (folder / background.PHONE).read_bytes()
-    os.utime(folder / background.PHONE, ns=(1, 1))  # plainly older than anything written next
+    time.sleep(0.05)  # so the phone copy is plainly older, by every time it carries, than anything written next
     renames, replace = [], background.os.replace
 
     def second_fails(source, target):
@@ -641,10 +669,18 @@ def test_a_credit_that_cannot_be_written_still_leaves_the_picture_in_use_and_say
     assert "its phone copy or its credit could not be written" in text and background.DEFAULT_CREDIT in text
 
 
+def test_a_main_picture_moved_into_place_with_an_old_time_still_counts_as_newer(client, folder):
+    upload(client, encoded(picture(400, 300), "PNG"))
+    time.sleep(0.05)  # later, by every time the upload's files carry
+    (folder / "own.webp").write_bytes(PNG)  # placed by hand after the upload, as mv or cp -p would: an old mtime
+    os.utime(folder / "own.webp", ns=(1, 1))
+    assert client.get(background.PHONE_ROUTE).content == PNG  # it arrived last, so the earlier phone copy is stale
+
+
 def test_a_stale_or_broken_phone_copy_gives_way_to_the_main_picture(client, folder):
     upload(client, encoded(picture(400, 300), "PNG"))
-    os.utime(folder / background.PHONE, ns=(1, 1))
-    (folder / "own.webp").write_bytes(PNG)  # placed by hand, newer than the phone copy
+    time.sleep(0.05)
+    (folder / "own.webp").write_bytes(PNG)  # placed by hand later, so newer than the phone copy
     assert client.get(background.PHONE_ROUTE).content == PNG
     os.utime(folder / background.PHONE, ns=(2**62, 2**62))  # newer again
     (folder / background.PHONE).write_bytes(b"not a picture")

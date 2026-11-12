@@ -8,6 +8,7 @@ import os
 import stat
 import tempfile
 import threading
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,10 +51,13 @@ NOT_A_PICTURE = (
 # What an upload may be: only these decoders are asked (the JPEG one also answers a camera JPEG with a second picture
 # inside, as "MPO"; its first picture is used), a picture is refused by its size before any pixel is decoded, and the
 # decode itself is the real check of the bytes. 40 million pixels takes an 8K wallpaper (33 million) and keeps the
-# decoded picture, 4 bytes a pixel in Pillow for RGB and RGBA alike, at 160 MB at the worst (see `_reduced`).
+# decoded picture, 4 bytes a pixel in Pillow for RGB and RGBA alike, at 160 MB. WebP's decoder needs about four
+# times that while it decodes (measured: 616 MB added for 40 million pixels), so WebP stops at a quarter, 10 million
+# (a 4K wallpaper is 8 million). The whole preparation, measured per format, is in `_reduced`.
 FORMATS = ["JPEG", "PNG", "WEBP"]
 MAX_SIDE = 12000
 MAX_PIXELS = 40_000_000
+WEBP_PIXELS = MAX_PIXELS // 4
 if Image:
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS  # Pillow's own bomb check, set to the same line as the explicit one below
 LONG_SIDE = 2560  # the stored picture: no bigger than this on its long side, never enlarged
@@ -103,7 +107,7 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
     async def own_phone_picture(request: Request) -> Response:
         """The phone copy while it is as new as the main picture and sound; else the main picture itself."""
         main, phone = _first(folder, NAMES), _first(folder, (PHONE,))
-        if phone and phone.kind and (not (main and main.kind) or phone.details.st_mtime_ns >= main.details.st_mtime_ns):
+        if phone and phone.kind and (not (main and main.kind) or _fresh(phone.details) >= _fresh(main.details)):
             main and main.close()
             return _send(request, phone)
         phone and phone.close()
@@ -121,11 +125,9 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
             outcome = "refused"
         elif not request.app.state.background_busy.acquire(blocking=False):
             outcome = "busy"
-        else:
-            try:
-                outcome = await run_in_threadpool(_store, folder, data, credit)
-            finally:
-                request.app.state.background_busy.release()
+        else:  # the worker releases the lock when it is done, whatever happens to the request meanwhile
+            busy = request.app.state.background_busy
+            outcome = await run_in_threadpool(_store_then_release, busy, folder, data, credit)
         return RedirectResponse(f"/settings?look={outcome}#look", 303)
 
     @app.post("/background/remove")
@@ -145,6 +147,12 @@ def add_routes(app: FastAPI, data_dir: Path) -> None:
         finally:
             request.app.state.background_busy.release()
         return RedirectResponse(f"/settings?look={'left' if left else 'removed'}#look", 303)
+
+
+def _fresh(details: os.stat_result) -> int:
+    """When the file last changed, or last arrived under its name: a picture moved or copied into place keeps an old
+    modification time, so the later of that and the status change (or, on Windows, creation) time counts."""
+    return max(details.st_mtime_ns, details.st_ctime_ns)
 
 
 def _send(request: Request, found: Found | None) -> Response:
@@ -279,6 +287,15 @@ def _clean(text: str) -> str:
     return "".join(char for char in first if char.isprintable()).strip()[:MAX_CREDIT] or DEFAULT_CREDIT
 
 
+def _store_then_release(busy: threading.Lock, folder: Path, data: bytes, credit: str) -> str:
+    """`_store` in the worker thread, holding the lock to its end: a request cancelled while the files are being
+    written leaves the lock held until then, and it is released exactly once, here."""
+    try:
+        return _store(folder, data, credit)
+    finally:
+        busy.release()
+
+
 def _store(folder: Path, data: bytes, credit: str) -> str:
     """The uploaded bytes as the private background: "uploaded", "refused" (not a picture the app takes), "failed"
     (the folder could not be written) or "partly" (the picture is in place, its phone copy or credit is not). Every
@@ -295,14 +312,22 @@ def _store(folder: Path, data: bytes, credit: str) -> str:
 
 def _prepare(data: bytes) -> tuple[bytes, bytes] | None:
     """The picture and its phone copy as WebP bytes; None when the bytes are not a picture within the limits."""
-    with Image.open(io.BytesIO(data), formats=FORMATS) as opened:  # the header only, so far
+    with warnings.catch_warnings():  # Pillow's bomb warning fires at open, before the explicit check below refuses
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        opened = Image.open(io.BytesIO(data), formats=FORMATS)  # the header only, so far
+    with opened:
         width, height = opened.size
-        if not (0 < width <= MAX_SIDE and 0 < height <= MAX_SIDE and width * height <= MAX_PIXELS):
+        most = WEBP_PIXELS if opened.format == "WEBP" else MAX_PIXELS
+        if not (0 < width <= MAX_SIDE and 0 < height <= MAX_SIDE and width * height <= most):
             return None
         if (longest := max(width, height)) > LONG_SIDE:  # a JPEG decodes at a reduced scale that still covers it
             opened.draft("RGB", (-(-width * LONG_SIDE // longest), -(-height * LONG_SIDE // longest)))
         opened.load()  # the whole first picture: the real check of the bytes; a later frame is never asked for
         ImageOps.exif_transpose(opened, in_place=True)  # as the camera meant it
+        if opened.mode.startswith("I"):  # 16-bit greys: scaled to 8-bit, which convert() would clip to white; a
+            # colour key in 16 bits matches nothing afterwards, so that part shows as it is
+            opened = opened.point(lambda value: value / 257).convert("L")
+            opened.info.pop("transparency", None)
         picture = _reduced(opened)
         picture.thumbnail((LONG_SIDE, LONG_SIDE), Image.Resampling.LANCZOS)
         if picture.mode == "RGBA":  # see-through parts onto the pages' dark floor, as the browser would not
@@ -319,9 +344,10 @@ def _reduced(opened: "Image.Image") -> "Image.Image":
     so its long side is at least LONG_SIDE and under twice that, cheaply: Pillow premultiplies a see-through picture
     at full size before it resamples, a second copy as big as the first (and shrinks a palette picture by nearest
     pixel), so a big picture is converted and box-reduced strip by strip, each strip a small copy. Measured on an
-    8000x5000 PNG (the 40-million-pixel worst case), the whole preparation adds about 200 MB for an RGB picture,
-    220 MB for a see-through one and 105 MB for a palette one; a JPEG, decoded reduced, 80 MB. Shrinking the
-    see-through one whole took 370 MB, and compositing it at full size, as before, about 500 MB."""
+    8000x5000 picture (the 40-million-pixel worst case), the whole preparation adds about 200 MB for an RGB PNG,
+    220 MB for a see-through PNG, 105 MB for a palette PNG, 306 MB for an RGB PNG that carries a camera orientation
+    (the turn is a full-size copy) and 80 MB for a JPEG (decoded reduced); a 4000x2500 WebP, the most WebP may be,
+    160 MB. Shrinking the see-through PNG whole took 370 MB, and compositing it at full size about 500 MB."""
     mode = "RGBA" if opened.has_transparency_data else "RGB"
     width, height = opened.size
     if (factor := max(width, height) // LONG_SIDE) < 2:
