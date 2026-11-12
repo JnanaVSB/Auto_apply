@@ -57,3 +57,12 @@ def test_login_and_problem_pages_have_no_menu(client):
     log_in(client)
     text = client.get("/nowhere").text
     assert "Page not found." in text and "<nav" not in text
+
+
+def test_rail_items_carry_their_full_names(client):
+    log_in(client)
+    rail = MENUS.search(client.get("/").text).group(1)
+    labels = re.findall(r'<span class="label">([^<]+)</span>', rail)
+    assert {"Ready to Apply", "Questionnaire", "Answer key", "Log out"} <= set(labels)
+    assert len(labels) == rail.count("<a ") + 1  # every link and Log out
+    assert "title=" not in rail

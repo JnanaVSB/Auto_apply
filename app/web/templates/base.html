@@ -30,10 +30,9 @@
       {"href": "/boards", "word": "Boards", "icon": "globe"},
     ]),
     ("Prepare", [
-      {"href": "/ready", "word": "Ready", "rest": " to Apply", "name": "Ready to Apply", "icon": "send"},
-      {"href": "/resume-profile", "word": "Resume", "rest": " Profile", "name": "Resume Profile", "icon": "file-text"},
-      {"href": "/questionnaire", "word": "Questions", "rest": " (Questionnaire)", "name": "Questionnaire",
-       "icon": "clipboard-list"},
+      {"href": "/ready", "name": "Ready to Apply", "icon": "send"},
+      {"href": "/resume-profile", "name": "Resume Profile", "icon": "file-text"},
+      {"href": "/questionnaire", "name": "Questionnaire", "icon": "clipboard-list"},
     ]),
     ("Track", [
       {"href": "/tracker", "word": "Tracker", "icon": "kanban"},
@@ -41,7 +40,7 @@
     ]),
     ("Setup", [
       {"href": "/settings", "word": "Settings", "icon": "settings"},
-      {"href": "/answer-key", "word": "Answers", "rest": " (Answer key)", "name": "Answer key", "icon": "key-round"},
+      {"href": "/answer-key", "name": "Answer key", "icon": "key-round"},
       {"href": "/pilot", "word": "Pilot", "icon": "flask-conical"},
     ]),
   ] %}
@@ -58,15 +57,15 @@
       <p class="nav-title{% if rail %} sr-only{% endif %}">{{ group }}</p>
       <ul>
         {% for link in links %}
-        <li><a href="{{ link.href }}"{% if link.href == now.href %} aria-current="page"{% endif %}{% if rail %} title="{{ link.name or link.word }}"{% endif %}>{{ icon(link.icon) }}
-          {%- if rail %}{{ link.word }}{% if link.rest %}<span class="sr-only">{{ link.rest }}</span>{% endif %}{% else %}{{ link.name or link.word }}{% endif %}</a></li>
+        <li><a href="{{ link.href }}"{% if link.href == now.href %} aria-current="page"{% endif %}>{{ icon(link.icon) }}
+          <span class="label">{{ link.name or link.word }}</span></a></li>
         {% endfor %}
       </ul>
     </div>
     {% endfor %}
     <form class="logout" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf }}">
-      <button type="submit" class="quiet">{{ icon("log-out") }}Log out</button>
+      <button type="submit" class="quiet">{{ icon("log-out") }}<span class="label">Log out</span></button>
     </form>
   {% endmacro %}
   <a class="skip" href="#main">Skip to the page</a>
