@@ -152,6 +152,7 @@
 :root[data-own-field] { --field: url("/background/own"); }  /* the route, not a file: the stylesheet test skips routes */
 :root[data-own-field][data-ink="dark"] { color-scheme: dark; --field-floor: #0e171c; }
 :root[data-own-field][data-ink="light"] { color-scheme: light; --field-floor: #e9e5dc; }
+@media (width < 48rem) { :root[data-own-field] { --field: url("/background/own-phone"); } }  /* the upload's portrait crop */
 /* The credit: a quiet line, never over content, never a control. On Settings → Look it is the full sentence; at
    the end of every page a shorter caption in the content's bottom corner. */
 .credit { max-width: 60ch; color: var(--ink-muted); font-size: var(--text-small); line-height: var(--leading-small); }

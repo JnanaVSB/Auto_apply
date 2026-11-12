@@ -13,7 +13,7 @@ import pytest
 SCRIPT = Path(__file__).resolve().parent.parent / "setup.sh"
 # The only real programs on the PATH: none of them downloads anything.
 REAL_TOOLS = ("awk", "bash", "cat", "cp", "dirname", "mkdir", "mktemp", "rm", "sha256sum", "touch")
-IMPORT = "run -n auto_apply python -c import sqlcipher3, app.setup, app.web.main"  # does the environment work?
+IMPORT = "run -n auto_apply python -c import sqlcipher3, PIL, app.setup, app.web.main"  # does the environment work?
 BUILD = "create -y -n auto_apply --override-channels -c conda-forge --file conda-linux-64.lock"  # conda-forge only
 PIP = "run --no-capture-output -n auto_apply pip install --require-hashes --no-deps -r requirements-pip.txt"
 STOPPED = "Stopped. Nothing is undone; run ./setup.sh again to continue.\n"
@@ -58,7 +58,7 @@ create) [ ! -e "$STATE/ctrl-c" ] || { kill -INT "$PPID"; exit 1; }  # stopped by
     [ ! -e "$STATE/build-fails" ] || exit 1; touch "$STATE/listed" "$STATE/works" ;;
 run) case "$*" in
     *"print(sys.executable)"*) if [ -e "$STATE/no-python" ]; then echo "$STATE/gone"; else echo "$STATE/python"; fi ;;
-    *"pip install"*) ;;
+    *"pip install"*) [ ! -e "$STATE/pip-repairs" ] || touch "$STATE/works" ;;
     *) [ -e "$STATE/works" ] ;;
     esac ;;
 esac""",
@@ -247,7 +247,7 @@ def test_too_little_free_space_for_the_environment_names_the_folder(sandbox):
     assert result.returncode == 1
     assert result.stderr == f"Setup needs at least 3 GB free in {sandbox.home}, which has 1.0 GB free.\n"
     assert sandbox.log("df") == [f"-Pk {sandbox.home}"]
-    assert not any(line.startswith(("create", "env ")) for line in sandbox.log("conda"))
+    assert not any(line.startswith(("create", "env remove", "env create")) for line in sandbox.log("conda"))
 
 
 def test_too_little_free_space_for_miniforge_stops_before_the_download(sandbox):
@@ -423,6 +423,7 @@ def test_a_broken_environment_is_rebuilt_only_after_yes(sandbox):
     result = sandbox.run(answers="n\n")
     assert result.returncode == 1
     assert "Environment auto_apply is there but can't load the app (broken or half-built). Rebuild it?" in result.stdout
+    assert sandbox.log("conda")[:4] == [IMPORT, "env list", PIP, IMPORT]  # the pip packages were tried first
     assert not any(line.startswith(("env remove", "create")) for line in sandbox.log("conda"))
     assert (sandbox.state / "listed").exists()
     result = sandbox.run(answers="y\n")
@@ -431,11 +432,23 @@ def test_a_broken_environment_is_rebuilt_only_after_yes(sandbox):
     assert changes == ["env remove -y -n auto_apply", BUILD]
 
 
+def test_an_environment_that_lacks_only_a_pip_package_is_completed_not_rebuilt(sandbox):
+    (sandbox.state / "works").unlink()
+    (sandbox.state / "pip-repairs").touch()  # the pinned pip line is all it lacks (an install from before Pillow)
+    result = sandbox.run()
+    assert result.returncode == 0, result.stderr
+    assert "can't load the app: adding the pinned pip packages first." in result.stdout
+    assert "Rebuild it?" not in result.stdout and "Environment auto_apply: ready" in result.stdout
+    assert sandbox.log("conda")[:4] == [IMPORT, "env list", PIP, IMPORT]
+    assert not any(line.startswith(("env remove", "create")) for line in sandbox.log("conda"))
+    assert sandbox.log("python") == [f"{sandbox.project} -m app.setup"]
+
+
 def test_a_missing_environment_on_linux_comes_from_the_lock_file_and_hashed_pip(sandbox):
     sandbox.no_environment()
     result = sandbox.run()
     assert result.returncode == 0, result.stderr
-    assert sandbox.log("conda")[2:4] == [BUILD, PIP]
+    assert sandbox.log("conda")[3:5] == [BUILD, PIP]  # after: does it work, is it listed (for the pip step), listed
     assert "Environment auto_apply: ready." in result.stdout
 
 

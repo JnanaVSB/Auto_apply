@@ -322,7 +322,7 @@ def test_fonts_and_icons_are_served_with_their_licences(client):
     static = main.HERE / "static"
     found = re.findall(r'url\("([^"]+)"\)', (static / "app.css").read_text())
     routes = {path for path in found if path.startswith("/")}  # the dashboard's own addresses, not files
-    assert routes <= {background.ROUTE}  # written out: a new address in the stylesheet is a decision
+    assert routes <= {background.ROUTE, background.PHONE_ROUTE}  # written out: a new address is a decision
     assert found and all((static / path).is_file() for path in found if path not in routes)  # every file exists
     for path, kind in (
         ("fonts/SourceSans3VF-Upright.ttf.woff2", "font/woff2"),

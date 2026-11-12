@@ -14,7 +14,7 @@ ENV_NAME=auto_apply
 MIN_CONDA_MAJOR=26
 MIN_CONDA_MINOR=1
 MIN_FREE_KB=3145728 # 3 GB: Miniforge, the environment (about 1 GB) and conda's package cache
-IMPORT_TEST="import sqlcipher3, app.setup, app.web.main"
+IMPORT_TEST="import sqlcipher3, PIL, app.setup, app.web.main"
 
 stop() {
     printf '%s\n' "$1" >&2
@@ -93,6 +93,10 @@ works() { # does the environment load the app?
     "$conda" run -n "$ENV_NAME" python -c "$IMPORT_TEST" >/dev/null 2>&1
 }
 
+listed() { # is there an environment of that name?
+    "$conda" env list | awk -v name="$ENV_NAME" '$1 == name { found = 1 } END { exit !found }'
+}
+
 # Ctrl+C anywhere says so, instead of the failure line of a step it cut off (bash runs this once that step ends).
 # It leaves through the EXIT trap, so a Miniforge download is still removed.
 trap 'echo "Stopped. Nothing is undone; run ./setup.sh again to continue." >&2; exit 130' INT TERM
@@ -146,7 +150,17 @@ for candidate in "$miniforge_conda" "${CONDA_EXE:-}" "$(command -v conda || true
 done
 
 # 3. The environment, by name, so whichever one is active doesn't matter
+ready=no
 if [ -n "$conda" ] && works; then
+    ready=yes
+elif [ -n "$conda" ] && [ -z "$(conda_problem "$conda")" ] && listed; then
+    # An environment from before a pip package was pinned (Pillow) lacks only that package: the hash-checked pip line
+    # completes it. One that is really broken is offered a rebuild below.
+    echo "Environment $ENV_NAME is there but can't load the app: adding the pinned pip packages first."
+    "$conda" run --no-capture-output -n "$ENV_NAME" pip install --require-hashes --no-deps -r requirements-pip.txt &&
+        works && ready=yes
+fi
+if [ "$ready" = yes ]; then
     echo "Environment $ENV_NAME: ready (left as it is)." # whatever the conda's version: it built this already
 else
     # Building needs conda 26.1 or newer. Another conda that is older or broken is left as it is, and setup offers its
@@ -166,7 +180,7 @@ else
         stop "The Miniforge in ~/miniforge3 $problem; setup needs conda $MIN_CONDA_MAJOR.$MIN_CONDA_MINOR or newer. Move or remove that folder, then run ./setup.sh again: it installs a fresh one."
 
     need_space
-    if "$conda" env list | awk -v name="$ENV_NAME" '$1 == name { found = 1 } END { exit !found }'; then
+    if listed; then
         ask "Environment $ENV_NAME is there but can't load the app (broken or half-built). Rebuild it? Your data folder is not touched." ||
             stop "Environment $ENV_NAME can't load the app. Run ./setup.sh again and answer yes to rebuild it."
         "$conda" env remove -y -n "$ENV_NAME" || stop "Removing the broken environment $ENV_NAME failed (if it is active, run conda deactivate first)."

@@ -1,6 +1,7 @@
-# sqlcipher3 pinned to exact files: pip refuses any download whose SHA-256 fingerprint is not listed here.
+# sqlcipher3 and Pillow pinned to exact files: pip refuses any download whose SHA-256 fingerprint is not listed here.
 # Fingerprints from PyPI for every Python 3.12 wheel (Linux, macOS, Windows); no source builds.
 --only-binary sqlcipher3
+--only-binary pillow
 sqlcipher3==0.6.2 \
     --hash=sha256:a51b18bd782652a2282f9cb1b03b840ba5a6c0c675de6cefb76262c9789c8f06 \
     --hash=sha256:fea0f1264f09d219dd6ce699ffca8cc9022a914661c6efa4390e85a2bf78acf9 \
@@ -13,3 +14,15 @@ sqlcipher3==0.6.2 \
     --hash=sha256:fb15c43f8a4f8b6b0ebe62ad2ab97a7946e3b75cb98a02069ff56b7d5a96c415 \
     --hash=sha256:8bd60ffb7bfa65bd0e51da3d5c308553d7149f0091d4ea9f754c33d5ebbf0a66 \
     --hash=sha256:99148bf4bf8e73c2c35f810f80de776d7de09b6cf277322c07759026400e90d0
+# Pillow 13.0.0 (the oldest allowed: earlier releases have decoder bugs this use would reach) makes the resized,
+# metadata-free copies of a background picture you upload; nothing older may ever be pinned here.
+pillow==13.0.0 \
+    --hash=sha256:42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca \
+    --hash=sha256:8bf295fe459343bc6093c8e5e0df60bfa189e0fcb775a22e2c2488fdeccc6c0d \
+    --hash=sha256:23edf4ec4b6f4f240e8df6e4985e9ee2ced86474632433e55fb1e2548744bf40 \
+    --hash=sha256:4bd024d567eca931b668978d672dba914d4b8e2628e2c3073a2ad178de8a2620 \
+    --hash=sha256:67c8d44ad89fa7eb88de5d6ef6199b1e03dd24974f85a67639fc8badb801fe79 \
+    --hash=sha256:fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52 \
+    --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
+    --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
+    --hash=sha256:c3bc8ee0271387e0b1e3ad0ff893645990a656e79bf9c42f4f734a3642b11d51

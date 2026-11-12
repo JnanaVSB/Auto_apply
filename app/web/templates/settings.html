@@ -194,22 +194,41 @@
 </form>
 <h3>Your own picture</h3>
 {# own_field: looked up once at the top of base.html, which every whole page starts from #}
-{% if request.query_params.get("look") == "removed" %}<p class="result" role="status">Your picture is removed; the built-in pictures are back.</p>
-{% elif request.query_params.get("look") == "left" %}<p class="error" role="alert">Something under one of the picture names could not be removed (a folder, or no permission): look in your data folder's <code>background</code> folder.</p>{% endif %}
+{% set told = request.query_params.get("look") %}
+{% if told == "uploaded" %}<p class="result" role="status">Your picture is in use on every page.</p>
+{% elif told == "refused" %}<p class="error" role="alert">Not uploaded: choose a JPEG, PNG or WebP picture of up to 15 MB.</p>
+{% elif told == "busy" %}<p class="error" role="alert">Another picture is being prepared; try again in a moment.</p>
+{% elif told == "failed" %}<p class="error" role="alert">Not saved: your data folder's <code>background</code> folder could not be written (full disk, or no permission?). The picture in use, if any, is the one shown here.</p>
+{% elif told == "partly" %}<p class="error" role="alert">Your picture is in use, but its phone copy or its credit could not be written (full disk, or no permission?), so a phone may get the big picture and the credit shown may be the earlier one. Upload the picture again, or remove it.</p>
+{% elif told == "missing" %}<p class="error" role="alert">Uploading needs Pillow, which this install does not have yet.</p>
+{% elif told == "removed" %}<p class="result" role="status">Your picture is removed; the built-in pictures are back.</p>
+{% elif told == "left" %}<p class="error" role="alert">Something under one of the picture names could not be removed (a folder, or no permission): look in your data folder's <code>background</code> folder.</p>{% endif %}
 {% if own_field.in_use %}
 <p class="credit">{{ own_field.credit }}</p>
 {% elif own_field.problem %}
 <p class="error" role="alert">{{ own_field.problem }}</p>
 {% endif %}
+{% if own_field.can_upload %}
+<form method="post" action="/background/upload" enctype="multipart/form-data" class="stacked">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <label>Picture (JPEG, PNG or WebP, up to 15 MB and 40 million pixels) <input type="file" name="picture" accept="image/jpeg,image/png,image/webp" required></label>
+  <label>Credit line, shown at the end of every page <input name="credit" maxlength="300" value="{{ own_field.credit }}"></label>
+  <button type="submit">Use this picture</button>
+</form>
+{% else %}
+<p class="error" role="alert">Uploading a picture needs Pillow, which this install does not have yet. In the
+  <code>auto_apply</code> environment run <code>pip install --require-hashes --no-deps -r requirements-pip.txt</code>,
+  then restart the dashboard.</p>
+{% endif %}
+<p class="hint">The picture is straightened, shrunk to at most 2560 pixels on its long side with a portrait copy for
+  phones, and rewritten without any hidden information (camera, place, date). It is kept only in your data folder's
+  <code>background</code> folder, never published. A file you place there yourself as <code>own.jpg</code>,
+  <code>own.png</code> or <code>own.webp</code> (credit in <code>own.txt</code>) works too; an upload replaces it.</p>
 {% if own_field.in_use or own_field.problem %}
 <form method="post" action="/background/remove">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
   <button type="submit" class="quiet">Remove my picture</button>
 </form>
-<p class="hint">Removing deletes only the private copies in your data folder's <code>background</code> folder.</p>
-{% else %}
-<p class="hint">A JPEG, PNG or WebP of your own, placed in your data folder as <code>background/own.jpg</code>
-  (or <code>own.png</code>, <code>own.webp</code>), becomes the background of every page; the first line of
-  <code>background/own.txt</code> is shown as the credit. It stays private: the data folder is never published.</p>
+<p class="hint">Removing deletes only the private copies in that folder.</p>
 {% endif %}
 {% endblock %}

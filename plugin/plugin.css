@@ -1,5 +1,5 @@
-/* The plugin's popup and options page, in the dashboard's glass look (Teal, the stylesheet's own colours) with the system's
-   own fonts: the plugin cannot load the dashboard's font files. Light and dark follow the computer. */
+/* The plugin's popup and options page, in the dashboard's glass look (Teal, the stylesheet's own colours) with the
+   system's own fonts: the plugin cannot load the dashboard's font files. Light and dark follow the computer. */
 :root {
   color-scheme: light dark;
   --bg: light-dark(#f3f5f7, #111417); --surface: light-dark(#ffffff, #1a1e23);

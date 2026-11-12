@@ -58,6 +58,11 @@ start the dashboard; running it again is safe. Step by step, with every question
 
 ## Day to day
 - The database unlocks automatically from your OS keychain; you never type the master password.
+- After pulling a newer version, run the pip line again inside the environment, so a newly pinned package (Pillow,
+  for the background upload) arrives the same fingerprint-checked way:
+  ```bash
+  pip install --require-hashes --no-deps -r requirements-pip.txt
+  ```
 - Back up your `data/` folder regularly. It is encrypted, so a cloud or USB backup is fine. Close the dashboard and
   any collection first: while they run, the latest changes are kept in `app.db-wal` and `app.db-shm` next to the
   database (also encrypted); SQLite folds them back into `app.db` when the last one closes.
@@ -347,6 +352,10 @@ listing there, as the feed's terms ask.
 US and foreign place names (used to decide whether a job is in the US) come from
 [GeoNames](https://www.geonames.org), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 They are stored in `app/places.json`; `tools/make_places.py` explains how to rebuild it.
+
+A background picture you upload is resized and stripped of its hidden information by
+[Pillow](https://python-pillow.github.io) 13.0.0 (MIT-CMU licence), installed from PyPI by its exact fingerprints
+(`requirements-pip.txt`); nothing older may be used.
 
 The dashboard uses [HTMX](https://htmx.org) (BSD Zero-Clause licence), stored in `app/web/static/` so nothing is loaded
 from the internet: version 2.0.11, file `dist/htmx.min.js` from the npm package `htmx.org@2.0.11`, SHA-256

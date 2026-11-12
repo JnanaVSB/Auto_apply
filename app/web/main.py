@@ -1,6 +1,7 @@
 """The dashboard web app: safety checks on every request, login, and the pages."""
 
 import asyncio
+import email.parser
 import logging
 import mimetypes
 import re
@@ -67,6 +68,7 @@ MAX_FIELDS = 500
 # /add/job: a job's pasted text, at most 12 bytes a character once a form has encoded it
 FORM_LIMITS = {
     UPLOAD: (MAX_UPLOAD_BYTES, MAX_FIELDS),
+    background.UPLOAD: (background.MAX_BYTES + 64 * 1024, 20),  # one picture file, as sent, with its few fields
     "/questionnaire": (8 * 1024 * 1024, 1000),
     "/add/job": (256 * 1024, MAX_FIELDS),
 }
@@ -83,6 +85,8 @@ NOT_TAILNET = (
     "Open this from a phone signed in to your Tailscale. On the laptop itself, use the address shown in the terminal."
 )
 EXPIRED = "This page has expired; reload it and try again."
+UNREADABLE = "The form could not be read."
+MAX_PART_HEADERS = 8192  # a file-upload form's headers for one part: a name, a file name and a type
 SHARED_LINK = re.compile(r"https?://\S+", re.I)
 MAX_SHARED_LINK = 2000  # the Job link box's limit on Add
 MAX_WAY_BACK = 4000
@@ -165,7 +169,7 @@ def create_app(
                     "Try again; if it keeps happening, restart the dashboard.",
                 )
         response.headers.update(security.SAFETY_HEADERS)
-        if request.scope["path"] == background.ROUTE and response.status_code in (200, 304):
+        if request.scope["path"] in (background.ROUTE, background.PHONE_ROUTE) and response.status_code in (200, 304):
             response.headers["Cache-Control"] = "private, no-cache"  # the person's own file: kept, checked each time
         # public program files: kept, but checked with the dashboard each time; fonts: kept a day, not re-sent per page
         if request.scope["path"].startswith("/static/") and response.status_code in (200, 304):
@@ -560,11 +564,48 @@ async def _form(request: Request) -> dict[str, str]:
         body += chunk
         if len(body) > limit:
             raise HTTPException(413, "Too much data.")
+    kind = request.headers.get("content-type", "")
+    if request.scope["path"] == background.UPLOAD and kind.startswith("multipart/form-data"):
+        fields, request.state.files = _multipart(body, kind, most)
+        return fields
     try:
         fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=most)
     except (UnicodeDecodeError, ValueError):
         raise HTTPException(400, "The form could not be read.") from None
     return {name: values[-1] for name, values in fields.items()}
+
+
+def _multipart(body: bytearray, content_type: str, most: int) -> tuple[dict[str, str], dict[str, bytes]]:
+    """A file-upload form, read with Python's own header parser: text fields and files (as bytes), each by its field
+    name. The file name the browser sends is read for nothing: the app names what it keeps. The body is walked by
+    position, so one copy is made of each part and nothing else, however the parts are shaped; at most `most`
+    parts, each with at most MAX_PART_HEADERS bytes of headers, are looked at before it is given up as unreadable."""
+    boundary = email.message_from_string(f"Content-Type: {content_type}").get_param("boundary")
+    if not isinstance(boundary, str) or not 0 < len(boundary) <= 70:  # the standard's longest
+        raise HTTPException(400, UNREADABLE)
+    delimiter = b"--" + boundary.encode()
+    at, fields, files = body.find(delimiter), {}, {}
+    if at < 0:
+        raise HTTPException(400, UNREADABLE)
+    for _ in range(most):
+        at += len(delimiter)
+        if body[at : at + 2] == b"--":
+            return fields, files  # the closing delimiter
+        end = body.find(b"\r\n\r\n", at, at + MAX_PART_HEADERS)
+        if end < 0:
+            raise HTTPException(400, UNREADABLE)
+        headers = email.parser.BytesHeaderParser().parsebytes(bytes(body[at:end]).strip(b"\r\n"))
+        name = headers.get_param("name", header="content-disposition")
+        start, at = end + 4, body.find(b"\r\n" + delimiter, end + 4)
+        if not isinstance(name, str) or at < 0:
+            raise HTTPException(400, UNREADABLE)
+        data = bytes(memoryview(body)[start:at])  # the one copy
+        at += 2
+        if headers.get_filename() is None:
+            fields[name] = data.decode(errors="replace")
+        else:
+            files[name] = data
+    raise HTTPException(400, UNREADABLE)
 
 
 def _back(address: str) -> str:
