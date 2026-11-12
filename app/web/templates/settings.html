@@ -5,18 +5,41 @@
 {% if file_problem %}
 <p class="error" role="alert">{{ file_problem }}</p>
 <p>Fix <code>data/config.yaml</code> by hand (<code>config.example.yaml</code> shows the layout), then reload this page.</p>
-{% else %}
+{% endif %}
 {% if problem %}<p class="error" role="alert">Not saved: {{ problem }}</p>{% endif %}
 {% if saved %}<p class="result" role="status">Saved. Used from the next collection or action.</p>{% endif %}
-<form method="post" action="/settings" class="stacked">
+{# The page as sections: a list of them (in-page links; beside the panes on a wide screen, a row above them on a
+   phone), then one clear pane per group. The settings stay one form with one Save; Look is its own form. #}
+<div class="settings">
+<nav class="sections" aria-label="Sections">
+  {% set groups = [
+    ("Sources", [("roles", "Roles"), ("lists", "Simplify lists"), ("boards", "Extra boards"),
+                 ("phonebook", "Phone-book lists"), ("feeds", "Job feeds")]),
+    ("Running", [("automatic", "Automatic collection"), ("politeness", "Politeness"), ("filling", "Filling forms")]),
+    ("Tracking", [("tracker", "Tracker"), ("gmail", "Gmail")]),
+    ("Scoring", [("scoring", "Scoring"), ("model", "AI model")]),
+    ("Housekeeping", [("stopped", "Boards you stopped"), ("data", "Data folder")]),
+  ] if not file_problem else [] %}
+  {% for group, links in groups + [("This browser", [("look", "Look")])] %}
+  <div class="nav-group">
+    <p class="nav-title">{{ group }}</p>
+    <ul>{% for id, word in links %}<li><a href="#{{ id }}">{{ word }}</a></li>{% endfor %}</ul>
+  </div>
+  {% endfor %}
+</nav>
+{% if not file_problem %}
+<form method="post" action="/settings" class="stacked grouped">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
 
+  <section id="roles">
   <h2>Roles</h2>
   <p class="hint">A job is kept when Simplify puts it in one of these categories, or one of the keywords appears as a
     whole word (capital letters ignored) in its title or description.</p>
   <label>Simplify categories, one per line <textarea name="simplify_categories" rows="3">{{ form.simplify_categories }}</textarea></label>
   <label>Keywords, one per line <textarea name="keywords" rows="8">{{ form.keywords }}</textarea></label>
+  </section>
 
+  <section id="lists">
   <h2>Simplify lists</h2>
   <p class="hint">Simplify's public GitHub lists (they change name each season). Clear an address to remove that list.</p>
   {% for number in range(rows) %}
@@ -31,17 +54,23 @@
     </label>
   </div>
   {% endfor %}
+  </section>
 
+  <section id="boards">
   <h2>Extra boards</h2>
   <label>One per line, for example greenhouse:acme (read on every collection, never retired)
     <textarea name="extra_boards" rows="4">{{ form.extra_boards }}</textarea></label>
+  </section>
 
+  <section id="phonebook">
   <h2>Phone-book lists</h2>
   <p class="hint">Other public GitHub job lists the phone book takes company boards from (Simplify's lists are always
     used). Add only lists whose licence allows it.</p>
   <label>One address per line, https://raw.githubusercontent.com/...
     <textarea name="phonebook_lists" rows="3">{{ form.phonebook_lists }}</textarea></label>
+  </section>
 
+  <section id="feeds">
   <h2>Job feeds</h2>
   <p class="hint">Read by the phone book. Only board names are kept, never what people wrote.</p>
   <input type="hidden" name="hacker_news" value="off">{# an unticked box sends nothing; a refused save must keep it #}
@@ -54,18 +83,24 @@
   <p class="hint">{% if remote %}Change your USAJobs key on the laptop.{% else %}Your key: <a href="/settings/usajobs">Settings → USAJobs key</a>.{% endif %}{% if usajobs_missing %} <strong>Ticked, but USAJobs is skipped until you save your {{ usajobs_missing }}.</strong>{% endif %}</p>
   {% endif %}
   {% endfor %}
+  </section>
 
+  <section id="automatic">
   <h2>Automatic collection and phone book</h2>
   <label>Collect every this many hours while the dashboard is open (0 = off, up to 168)
     <input name="collect_every_hours" type="number" min="0" max="168" step="1" value="{{ form.collect_every_hours }}"></label>
   <label>Refresh the phone book every this many days while the dashboard is open (0 = off, up to 365)
     <input name="phonebook_every_days" type="number" min="0" max="365" step="1" value="{{ form.phonebook_every_days }}"></label>
+  </section>
 
+  <section id="tracker">
   <h2>Tracker</h2>
   <label>Grey out a card in Applied, Online Assessment or Interview after this many days with no change (1 to 365; 21 is
     the default)
     <input name="tracker_stale_days" type="number" min="1" max="365" step="1" value="{{ form.tracker_stale_days }}"></label>
+  </section>
 
+  <section id="gmail">
   <h2>Gmail</h2>
   <p class="hint">Connect your Gmail on <a href="/settings/gmail">Settings → Gmail</a>; these numbers say how it syncs.</p>
   <label>The first sync reads this many days back (1 to 365; 60 is the default)
@@ -78,19 +113,25 @@
       <option value="{{ value }}"{% if form.gmail_read_all == value %} selected{% endif %}>{{ label }}</option>
       {% endfor %}
     </select></label>
+  </section>
 
+  <section id="politeness">
   <h2>Politeness</h2>
   <label>Requests per second to each job site (1 to 5; 1 is polite and the default)
     <input name="requests_per_second" type="number" min="1" max="5" step="1" value="{{ form.requests_per_second }}"></label>
   <p class="hint">Each site is read on its own, all at the same time. A higher number makes collections faster but asks
     more of each site. Common Crawl is always read slowly.</p>
+  </section>
 
+  <section id="filling">
   <h2>Filling forms</h2>
   <label>Fills per day (1 to 50; 10 is the default)
     <input name="fills_per_day" type="number" min="1" max="50" step="1" value="{{ form.fills_per_day }}"></label>
   <label>Pause between fills, in minutes (0 = off, up to 60; 2 is the default)
     <input name="fill_pause_minutes" type="number" min="0" max="60" step="1" value="{{ form.fill_pause_minutes }}"></label>
+  </section>
 
+  <section id="scoring">
   <h2>Scoring</h2>
   {% if scorer.service == "ollama" %}
   <p class="hint">Nothing leaves this computer: the quick check and the AI both run here.
@@ -117,7 +158,9 @@
     <input name="skills_threshold" type="number" min="0" max="1" step="0.01" value="{{ form.skills_threshold }}"></label>
   <label>Extra skills the O*NET list lacks, one per line, written as job ads write them
     <textarea name="extra_skills" rows="5">{{ form.extra_skills }}</textarea></label>
+  </section>
 
+  <section id="model">
   <h2>AI model</h2>
   <p class="hint">{% if scorer.service == "ollama" %}The evaluator scores jobs with Ollama on this computer. Download a
     model first with <code>ollama pull</code> and its name. {% endif %}The model that writes your resumes, its keys and
@@ -142,7 +185,9 @@
   <p>Scoring uses <strong>{{ scorer.model }}</strong> at {{ scorer_host }}: change it in
     <a href="/settings/scoring-model">Settings → Scoring model</a>.</p>
   {% endif %}
+  </section>
 
+  <section id="stopped">
   <h2>Boards you stopped</h2>
   {% if stopped %}
   <p class="hint">Never read by a collection until you read them again. Nothing was deleted.</p>
@@ -155,23 +200,22 @@
   {% else %}
   <p class="muted">None. To stop reading a board, open one of its jobs and use "Stop reading this board".</p>
   {% endif %}
+  </section>
 
+  <section id="data">
   <h2>Data folder</h2>
   <p><code>{{ form.data_dir }}</code> <span class="muted">(changed only by hand in data/config.yaml)</span></p>
+  </section>
 
-  <p class="hint">Saving rewrites data/config.yaml with these settings; comments you wrote in that file are not kept.</p>
-  <button type="submit">Save settings</button>
+  <div class="save">
+    <button type="submit" class="primary">Save settings</button>
+    <p class="hint">Saving rewrites data/config.yaml with these settings; comments you wrote in that file are not kept.</p>
+  </div>
 </form>
-{% for name, since in stopped or [] %}
-<form method="post" action="/boards/stop" id="read-{{ loop.index }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf }}">
-  <input type="hidden" name="board" value="{{ name }}">
-  <input type="hidden" name="value" value="0">
-</form>
-{% endfor %}
 {% endif %}
 
-<h2 id="look">Look</h2>
+<section id="look">
+<h2>Look</h2>
 {% if request.query_params.get("look") == "changed" %}<p class="result" role="status">Look saved for this browser.</p>{% endif %}
 <form method="post" action="/look" class="stacked">
   <input type="hidden" name="csrf_token" value="{{ csrf }}">
@@ -231,4 +275,13 @@
 </form>
 <p class="hint">Removing deletes only the private copies in that folder.</p>
 {% endif %}
+</section>
+</div>
+{% for name, since in stopped or [] %}
+<form method="post" action="/boards/stop" id="read-{{ loop.index }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf }}">
+  <input type="hidden" name="board" value="{{ name }}">
+  <input type="hidden" name="value" value="0">
+</form>
+{% endfor %}
 {% endblock %}

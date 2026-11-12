@@ -331,17 +331,20 @@ table { font-variant-numeric: tabular-nums; }
    border and clipped to a 1 px ring (two masks, the inner one excluded), so the body stays empty. Under the pointer
    the ring brightens; nothing moves or loops. Left out: the cost bar and the menu panel, which scroll inside
    themselves (a layer past their edge would scroll with them), tables (their rows are the detail), the dashed cards,
-   and the job page's loading placeholders, which already use both layers. Without mask support the plain rim stays. */
+   and the job page's loading placeholders, which already use both layers. Without mask support the plain rim stays.
+   (:where keeps this rule's weight below the hover and target rules that brighten the ring.) */
 @supports (mask-composite: exclude) or (-webkit-mask-composite: xor) {
-  :is(.tcard:not(.stale, .sortable-ghost), .list-cards .jobs tr, main > :is(form.stacked, section:has(> form.stacked)),
-    main > form:not(.stacked, .view-switch, .filters, .score-these):has(> button):has(> .muted), .filters,
-    .filters-fold > summary, .dock > summary, dialog.ask)::before, .found::after, .rail::after {
+  :is(.tcard:not(.stale, .sortable-ghost), .list-cards .jobs tr, main > :is(form.stacked:not(:where(.grouped)), section:has(> form.stacked)),
+    main > :where(form:not(.stacked, .view-switch, .filters, .score-these):has(> button):has(> .muted)), .filters,
+    .filters-fold > summary, .dock > summary, dialog.ask, :is(.settings, .grouped) > section,
+    :where(#progress, #score-progress):is([hx-trigger], :has(.lines)))::before, .found::after, .rail::after {
     content: ""; position: absolute; inset: -1px; padding: 1px; border-radius: inherit; pointer-events: none;
     background: var(--rim); opacity: 0.8;
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
     mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude;
     transition: opacity var(--quick) var(--ease-out); }
-  :is(.tcard:not(.stale), .list-cards .jobs tr, .filters-fold > summary, .dock > summary):hover::before { opacity: 1; }
+  :is(.tcard:not(.stale), .list-cards .jobs tr, .filters-fold > summary, .dock > summary):hover::before,
+  :is(.settings, .grouped) > section:target::before { opacity: 1; }
 }
 .skip { position: absolute; left: var(--space-4); top: -5rem; z-index: 40; display: inline-flex; align-items: center;
   min-height: var(--tap); padding: 0 var(--space-5); border: 1px solid var(--glass-line);
@@ -592,12 +595,12 @@ select option { background: var(--slab); color: var(--text); }  /* the list itse
    blur, a visible pale edge and an inner shade that sets it into the glass. */
 .login input { background: rgb(0 0 0 / 14%); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   border-color: rgb(255 255 255 / 48%); box-shadow: inset 0 1px 3px rgb(0 0 0 / 35%); }
-/* A page's own form (Settings and its pages, Add, Questionnaire …) is a clear pane. */
-main > :is(form.stacked, section:has(> form.stacked)) { position: relative; max-width: 44rem; padding: var(--space-5);
-  border: 1px solid var(--pane-line); border-radius: var(--radius-l); background: var(--glass);
-  box-shadow: var(--shadow); }
+/* A page's own form (Settings' pages, Add, Questionnaire …) is a clear pane; on Settings each section is one. */
+main > :is(form.stacked:not(.grouped), section:has(> form.stacked)), :is(.settings, .grouped) > section { position: relative;
+  max-width: 44rem; padding: var(--space-5); border: 1px solid var(--pane-line); border-radius: var(--radius-l);
+  background: var(--glass); box-shadow: var(--shadow); }
 main > section:has(> form.stacked) { margin-bottom: var(--space-5); }  /* Add: each way to add is its own pane */
-main > section:has(> form.stacked) > h2:first-child { margin-top: 0; }
+:is(main, .settings) > section:has(> form.stacked) > h2:first-child { margin-top: 0; }
 /* An action with its explanation (Collect now, Score now): a clear row, the button first, the words at a reading
    length beside or under it, in the secondary size. "Score these N jobs" on the list pages is a plain row. */
 main > form:not(.stacked, .view-switch, .filters):has(> button):has(> .muted) { position: relative; display: flex;
@@ -612,6 +615,46 @@ main > form.score-these:not(.stacked, .view-switch, .filters):has(> button):has(
 .list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--space-2); }
 .list-row input { width: 100%; }
 form.inline { display: inline; }
+
+/* ---------- Settings as sections ---------- */
+/* The page is a list of its sections and one clear pane per group of settings, with air between the panes, so the
+   eye takes one group at a time. The settings stay one form with one Save at its end; Look is its own pane. Below
+   64rem the list is a row of capsules above the panes that scrolls sideways; from 64rem it stands beside them and
+   stays in view (scrolling inside itself when the window is low). A section jumped to lights its ring and lifts, the
+   way a card does under the pointer, so the eye lands on it. */
+.settings { --stick: calc(env(safe-area-inset-top) + var(--space-5)); display: grid; gap: var(--space-5) var(--space-6);
+  align-items: start; }
+.content:has(> .topbar) .settings { --stick: calc(env(safe-area-inset-top) + 4.25rem); }  /* under the cost bar */
+.sections { display: flex; gap: var(--space-2); overflow-x: auto; padding: 6px 6px var(--space-2);  /* room for the focus ring */
+  scroll-snap-type: x proximity; scrollbar-width: thin; }
+.sections :is(.nav-group, ul) { display: contents; }
+.sections .nav-title { display: none; }
+.sections li { scroll-snap-align: start; }
+.sections a { min-height: var(--control); padding: 0 var(--space-3); border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1px var(--control-line), var(--pill-edge); font-size: var(--text-ui); white-space: nowrap; }
+.grouped { gap: var(--space-6); max-width: 44rem; }
+:is(.settings, .grouped) > section { display: grid; gap: var(--space-3); scroll-margin-top: var(--stick);
+  transition: box-shadow var(--settle) var(--ease-out), border-color var(--settle) var(--ease-out); }
+:is(.settings, .grouped) > section:target { border-color: var(--glass-line); box-shadow: var(--shadow-raised); }
+:is(.settings, .grouped) > section > :is(h2, h3, p, ul) { margin: 0; }
+:is(.settings, .grouped) > section > :is(p, h3) { max-width: 60ch; }
+:is(.settings, .grouped) > section > h3 { margin-top: var(--space-2); }  /* a part of its own inside the pane */
+:is(.settings, .grouped) > section > ul { display: grid; gap: var(--space-2); padding-left: 1.2rem; }
+/* The one action: Save, with what saving does beside it. */
+.save { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+.save > .hint { flex: 1 1 20rem; max-width: 60ch; margin: 0; font-size: var(--text-ui); line-height: var(--leading-ui); }
+@media (width >= 64rem) {
+  .settings { grid-template-columns: 11rem minmax(0, 44rem); }
+  .settings > :not(.sections) { grid-column: 2; }
+  .sections { grid-column: 1; grid-row: 1 / span 2; position: sticky; top: var(--stick); display: grid;
+    align-content: start; gap: var(--space-3); max-height: calc(100dvh - var(--stick) - var(--space-4));
+    overflow: hidden auto; padding: var(--space-1); scroll-snap-type: none; }
+  .sections .nav-group { display: block; }
+  .sections ul { display: grid; }
+  .sections .nav-title { display: block; }
+  .sections a { min-height: 2rem; padding: 0 var(--space-2); border-radius: var(--radius-s); box-shadow: none;
+    white-space: normal; }
+}
 
 /* ---------- Containers ---------- */
 /* Tables: hairline rows; the job list's header row stays in view. Below 64rem a table too wide for its box scrolls
@@ -686,9 +729,32 @@ main > [hx-get][hx-trigger="load"]:empty::before { top: 1.375rem; width: 9rem; h
 main > [hx-get][hx-trigger="load"]:empty::after { top: 3.5rem; right: var(--space-5); height: 2.625rem;
   background: linear-gradient(var(--lift) 0 0.75rem, transparent 0.75rem 1.5rem, var(--lift) 1.5rem 2.25rem,
     transparent 2.25rem) left / 70% 100% no-repeat; }
+/* The command's lines (and a failed try's reply): a clear box with a hairline, in the page's own type, not the
+   browser's typewriter face; figures keep their width as the lines grow. */
 .lines { max-height: 30rem; overflow-y: auto; padding: var(--space-2) var(--space-3); border-radius: var(--radius-s);
-  box-shadow: inset 0 0 0 1px var(--hairline); white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-ui);
-  line-height: var(--leading-ui); }
+  box-shadow: inset 0 0 0 1px var(--hairline); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--sans);
+  font-size: var(--text-ui); line-height: var(--leading-ui); font-variant-numeric: tabular-nums; }
+/* Working states (Collect, scoring, the Writer, the export). A box that redraws itself while something runs carries
+   hx-trigger only then: its state line is then led by a small turning ring (still under reduce motion), and the
+   Collect and scoring boxes are clear panes with the state line as their heading and the command's lines under it;
+   finished, the pane stays while there are lines to read. Idle with nothing to show, the box is one quiet line. */
+p.state { max-width: 60ch; margin: var(--space-2) 0 var(--space-4); color: var(--ink-muted); }  /* not the Ready table's cell */
+:is(#progress, #score-progress):is([hx-trigger], :has(.lines)) { position: relative; display: grid; gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-5); padding: var(--space-4) var(--space-5); border: 1px solid var(--pane-line);
+  border-radius: var(--radius-l); background: var(--glass); box-shadow: var(--shadow);
+  font-variant-numeric: tabular-nums; }
+:is(#progress, #score-progress):is([hx-trigger], :has(.lines)) > * { margin: 0; }
+:is(#progress, #score-progress):is([hx-trigger], :has(.lines)) > .state { color: var(--text); font-weight: 600; }
+#score-progress > form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+#score-progress > form > .muted { flex: 1 1 16rem; max-width: 40ch; font-size: var(--text-ui); line-height: var(--leading-ui); }
+:is(:where(#progress, #score-progress)[hx-trigger] > .state, [hx-trigger] > p[role="status"], p[role="status"][hx-trigger])::before {
+  content: ""; display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.5em; vertical-align: -0.08em;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor;
+  border-radius: 50%; animation: turn 0.9s linear infinite; }
+@keyframes turn { to { transform: rotate(1turn); } }
+/* The question over the page: its words, then its two answers in a row. */
+dialog.ask > p { margin: 0 0 var(--space-4); text-wrap: pretty; }
+dialog.ask form.inline { display: inline-block; margin-right: var(--space-2); }
 .pager { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); justify-content: center;
   align-items: center; margin: var(--space-4) 0; }
 .pager a { display: inline-flex; align-items: center; min-height: var(--control); font-variant-numeric: tabular-nums; }
@@ -747,6 +813,9 @@ td.actions > * { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); mar
 .counts a:active { transform: scale(0.97); }
 .counts .muted { display: block; margin-top: var(--space-1); }
 .score-these { margin: 0 0 var(--space-3); }
+/* No jobs for these filters: the "Showing" line becomes a quiet empty slot (a lane's), the width of the list. */
+main:has(.view-switch):not(:has(table.jobs)) > .summary { flex-basis: 100%; padding: 1.25rem var(--space-4);
+  border: 1px dashed var(--control-line); border-radius: var(--radius-l); text-align: center; text-wrap: balance; }
 .reasons { margin: var(--space-1) 0; padding-left: 1.2rem; }
 
 /* ---------- Lists: one table markup, shown as a table or as cards ---------- */
@@ -1005,4 +1074,5 @@ main:has(.board) { max-width: none; }
   :is(.topbar, .filters-fold, .lane) > summary::after { transition: none; }
   :where(a, button, .button, input, select, textarea, summary, .tcard) { outline-offset: 2px; }  /* no travel */
   :is(button, .button):hover { background-position: 0 0; }
+  :is([hx-trigger] > .state, [hx-trigger] > p[role="status"], p[role="status"][hx-trigger])::before { animation: none; }  /* the working ring stands still */
 }
