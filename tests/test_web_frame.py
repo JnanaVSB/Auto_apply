@@ -64,5 +64,5 @@ def test_rail_items_carry_their_full_names(client):
     rail = MENUS.search(client.get("/").text).group(1)
     labels = re.findall(r'<span class="label">([^<]+)</span>', rail)
     assert {"Ready to Apply", "Questionnaire", "Answer key", "Log out"} <= set(labels)
-    assert len(labels) == rail.count("<a ") + 1  # every link and Log out
+    assert len(labels) == rail.count("<a href") + 1  # every link and Log out ("aa" has its own words)
     assert "title=" not in rail

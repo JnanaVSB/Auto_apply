@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Summary{% endblock %}
+{% block content %}
+{% macro plural(count, one, many) %}{{ count }} {{ one if count == 1 else many }}{% endmacro %}
+<h1>Summary</h1>
+<p>{% if ready %}{{ plural(ready, "application is", "applications are") }} ready for your review{% if replies_week %}, and {{ plural(replies_week, "reply", "replies") }} came in this week{% endif %}.
+  {%- elif replies_week %}{{ plural(replies_week, "reply", "replies") }} came in this week.
+  {%- else %}Nothing needs your attention right now.{% endif %}</p>
+<p><a class="button primary" href="{{ next[1] }}">{{ next[0] }}</a></p>
+
+<h2>At a glance</h2>
+<dl>
+  <dt>Open jobs</dt><dd>{{ open }} <span class="muted">(+{{ open_week }} found this week)</span></dd>
+  <dt>Ready to review</dt><dd>{{ ready }} <span class="muted">(+{{ ready_week }} written this week)</span></dd>
+  <dt>Applied</dt><dd>{{ applied }} <span class="muted">(+{{ applied_week }} this week)</span></dd>
+  <dt>Replies</dt><dd>{{ replies }} <span class="muted">(+{{ replies_week }} moved this week)</span></dd>
+</dl>
+{% if not gmail %}<p class="hint">Gmail isn't connected, so replies are only the cards you moved on the Tracker.</p>{% endif %}
+
+<h2>Jobs collected and applications sent</h2>
+{% for period, chart in charts.items() %}
+<table>
+  <caption>Last {{ period }} days</caption>
+  <thead><tr><th>{{ "Week of" if period == 90 else "Day" }}</th><th>Jobs collected</th><th>Applications sent</th></tr></thead>
+  <tbody>
+    {% for column in chart.columns %}
+    <tr><td>{{ column.start }}{% if column.end != column.start %} to {{ column.end }}{% endif %}</td><td>{{ column.collected }}</td><td>{{ column.sent }}</td></tr>
+    {% endfor %}
+  </tbody>
+  <tfoot><tr><th>Total</th><td>{{ chart.collected }}</td><td>{{ chart.sent }}
+    ({{ chart.per_100 if chart.per_100 is not none else "none" }} sent per 100 collected)</td></tr></tfoot>
+</table>
+{% endfor %}
+
+<h2>Passed your bar</h2>
+<p>{{ passed }} of {{ scored }} scored open jobs passed.</p>
+<dl>
+  <dt>Your bar</dt><dd>{{ threshold }}</dd>
+  <dt>Middle score</dt><dd>{{ median if median is not none else "none yet" }}</dd>
+  <dt>Passed today</dt><dd>{{ passed_today }}</dd>
+</dl>
+<h2>Scored</h2>
+<p>{{ scored }} of {{ open }} open jobs scored.</p>
+<dl>
+  <dt>Waiting</dt><dd>{{ waiting }}</dd>
+  <dt>Scored today</dt><dd>{{ scored_today }}</dd>
+  <dt>AI score failed</dt><dd>{{ failed }}</dd>
+</dl>
+
+<h2>Jobs found in the last 30 days</h2>
+<table>
+  <thead><tr><th>Stage</th><th>Jobs</th></tr></thead>
+  <tbody>
+    <tr><td>Collected</td><td>{{ collected }}</td></tr>
+    <tr><td>Scored</td><td>{{ p_scored }}</td></tr>
+    <tr><td>Written</td><td>{{ p_written }}</td></tr>
+    <tr><td>Ready to review</td><td>{{ p_ready }}</td></tr>
+    <tr><td>Applied</td><td>{{ p_applied }}</td></tr>
+    <tr><td>Replied</td><td>{{ p_replied }}</td></tr>
+    <tr class="muted"><td>Rejected</td><td>{{ p_rejected }}</td></tr>
+  </tbody>
+</table>
+
+<h2>Ready to review ({{ ready }})</h2>
+{% if to_review %}
+<ul>
+  {% for id, title, company, score in to_review %}
+  <li><a href="/jobs/{{ id }}">{{ title }}</a> <span class="muted">{{ company }} · score {{ score }}</span></li>
+  {% endfor %}
+</ul>
+{% else %}<p class="muted">No written applications are waiting.</p>{% endif %}
+<h2>Replies this week</h2>
+{% if moved %}
+<ul>
+  {% for id, title, company, stage in moved %}
+  <li><a href="/jobs/{{ id }}">{{ title }}</a> <span class="muted">{{ company }} · {{ stage }}</span></li>
+  {% endfor %}
+</ul>
+{% else %}<p class="muted">No replies this week.</p>{% endif %}
+{% endblock %}

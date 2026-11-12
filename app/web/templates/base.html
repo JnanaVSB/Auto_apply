@@ -22,6 +22,9 @@
   {# The menu, written once: rail on wider screens, panel on phones. `at`: the address's first word that marks a
      link as the current page (default: its own); the Low score tab is the Jobs page saying `low`. #}
   {% set groups = [
+    ("Overview", [
+      {"href": "/summary", "name": "Summary", "icon": "layout-grid"},
+    ]),
     ("Find jobs", [
       {"href": "/", "word": "Jobs", "icon": "briefcase", "at": ["", "jobs"]},
       {"href": LOW_SCORE, "word": "Low score", "icon": "trending-down", "at": ["low score"]},
@@ -52,7 +55,7 @@
   {% endfor %}{% endfor %}
   {% macro icon(name) %}<svg class="icon" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ name }}"/></svg>{% endmacro %}
   {% macro menu(rail) %}
-    {% for group, links in groups %}
+    {% for group, links in groups if not (rail and group == "Overview") %}{# the rail has the "aa" link instead #}
     <div class="nav-group">
       <p class="nav-title{% if rail %} sr-only{% endif %}">{{ group }}</p>
       <ul>
@@ -71,7 +74,7 @@
   <a class="skip" href="#main">Skip to the page</a>
   <div class="app">
     <nav class="rail" aria-label="Pages">
-      <span class="brand-mark" aria-hidden="true">aa</span>
+      <a class="brand-mark" href="/summary"{% if now.href == "/summary" %} aria-current="page"{% endif %}><span aria-hidden="true">aa</span><span class="sr-only">Summary</span></a>
       {{ menu(rail=true) }}
     </nav>
     <div class="content">

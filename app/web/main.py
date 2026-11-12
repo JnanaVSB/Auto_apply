@@ -47,6 +47,7 @@ from app.web import (
     scoring_settings,
     security,
     submit,
+    summary,
     tracker,
     usajobs_settings,
     writer_settings,
@@ -416,6 +417,7 @@ def create_app(
     plugin_settings.add_routes(app, _page)
     emails.add_routes(app, _page)
     council_view.add_routes(app, _page, lambda: _scoring())
+    summary.add_routes(app, _page, lambda: _scoring())
     pilot.add_routes(app, _page)
     drafts.add_routes(app, _page, data_dir)
     submit.add_routes(app, _page, data_dir)
@@ -629,9 +631,9 @@ def _to_login(request: Request) -> Response:
 
 
 def _after_login(request: Request, address: str) -> str:
-    """Only back to a shared link on Add, on the phone, else the first page."""
+    """Only back to a shared link on Add, on the phone, else the Summary page."""
     wanted = request.state.remote and address.startswith("/add?") and len(address) <= MAX_WAY_BACK
-    return address if wanted else "/"
+    return address if wanted else "/summary"
 
 
 def _shared_link(request: Request) -> str:

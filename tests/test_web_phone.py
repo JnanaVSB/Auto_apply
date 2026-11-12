@@ -282,7 +282,7 @@ def phone_login(phone):
 
 def test_the_phone_gets_a_cookie_only_https_and_this_exact_address_can_hold(phone):
     response = log_in_with(phone, PASSWORD, ORIGIN)
-    assert (response.status_code, response.headers["location"]) == (303, "/")
+    assert (response.status_code, response.headers["location"]) == (303, "/summary")
     assert re.fullmatch(
         r"__Host-auto_apply_session=[\w-]+; HttpOnly; Path=/; SameSite=strict; Secure", response.headers["Set-Cookie"]
     )
@@ -1046,7 +1046,7 @@ def test_the_way_back_stays_through_a_wrong_password_and_a_lock_out(phone):
 def test_after_login_the_phone_goes_only_back_to_add(phone, address):
     assert 'name="next"' not in phone.get("/login", params={"next": address}).text
     sent = {"password": PASSWORD, "next": address}
-    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == "/"
+    assert phone.post("/login", data=sent, headers=ORIGIN, follow_redirects=False).headers["location"] == "/summary"
 
 
 def test_the_longest_way_back_is_kept(phone):
@@ -1073,7 +1073,7 @@ def test_the_laptop_has_no_way_back_with_the_setting_on_or_empty(either):
     assert either.get("/add", params={"link": "x"}, follow_redirects=False).headers["location"] == "/login"
     assert 'name="next"' not in either.get("/login", params={"next": "/add?link=x"}).text
     sent = {"password": PASSWORD, "next": "/add?link=x"}
-    assert either.post("/login", data=sent, follow_redirects=False).headers["location"] == "/"
+    assert either.post("/login", data=sent, follow_redirects=False).headers["location"] == "/summary"
 
 
 def test_only_a_plain_visit_to_add_with_a_query_is_kept(phone):

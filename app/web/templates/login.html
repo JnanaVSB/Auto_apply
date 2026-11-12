@@ -3,7 +3,7 @@
 {% block content %}
 <h1>auto_apply dashboard</h1>
 <form method="post" action="/login" class="login">
-  {%- if after != "/" %}
+  {%- if after != "/summary" %}
   <input type="hidden" name="next" value="{{ after }}">
   {%- endif %}
   <label for="password">Dashboard password</label>
