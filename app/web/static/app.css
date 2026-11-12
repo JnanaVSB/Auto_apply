@@ -1279,7 +1279,7 @@ main:has(> .summary-page) { max-width: 120rem; margin-inline: auto; }
      The page takes --fill of it each way, centred; near the least fit window the zoom stays at 1 and the page takes
      the design size or all the space, whichever is less, so the gap narrows to the gutter. */
   @supports (zoom: calc(1px / 1px)) {
-    main:has(> .summary-page) { --fill: 0.95; max-width: none; container-type: size; }
+    main:has(> .summary-page) { --fill: 0.975; max-width: none; container-type: size; }
     .summary-page { flex: none; align-self: center; max-height: none;
       zoom: max(1, var(--fill) * min(100cqw / 82.5rem, 100cqh / 51rem));
       width: min(100%, max(var(--fill) * 100%, 82.5rem)); height: min(100%, max(var(--fill) * 100%, 51rem)); }
