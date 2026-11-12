@@ -97,9 +97,9 @@ def gather(conn: sqlcipher3.Connection, scoring: queries.Scoring, today: date) -
     found["charts"] = {period: _chart(days[-shown:], step, collected, sent)
                        for period, (shown, step) in PERIODS.items()}  # fmt: skip
     found["to_review"] = conn.execute(TO_REVIEW, scoring.values()).fetchall()
-    found["moved"] = [(*row[:3], REPLY_LABELS[row[3]]) for row in conn.execute(MOVED, (week_at,))]
+    found["moved"] = [(*row[:3], REPLY_LABELS[row[3]], row[3] == "rejected") for row in conn.execute(MOVED, (week_at,))]
     found["gmail"] = bool((conn.execute("SELECT connected_on FROM gmail_sync").fetchone() or (None,))[0])
-    found["threshold"], found["next"] = scoring.threshold, _next_step(found)
+    found["threshold"], found["next"], found["blocks"] = scoring.threshold, _next_step(found), BLOCKS
     return found
 
 

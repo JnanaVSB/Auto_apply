@@ -1036,20 +1036,20 @@ main:has(.board) { max-width: none; }
 /* ---------- Summary ---------- */
 /* The first page after sign-in: a greeting, four figures, then clear panes on a twelve-column grid. From 64rem the
    chart sits beside the gauge, and the pipeline, the needs-attention list and the next step share a row; from 40rem
-   the needs-attention list and the next step pair up; on phones every pane is one column (with less padding). Switches and tabs are radio buttons, so
-   the page needs no script. */
-.summary { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); }
-.summary > * { grid-column: 1 / -1; min-width: 0; }
+   the needs-attention list and the next step pair up; on phones every pane is one column (with less padding).
+   Switches and tabs are radio buttons, so the page needs no script. */
+.summary-page { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); }
+.summary-page > * { grid-column: 1 / -1; min-width: 0; }
 @media (width >= 40rem) {
-  .summary > .attention { grid-column: span 7; }
-  .summary > .next { grid-column: span 5; }
+  .summary-page > .attention { grid-column: span 7; }
+  .summary-page > .next { grid-column: span 5; }
 }
 @media (width >= 64rem) {
-  .summary > .trend { grid-column: span 8; }
-  .summary > .gauge { grid-column: span 4; }
-  .summary > .pipeline { grid-column: span 4; }
-  .summary > .attention { grid-column: span 5; }
-  .summary > .next { grid-column: span 3; }
+  .summary-page > .trend { grid-column: span 8; }
+  .summary-page > .gauge { grid-column: span 4; }
+  .summary-page > .pipeline { grid-column: span 4; }
+  .summary-page > .attention { grid-column: span 5; }
+  .summary-page > .next { grid-column: span 3; }
 }
 .greeting h1 { margin: 0; }
 .greeting p { max-width: 60ch; margin: var(--space-1) 0 0; color: var(--ink-muted); }
@@ -1087,7 +1087,7 @@ main:has(.board) { max-width: none; }
 .seg label:has(:checked) { background: var(--gloss), var(--accent-soft); font-weight: 700;
   box-shadow: inset 0 0 0 1px var(--accent); }
 .seg label:has(:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
-/* Tabs: the same capsules, tighter and without the shared outline, so three fit one row on a phone. */
+/* Tabs: the same capsules, tighter and without the shared outline, so they fit one row on a phone. */
 .seg.tabs { flex-wrap: nowrap; padding: 0; box-shadow: none; }
 .seg.tabs label { gap: 0.25rem; padding: 0 var(--space-2); }
 .seg.tabs label:not(:has(:checked)) { box-shadow: inset 0 0 0 1px var(--hairline); }
@@ -1113,8 +1113,8 @@ main:has(.board) { max-width: none; }
   font-variant-numeric: tabular-nums; }
 .stat { transition: translate var(--settle) var(--ease-out), box-shadow var(--settle) var(--ease-out); }
 .stat:hover { box-shadow: var(--shadow), var(--rim-glow); }
-.summary .mark { font-variant-numeric: tabular-nums; }
-.summary .mark::before { content: none; }  /* the words say it: "Not moving on" needs no "!" */
+.summary-page .mark { font-variant-numeric: tabular-nums; }
+.summary-page .mark::before { content: none; }  /* the words say it: "Not moving on" needs no "!" */
 
 /* The chart: the period's totals, then two lines over faint day columns. Each column is focusable and shows that
    day's values in a tip on hover or focus, with a dot on each line. The lines and the band between them are one
@@ -1160,8 +1160,8 @@ main:has(.board) { max-width: none; }
   font-size: var(--text-caption); line-height: var(--leading-caption); }
 .view-7 .axis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); text-align: center; }  /* under each day */
 
-/* The gauge: a half circle of ticks, lit up to the share (the template's mask), the number under its middle and three side figures
-   beside it (under it when the pane is narrow). */
+/* The gauge: a half circle of ticks, lit up to the share (the template's mask), the number under its middle and three
+   side figures beside it (under it when the pane is narrow). */
 .gauge { container-type: inline-size; }
 .gauge .view { margin-top: var(--space-3); }
 .gauge:has(#gauge-bar:checked) .view-bar, .gauge:has(#gauge-scored:checked) .view-scored { display: grid; }
@@ -1234,7 +1234,8 @@ main:has(.board) { max-width: none; }
 .rows .mark { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 
 /* The next step: a ring around the action's icon, a line on what waits, and its one button. It opens a page only. */
-.next { padding-inline: var(--space-4); display: grid; justify-items: center; align-content: center; gap: var(--space-3); text-align: center; }
+.next { padding-inline: var(--space-4); display: grid; justify-items: center; align-content: center;
+  gap: var(--space-3); text-align: center; }
 .next h2 { justify-content: center; }
 .next > p { max-width: 32ch; margin: 0; color: var(--ink-muted); font-size: var(--text-ui); line-height: var(--leading-ui); }
 .next .button { width: 100%; max-width: 20rem; min-height: var(--tap); padding-inline: var(--space-3);
@@ -1280,7 +1281,7 @@ main:has(.board) { max-width: none; }
      out by name (the job page's two boxes, the progress boxes, the scoring question), and the Writer's 3-second
      redraw of a box carries hx-trigger. A box that first arrives in place of its placeholder arrives once. The
      Summary's wrapper is left out too: its parts arrive on their own. */
-  main > :not(.summary, .found, #progress, #score-progress, #scoring-ask, #export-status, dialog) {
+  main > :not(.summary-page, .found, #progress, #score-progress, #scoring-ask, #export-status, dialog) {
     animation: rise-in var(--enter) var(--ease-out) backwards;
     animation-delay: calc(var(--settle) + var(--i, 7) * var(--stagger)); }
   main > :nth-child(1) { --i: 0; } main > :nth-child(2) { --i: 1; } main > :nth-child(3) { --i: 2; }
@@ -1291,13 +1292,13 @@ main:has(.board) { max-width: none; }
      up, the gauge fills, the columns and stacks grow and the lines draw, up to about 1 s, longer than the rest, so the
      figures read as they move. A view shown by its switch replays its own, sooner and shorter. Hover lifts a figure,
      nudges a row and raises the button. */
-  .summary { --draw: 900ms; }
-  .summary > :not(.stats), .stats > li { --arrive: calc(var(--settle) + var(--i) * var(--stagger));
+  .summary-page { --draw: 900ms; }
+  .summary-page > :not(.stats), .stats > li { --arrive: calc(var(--settle) + var(--i) * var(--stagger));
     animation: rise-in var(--enter) var(--ease-out) var(--arrive) backwards; }
   .greeting { --i: 0; } .stats > :nth-child(1) { --i: 1; } .stats > :nth-child(2) { --i: 2; }
   .stats > :nth-child(3) { --i: 3; } .stats > :nth-child(4) { --i: 4; } .trend { --i: 5; } .gauge { --i: 6; }
   .pipeline { --i: 7; } .attention { --i: 8; } .next { --i: 9; }
-  .summary .view { --arrive: calc(var(--i) * var(--stagger)); --draw: 700ms; }
+  .summary-page .view { --arrive: calc(var(--i) * var(--stagger)); --draw: 700ms; }
   .dial .reach { animation: reach var(--draw) var(--ease-out) var(--arrive) backwards; }
   .ring-arc { stroke-dasharray: 100; animation: ring var(--draw) var(--ease-out) var(--arrive) backwards; }
   .chart .days { animation: grow var(--enter) var(--ease-out) var(--arrive) backwards; }
@@ -1322,8 +1323,8 @@ main:has(.board) { max-width: none; }
 @counter-style count-gap { system: fixed; symbols: "," ",0" ",00"; fallback: count-blank; }
 @media (prefers-reduced-motion: no-preference) {
   @supports (x: attr(x type(*))) {
-    .summary [data-n] { position: relative; animation: hold-text var(--draw) var(--arrive) backwards; }
-    .summary [data-n]::after { --n: attr(data-n type(<integer>)); --k: round(down, var(--n) / 1000);
+    .summary-page [data-n] { position: relative; animation: hold-text var(--draw) var(--arrive) backwards; }
+    .summary-page [data-n]::after { --n: attr(data-n type(<integer>)); --k: round(down, var(--n) / 1000);
       --r: mod(var(--n), 1000);
       --z: calc(min(var(--k), 1) * (3 - min(round(down, var(--r) / 10), 1) - min(round(down, var(--r) / 100), 1)));
       counter-reset: k var(--k) z var(--z) r var(--r);

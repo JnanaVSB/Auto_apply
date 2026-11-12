@@ -11,7 +11,7 @@
 </fieldset>
 {% endmacro %}
 {% macro day(column, period) %}{% if period == 90 %}Week of {{ column.start.strftime("%b") }} {{ column.start.day }}{% else %}{{ column.start.strftime("%a, %b") }} {{ column.start.day }}{% endif %}{% endmacro %}
-<div class="summary">
+<div class="summary-page">
 <div class="greeting">
   <h1>Summary</h1>
   <p>{% if ready %}{{ plural(ready, "application is", "applications are") }} ready for your review{% if replies_week %}, and {{ plural(replies_week, "reply", "replies") }} came in this week{% endif %}.
@@ -40,7 +40,7 @@
   <div class="view view-{{ period }}">
     <dl class="totals"><div class="collected"><dt>Jobs collected</dt><dd data-n="{{ chart.collected }}">{{ num(chart.collected) }}</dd></div>
       <div class="sent"><dt>Applications sent</dt><dd data-n="{{ chart.sent }}">{{ num(chart.sent) }}</dd></div>
-      <div><dt>Sent per 100 collected</dt><dd{% if chart.per_100 is not none %} data-n="{{ chart.per_100 }}"{% endif %}>{{ chart.per_100 if chart.per_100 is not none else "–" }}</dd></div></dl>
+      <div><dt>Sent per 100 collected</dt><dd{% if chart.per_100 is not none %} data-n="{{ chart.per_100 }}"{% endif %}>{{ num(chart.per_100) if chart.per_100 is not none else "–" }}</dd></div></dl>
     <div class="chart">
       <ol class="days" aria-label="{{ 'Each week, the last 13 weeks' if period == 90 else 'Each day, the last %d days' % period }}">
         {% for column in columns %}
@@ -94,7 +94,7 @@
   <p class="caption">Jobs found in the last 30 days, by the stage they reached</p>
   <ol class="stages">
     {% for name, count, lit in pipeline %}
-    <li class="stage{% if loop.last %} rejected{% endif %}"><span class="blocks" aria-hidden="true">{% for block in range(12) %}<span{% if block < lit %} class="on"{% endif %}></span>{% endfor %}</span>
+    <li class="stage{% if loop.last %} rejected{% endif %}"><span class="blocks" aria-hidden="true">{% for block in range(blocks) %}<span{% if block < lit %} class="on"{% endif %}></span>{% endfor %}</span>
       <span class="stage-count" data-n="{{ count }}">{{ num(count) }}</span><span class="stage-name">{{ name }}</span></li>
     {% endfor %}
   </ol>
@@ -117,8 +117,8 @@
   <div class="view view-replies">
     {% if moved %}
     <ul class="rows">
-      {% for id, title, company, stage in moved %}
-      <li><a href="/jobs/{{ id }}">{{ title }}</a><span class="row-co">{{ company }}</span><span class="mark{% if stage == 'Not moving on' %} danger{% endif %}">{{ stage }}</span></li>
+      {% for id, title, company, stage, rejected in moved %}
+      <li><a href="/jobs/{{ id }}">{{ title }}</a><span class="row-co">{{ company }}</span><span class="mark{% if rejected %} danger{% endif %}">{{ stage }}</span></li>
       {% endfor %}
     </ul>
     {% else %}<p class="caption">No replies this week.</p>{% endif %}

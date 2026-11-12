@@ -195,7 +195,9 @@ def test_passed_and_scored_today_use_the_local_day(conn):
 def test_rejected_replies_show_as_not_moving_on(conn):
     with conn:
         conn.execute(CHANGED, (add_job(conn, "Turned down"), "rejected", None, "2026-11-01", utc(TODAY, 8)))
-    assert [row[3] for row in gather(conn)["moved"]] == ["Not moving on"]
+    moved = gather(conn)["moved"]
+    assert [row[3] for row in moved] == ["Not moving on"]
+    assert moved[0][4] is True
 
 
 def test_the_page_needs_a_login_and_has_no_form_of_its_own(client):
@@ -278,3 +280,11 @@ def test_an_empty_database_shows_deliberate_empty_parts(client, monkeypatch):
     text = client.get("/summary").text
     for words in ("Nothing scored yet", "No open jobs", "Nothing to review yet", "No replies this week"):
         assert words in text
+
+
+def test_the_page_wrapper_class_is_used_by_no_other_template():
+    folder = main.HERE / "templates"
+    wrapper = re.search(r'<div class="([\w-]+)">', (folder / "summary.html").read_text("utf-8"))[1]
+    used = re.compile(rf'class="(?:[^"]* )?{wrapper}[ "]')
+    others = [path.name for path in folder.glob("*.html") if path.name != "summary.html"]
+    assert [name for name in others if used.search((folder / name).read_text("utf-8"))] == []
