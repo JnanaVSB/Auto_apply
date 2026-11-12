@@ -1111,6 +1111,8 @@ main:has(.board) { max-width: none; }
 .stat-figure { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); margin: 0; }
 .stat-value { font-size: min(var(--text-display), 15cqi); line-height: 1.1; font-weight: 500; letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums; }
+.stat { transition: translate var(--settle) var(--ease-out), box-shadow var(--settle) var(--ease-out); }
+.stat:hover { box-shadow: var(--shadow), var(--rim-glow); }
 .summary .mark { font-variant-numeric: tabular-nums; }
 .summary .mark::before { content: none; }  /* the words say it: "Not moving on" needs no "!" */
 
@@ -1221,7 +1223,7 @@ main:has(.board) { max-width: none; }
 .rows { margin: var(--space-3) 0 0; padding: 0; list-style: none; }
 .rows li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-3);
   padding: var(--space-2); border-top: 1px solid var(--hairline); border-radius: var(--radius-s);
-  transition: background-color var(--quick) var(--ease-out); }
+  transition: background-color var(--quick) var(--ease-out), translate var(--quick) var(--ease-out); }
 .rows li:hover { background: var(--hover); }
 .rows a { color: var(--text); font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
 .rows a::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
@@ -1256,6 +1258,12 @@ main:has(.board) { max-width: none; }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes fade-out { to { opacity: 0; } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(0.5rem); } }
+@keyframes grow { from { clip-path: inset(100% 0 0 0); } to { clip-path: inset(0); } }
+@keyframes wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
+@keyframes reach { from { stroke-dasharray: 0 100; } }
+@keyframes ring { from { stroke-dashoffset: 100; } }
+@keyframes count { from { --n: 0; opacity: 1; } to { opacity: 1; } }
+@keyframes hold-text { from, to { -webkit-text-fill-color: transparent; text-shadow: none; } }
 @media (prefers-reduced-motion: no-preference) {
   /* Page to page (browsers with cross-document view transitions; others cut as before): the old page fades out
      first, so the field and the frame show alone for a moment, then the new page's panels arrive one after another,
@@ -1270,14 +1278,60 @@ main:has(.board) { max-width: none; }
   .button[aria-current] { view-transition-name: chosen-period; }
   /* The arrival is keyed to main's children at page load. HTMX never replays it: everything HTMX redraws is left
      out by name (the job page's two boxes, the progress boxes, the scoring question), and the Writer's 3-second
-     redraw of a box carries hx-trigger. A box that first arrives in place of its placeholder arrives once. */
-  main > :not(.found, #progress, #score-progress, #scoring-ask, #export-status, dialog) {
+     redraw of a box carries hx-trigger. A box that first arrives in place of its placeholder arrives once. The
+     Summary's wrapper is left out too: its parts arrive on their own. */
+  main > :not(.summary, .found, #progress, #score-progress, #scoring-ask, #export-status, dialog) {
     animation: rise-in var(--enter) var(--ease-out) backwards;
     animation-delay: calc(var(--settle) + var(--i, 7) * var(--stagger)); }
   main > :nth-child(1) { --i: 0; } main > :nth-child(2) { --i: 1; } main > :nth-child(3) { --i: 2; }
   main > :nth-child(4) { --i: 3; } main > :nth-child(5) { --i: 4; } main > :nth-child(6) { --i: 5; }
   main > :nth-child(7) { --i: 6; }
   main > .found:not([hx-trigger]) { animation: rise-in var(--enter) var(--ease-out) backwards; }
+  /* The Summary's parts arrive one by one (the wrapper holds still: it is the panes' parent); then the figures count
+     up, the gauge fills, the columns and stacks grow and the lines draw, up to about 1 s, longer than the rest, so the
+     figures read as they move. A view shown by its switch replays its own, sooner and shorter. Hover lifts a figure,
+     nudges a row and raises the button. */
+  .summary { --draw: 900ms; }
+  .summary > :not(.stats), .stats > li { --arrive: calc(var(--settle) + var(--i) * var(--stagger));
+    animation: rise-in var(--enter) var(--ease-out) var(--arrive) backwards; }
+  .greeting { --i: 0; } .stats > :nth-child(1) { --i: 1; } .stats > :nth-child(2) { --i: 2; }
+  .stats > :nth-child(3) { --i: 3; } .stats > :nth-child(4) { --i: 4; } .trend { --i: 5; } .gauge { --i: 6; }
+  .pipeline { --i: 7; } .attention { --i: 8; } .next { --i: 9; }
+  .summary .view { --arrive: calc(var(--i) * var(--stagger)); --draw: 700ms; }
+  .dial .reach { animation: reach var(--draw) var(--ease-out) var(--arrive) backwards; }
+  .ring-arc { stroke-dasharray: 100; animation: ring var(--draw) var(--ease-out) var(--arrive) backwards; }
+  .chart .days { animation: grow var(--enter) var(--ease-out) var(--arrive) backwards; }
+  .chart .lines { animation: wipe var(--draw) var(--ease-out) calc(var(--arrive) + var(--settle)) backwards; }
+  .blocks { animation: grow var(--page) var(--ease-out) calc(var(--arrive) + var(--s, 0) * var(--stagger)) backwards; }
+  .stage:nth-child(2) { --s: 1; } .stage:nth-child(3) { --s: 2; } .stage:nth-child(4) { --s: 3; }
+  .stage:nth-child(5) { --s: 4; } .stage:nth-child(6) { --s: 5; } .stage:nth-child(7) { --s: 6; }
+  @container (width < 36rem) { .blocks { animation-name: wipe; } }
+  .stat:hover { translate: 0 -2px; }
+  .rows li:is(:hover, :has(a:focus-visible)) { translate: 3px 0; }
+  .next .button:is(:hover, :focus-visible):not(:active) { transform: translateY(-1px); }
+}
+/* A counted figure: an overlay counts from 0 to data-n over the real number, which keeps its place, so nothing moves;
+   the real number shows again when the count ends, and wherever typed attr() is missing. Each frame keeps the
+   thousands comma: the count splits into thousands (k), the comma with the zeros it needs (z) and the rest (r). */
+@property --n { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --k { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --z { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@property --r { syntax: "<integer>"; inherits: false; initial-value: 0; }
+@counter-style count-blank { system: cyclic; symbols: ""; }
+@counter-style count-lead { system: extends decimal; range: 1 infinite; fallback: count-blank; }
+@counter-style count-gap { system: fixed; symbols: "," ",0" ",00"; fallback: count-blank; }
+@media (prefers-reduced-motion: no-preference) {
+  @supports (x: attr(x type(*))) {
+    .summary [data-n] { position: relative; animation: hold-text var(--draw) var(--arrive) backwards; }
+    .summary [data-n]::after { --n: attr(data-n type(<integer>)); --k: round(down, var(--n) / 1000);
+      --r: mod(var(--n), 1000);
+      --z: calc(min(var(--k), 1) * (3 - min(round(down, var(--r) / 10), 1) - min(round(down, var(--r) / 100), 1)));
+      counter-reset: k var(--k) z var(--z) r var(--r);
+      content: counter(k, count-lead) counter(z, count-gap) counter(r) / "";
+      position: absolute; inset: 0; white-space: nowrap; -webkit-text-fill-color: currentcolor; text-shadow: var(--halo);
+      opacity: 0; pointer-events: none;
+      animation: count var(--draw) var(--ease-out) var(--arrive) backwards; }
+  }
 }
 /* The sign-in card materialises once as the page opens: the slab's blur and the words arrive together as the card
    settles into place. A card holding an error (a wrong password) appears at once instead. The fade is on the slab,

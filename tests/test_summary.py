@@ -218,6 +218,19 @@ def test_the_page_says_what_needs_attention_and_without_gmail_how_replies_count(
     assert "Gmail isn't connected" in text
 
 
+def test_each_counted_figure_names_the_number_it_shows(client, conn):
+    """data-n is the number the count-up ends on: the figure shown, commas aside, and never on a "–"."""
+    log_in(client)
+    with conn:
+        for n in range(1000):
+            add_job(conn, f"Job {n}")
+    text = client.get("/summary").text
+    counted = re.findall(r'data-n="(\d+)">([^<]*)<', text)
+    assert ("1000", "1,000") in counted and len(counted) == text.count("data-n=")
+    assert all(int(shown.replace(",", "")) == int(n) for n, shown in counted)
+    assert ">–<" in text and not re.search(r'data-n="[^"]*">–', text)
+
+
 def test_aa_opens_summary_and_the_phone_menu_starts_with_it(client):
     log_in(client)
     text = client.get("/summary").text

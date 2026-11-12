@@ -26,7 +26,7 @@
     ("check", "Applied", applied, applied_week, "this week"),
     ("mail", "Replies", replies, replies_week, "this week")] %}
   <li class="panel stat"><p class="stat-label">{{ icon(name) }}{{ words }}</p>
-    <p class="stat-figure"><span class="stat-value">{{ num(count) }}</span>{% if week %}<span class="mark ok">+{{ num(week) }} {{ badge }}</span>{% endif %}</p></li>
+    <p class="stat-figure"><span class="stat-value" data-n="{{ count }}">{{ num(count) }}</span>{% if week %}<span class="mark ok">+{{ num(week) }} {{ badge }}</span>{% endif %}</p></li>
   {% endfor %}
 </ul>
 
@@ -38,9 +38,9 @@
   {% for period, chart in charts.items() %}
   {% set columns = chart.columns %}
   <div class="view view-{{ period }}">
-    <dl class="totals"><div class="collected"><dt>Jobs collected</dt><dd>{{ num(chart.collected) }}</dd></div>
-      <div class="sent"><dt>Applications sent</dt><dd>{{ num(chart.sent) }}</dd></div>
-      <div><dt>Sent per 100 collected</dt><dd>{{ chart.per_100 if chart.per_100 is not none else "–" }}</dd></div></dl>
+    <dl class="totals"><div class="collected"><dt>Jobs collected</dt><dd data-n="{{ chart.collected }}">{{ num(chart.collected) }}</dd></div>
+      <div class="sent"><dt>Applications sent</dt><dd data-n="{{ chart.sent }}">{{ num(chart.sent) }}</dd></div>
+      <div><dt>Sent per 100 collected</dt><dd{% if chart.per_100 is not none %} data-n="{{ chart.per_100 }}"{% endif %}>{{ chart.per_100 if chart.per_100 is not none else "–" }}</dd></div></dl>
     <div class="chart">
       <ol class="days" aria-label="{{ 'Each week, the last 13 weeks' if period == 90 else 'Each day, the last %d days' % period }}">
         {% for column in columns %}
@@ -78,13 +78,13 @@
     <div class="dial">
       <svg viewBox="0 0 200 108" aria-hidden="true">
         <mask id="dial-{{ key }}" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="108">
-          <path d="M20 100 A80 80 0 0 1 180 100" pathLength="100" fill="none" stroke="#fff" stroke-width="30" stroke-dasharray="{{ gauge.reach }} 100"/></mask>
+          <path class="reach" d="M20 100 A80 80 0 0 1 180 100" pathLength="100" fill="none" stroke="#fff" stroke-width="30" stroke-dasharray="{{ gauge.reach }} 100"/></mask>
         <path class="track" d="M20 100 A80 80 0 0 1 180 100" pathLength="100"/>
         <path class="fill" d="M20 100 A80 80 0 0 1 180 100" pathLength="100" mask="url(#dial-{{ key }})"/></svg>
-      <p class="dial-value">{% if gauge.percent is none %}–{% else %}{{ gauge.percent }}<span class="unit">%</span>{% endif %}</p>
+      <p class="dial-value">{% if gauge.percent is none %}–{% else %}<span data-n="{{ gauge.percent }}">{{ gauge.percent }}</span><span class="unit">%</span>{% endif %}</p>
       <p class="dial-caption">{{ caption }}</p>
     </div>
-    <dl class="side">{% for words, value in side %}<div><dt>{{ words }}</dt><dd>{{ num(value) if value is not none else "–" }}</dd></div>{% endfor %}</dl>
+    <dl class="side">{% for words, value in side %}<div><dt>{{ words }}</dt><dd{% if value is not none %} data-n="{{ value }}"{% endif %}>{{ num(value) if value is not none else "–" }}</dd></div>{% endfor %}</dl>
   </div>
   {% endfor %}
 </section>
@@ -95,7 +95,7 @@
   <ol class="stages">
     {% for name, count, lit in pipeline %}
     <li class="stage{% if loop.last %} rejected{% endif %}"><span class="blocks" aria-hidden="true">{% for block in range(12) %}<span{% if block < lit %} class="on"{% endif %}></span>{% endfor %}</span>
-      <span class="stage-count">{{ num(count) }}</span><span class="stage-name">{{ name }}</span></li>
+      <span class="stage-count" data-n="{{ count }}">{{ num(count) }}</span><span class="stage-name">{{ name }}</span></li>
     {% endfor %}
   </ol>
 </section>
