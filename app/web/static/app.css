@@ -1258,7 +1258,7 @@ main:has(> .summary-page) { max-width: 120rem; margin-inline: auto; }
   .content:has(> main > .summary-page) { display: flex; flex-direction: column;
     height: calc(100dvh - env(safe-area-inset-top)); }
   main:has(> .summary-page) { flex: 1; min-height: 0; display: flex; flex-direction: column;
-    justify-content: safe center; width: 100%; padding-bottom: var(--space-5); }
+    justify-content: safe center; width: 100%; padding-block: var(--space-5); }
   .summary-page { flex: 1; min-height: 0; max-height: 75rem; grid-template-rows: auto auto 1fr 1fr; }
   .trend, .gauge, .pipeline, .attention { display: flex; flex-direction: column; }
   :is(.trend, .gauge) .view, .stages { flex: 1; }
@@ -1275,10 +1275,14 @@ main:has(> .summary-page) { max-width: 120rem; margin-inline: auto; }
   }
   @container (width < 36rem) { .stages { align-content: space-evenly; } }
   .dial svg { max-width: 20rem; }
-  /* The design is the page at the least fit window (82.5rem by 51rem); main, sized by the window, is the measure. */
+  /* The design is the page at the least fit window (82.5rem by 51rem); main, sized by the window, is the measure.
+     The page takes --fill of it each way, centred; near the least fit window the zoom stays at 1 and the page takes
+     the design size or all the space, whichever is less, so the gap narrows to the gutter. */
   @supports (zoom: calc(1px / 1px)) {
-    main:has(> .summary-page) { max-width: none; container-type: size; }
-    .summary-page { max-height: none; zoom: max(1, min(100cqw / 82.5rem, 100cqh / 51rem)); }
+    main:has(> .summary-page) { --fill: 0.95; max-width: none; container-type: size; }
+    .summary-page { flex: none; align-self: center; max-height: none;
+      zoom: max(1, var(--fill) * min(100cqw / 82.5rem, 100cqh / 51rem));
+      width: min(100%, max(var(--fill) * 100%, 82.5rem)); height: min(100%, max(var(--fill) * 100%, 51rem)); }
   }
 }
 /* Reduce transparency, more contrast and no blur: the chart's tip is a solid slab. */
