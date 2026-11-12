@@ -1098,7 +1098,7 @@ main:has(.board) { max-width: none; }
 .view { display: none; }
 .trend:has(#period-7:checked) .view-7, .trend:has(#period-30:checked) .view-30,
 .trend:has(#period-90:checked) .view-90, .attention:has(#attn-ready:checked) .view-ready,
-.attention:has(#attn-replies:checked) .view-replies { display: block; }
+.attention:has(#attn-replies:checked) .view-replies { display: flex; flex-direction: column; }
 
 /* The four figures: a label, a big number (smaller in a narrow tile, so seven digits fit) and this week's change
    in a small badge, in the ok ink when there is one. */
@@ -1207,7 +1207,7 @@ main:has(.board) { max-width: none; }
 /* In a narrow pane each stage is a row: its name, its blocks laid left to right, its count. */
 .pipeline { container-type: inline-size; }
 @container (width < 36rem) {
-  .stages { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); text-align: left; }
+  .stages { grid-template-columns: minmax(0, 1fr); align-content: center; gap: var(--space-2); text-align: left; }
   .stage { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) max-content; grid-template-areas: "name blocks count";
     align-items: center; gap: var(--space-3); }
   .stage.rejected { margin: var(--space-1) 0 0; padding: var(--space-2) 0 0; border: 0;
@@ -1246,6 +1246,30 @@ main:has(.board) { max-width: none; }
 .ring-track { stroke: var(--lift); }
 .ring-arc { stroke: var(--accent); stroke-linecap: round; }
 .ring .icon { width: 1.5rem; height: 1.5rem; color: var(--accent); }
+/* The page's width: all of it beside the rail up to 120rem, then centred there. A wide and tall window (80rem by
+   61rem, or 90rem by 58rem, and up) holds the whole page without scrolling: below the cost bar, the last two rows
+   share the height left. The chart, the gauge and the pipeline's stacks grow with their rows (down to 6rem and
+   5rem), the needs-attention list scrolls inside its pane, and on a very tall window the page stops at 75rem,
+   centred. A window too short for every pane's least height scrolls as usual. */
+main:has(> .summary-page) { max-width: 120rem; margin-inline: auto; }
+@media (width >= 90rem) and (height >= 58rem), (width >= 80rem) and (height >= 61rem) {
+  .content:has(> main > .summary-page) { display: flex; flex-direction: column;
+    height: calc(100dvh - env(safe-area-inset-top)); }
+  main:has(> .summary-page) { flex: 1; min-height: 0; display: flex; flex-direction: column;
+    justify-content: safe center; width: 100%; padding-bottom: var(--space-5); }
+  .summary-page { flex: 1; min-height: 0; max-height: 75rem; grid-template-rows: auto auto 1fr 1fr; }
+  .trend, .gauge, .pipeline, .attention { display: flex; flex-direction: column; }
+  :is(.trend, .gauge) .view, .stages { flex: 1; }
+  .gauge .view { align-content: center; }
+  .chart { flex: 1; height: auto; min-height: 6rem; }
+  .attention { min-height: 0; }
+  .attention .view { flex: 1; min-height: 0; overflow: hidden auto; margin-inline: -0.375rem;
+    padding: 0 0.375rem 0.375rem; }  /* room for the rows' focus ring and nudge inside the scroll */
+  @container (width >= 36rem) {
+    .stage { display: flex; flex-direction: column; }
+    .blocks { flex: 1; height: auto; min-height: 5rem; }
+  }
+}
 /* Reduce transparency, more contrast and no blur: the chart's tip is a solid slab. */
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) { .tip { background: var(--slab); } }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .tip { background: var(--slab); } }
