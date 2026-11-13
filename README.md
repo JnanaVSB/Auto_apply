@@ -363,7 +363,7 @@ in mist" by Dan Otis (the hillside); "Green trees covered by fog" by Julian Stee
 mountain during daytime" by Andrew Ly (the lake); "Snow-capped mountains rise above a tranquil river" and "Snowy
 mountains and pine trees border a partially frozen river" by Vincent Y @USA (the river and the ice); "Snow covered
 mountain under cloudy sky during daytime" by Igor Kyryliuk & Tetiana Kravchenko (the storm) and another of the same
-title by Jonathan Larson (the clouds); "Three Sisters mountains above evergreen forest" by Timo Spunkmeyer (the
+title by Jonathan Larson (the clouds); mountains above an evergreen forest, by Timo Spunkmeyer (the
 haze); "Three jagged mountain peaks" by Dylan Klingler (the forest). Each photograph's page is linked from the
 comment beside its rule in `app/web/static/app.css`.
 
